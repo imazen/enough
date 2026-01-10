@@ -86,21 +86,7 @@ impl ChildCancellationSource {
     /// Check if this child was cancelled (either directly or via parent).
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.is_self_cancelled() || self.inner.parent.is_stopped()
-    }
-
-    /// Check if this child was directly cancelled (not via parent).
-    #[inline]
-    pub fn is_self_cancelled(&self) -> bool {
-        self.inner.self_cancelled.load(Ordering::Acquire)
-    }
-
-    /// Reset this child's cancellation state.
-    ///
-    /// This only resets the child's own flag, not the parent.
-    #[inline]
-    pub fn reset(&self) {
-        self.inner.self_cancelled.store(false, Ordering::Release);
+        self.inner.self_cancelled.load(Ordering::Acquire) || self.inner.parent.is_stopped()
     }
 
     /// Get a token for this child source.
@@ -244,34 +230,6 @@ mod tests {
 
         grandparent.cancel();
         assert!(child.is_cancelled());
-    }
-
-    #[test]
-    fn self_vs_any_cancelled() {
-        let parent = CancellationSource::new();
-        let child = ChildCancellationSource::new(parent.token());
-
-        assert!(!child.is_self_cancelled());
-        assert!(!child.is_cancelled());
-
-        parent.cancel();
-        assert!(!child.is_self_cancelled());
-        assert!(child.is_cancelled());
-
-        child.cancel();
-        assert!(child.is_self_cancelled());
-    }
-
-    #[test]
-    fn child_reset() {
-        let parent = CancellationSource::new();
-        let child = ChildCancellationSource::new(parent.token());
-
-        child.cancel();
-        assert!(child.is_self_cancelled());
-
-        child.reset();
-        assert!(!child.is_self_cancelled());
     }
 
     #[test]

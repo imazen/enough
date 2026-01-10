@@ -64,15 +64,6 @@ impl CancellationSource {
         self.inner.cancelled.load(Ordering::Acquire)
     }
 
-    /// Reset the cancellation state.
-    ///
-    /// **Warning:** This can cause confusion if tokens are still in use.
-    /// Generally prefer creating a new source instead.
-    #[inline]
-    pub fn reset(&self) {
-        self.inner.cancelled.store(false, Ordering::Release);
-    }
-
     /// Get a token that can be passed to operations.
     ///
     /// The token is `Clone` and can be freely copied and shared.
@@ -284,16 +275,6 @@ mod tests {
 
         let remaining = token.remaining().unwrap();
         assert!(remaining < Duration::from_secs(2));
-    }
-
-    #[test]
-    fn source_reset() {
-        let source = CancellationSource::new();
-        source.cancel();
-        assert!(source.is_cancelled());
-
-        source.reset();
-        assert!(!source.is_cancelled());
     }
 
     #[test]

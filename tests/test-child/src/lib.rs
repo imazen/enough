@@ -93,39 +93,6 @@ fn deep_hierarchy() {
 }
 
 #[test]
-fn self_cancelled_vs_any_cancelled() {
-    let parent = CancellationSource::new();
-    let child = ChildCancellationSource::new(parent.token());
-
-    // Before any cancellation
-    assert!(!child.is_self_cancelled());
-    assert!(!child.is_cancelled());
-
-    // Parent cancelled - child inherits but not self-cancelled
-    parent.cancel();
-    assert!(!child.is_self_cancelled());
-    assert!(child.is_cancelled());
-
-    // Now cancel child
-    child.cancel();
-    assert!(child.is_self_cancelled());
-    assert!(child.is_cancelled());
-}
-
-#[test]
-fn child_reset() {
-    let parent = CancellationSource::new();
-    let child = ChildCancellationSource::new(parent.token());
-
-    child.cancel();
-    assert!(child.is_self_cancelled());
-
-    child.reset();
-    assert!(!child.is_self_cancelled());
-    assert!(!child.is_cancelled());
-}
-
-#[test]
 fn child_token_with_timeout() {
     use std::time::Duration;
 

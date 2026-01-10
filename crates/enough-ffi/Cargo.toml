@@ -2,9 +2,13 @@
 name = "enough-ffi"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories = ["concurrency", "external-ffi-bindings"]
 description = "FFI helpers for the enough cancellation trait"
+readme = "README.md"
 
 [features]
 default = []

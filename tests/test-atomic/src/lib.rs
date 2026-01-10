@@ -104,20 +104,6 @@ fn never_token() {
 }
 
 #[test]
-fn source_reset() {
-    let source = CancellationSource::new();
-    source.cancel();
-    assert!(source.is_cancelled());
-
-    source.reset();
-    assert!(!source.is_cancelled());
-
-    // Token created after reset should not be cancelled
-    let token = source.token();
-    assert!(!token.is_stopped());
-}
-
-#[test]
 fn pass_to_function() {
     fn process(data: &[u8], stop: impl Stop) -> Result<usize, &'static str> {
         let mut count = 0;

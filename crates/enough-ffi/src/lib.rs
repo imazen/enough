@@ -413,23 +413,6 @@ pub unsafe extern "C" fn enough_token_destroy(token: *mut FfiCancellationToken) 
 }
 
 // ============================================================================
-// Legacy API (kept for compatibility, wraps new API)
-// ============================================================================
-
-/// Legacy: Create a token from a pointer (for Rust FFI functions).
-///
-/// **Deprecated**: Use [`FfiCancellationToken::from_ptr`] instead.
-///
-/// # Safety
-///
-/// Same as [`FfiCancellationToken::from_ptr`].
-#[deprecated(note = "Use FfiCancellationToken::from_ptr instead")]
-#[inline]
-pub unsafe fn ffi_token_from_ptr(ptr: *const FfiCancellationToken) -> FfiCancellationTokenView {
-    FfiCancellationToken::from_ptr(ptr)
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 

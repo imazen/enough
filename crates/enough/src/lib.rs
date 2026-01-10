@@ -77,16 +77,12 @@ extern crate alloc;
 mod reason;
 
 #[cfg(feature = "std")]
-mod callback;
-#[cfg(feature = "std")]
 mod child;
 #[cfg(feature = "std")]
 mod source;
 
 pub use reason::StopReason;
 
-#[cfg(feature = "std")]
-pub use callback::{CallbackCancellation, CallbackCancellationToken};
 #[cfg(feature = "std")]
 pub use child::{ChildCancellationSource, ChildCancellationToken};
 #[cfg(feature = "std")]
@@ -257,6 +253,7 @@ mod tests {
     fn stop_reason_from_impl() {
         // Test that From<StopReason> pattern works
         #[derive(Debug, PartialEq)]
+        #[allow(dead_code)]
         enum TestError {
             Stopped(StopReason),
             Other,
