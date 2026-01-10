@@ -71,7 +71,7 @@
 //!     let stop = unsafe { FfiCancellationToken::from_ptr(token) };
 //!
 //!     // Use stop with any library that accepts impl Stop
-//!     if stop.is_stopped() {
+//!     if stop.should_stop() {
 //!         return -1; // Cancelled
 //!     }
 //!
@@ -211,7 +211,7 @@ impl Stop for FfiCancellationToken {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
+    fn should_stop(&self) -> bool {
         self.inner
             .as_ref()
             .map(|s| s.is_cancelled())
@@ -222,7 +222,7 @@ impl Stop for FfiCancellationToken {
 impl std::fmt::Debug for FfiCancellationToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FfiCancellationToken")
-            .field("is_cancelled", &self.is_stopped())
+            .field("is_cancelled", &self.should_stop())
             .field("is_never", &self.inner.is_none())
             .finish()
     }
@@ -264,7 +264,7 @@ impl Stop for FfiCancellationTokenView {
         }
         // SAFETY: Caller guarantees ptr is valid
         unsafe {
-            if (*self.ptr).is_stopped() {
+            if (*self.ptr).should_stop() {
                 Err(StopReason::Cancelled)
             } else {
                 Ok(())
@@ -273,12 +273,12 @@ impl Stop for FfiCancellationTokenView {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
+    fn should_stop(&self) -> bool {
         if self.ptr.is_null() {
             return false;
         }
         // SAFETY: Caller guarantees ptr is valid
-        unsafe { (*self.ptr).is_stopped() }
+        unsafe { (*self.ptr).should_stop() }
     }
 }
 
@@ -395,7 +395,7 @@ pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
 /// or null (which returns false).
 #[no_mangle]
 pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellationToken) -> bool {
-    token.as_ref().map(|t| t.is_stopped()).unwrap_or(false)
+    token.as_ref().map(|t| t.should_stop()).unwrap_or(false)
 }
 
 /// Destroy a token.
@@ -526,12 +526,12 @@ mod tests {
             // Rust code would receive the token pointer and create a view
             let view = FfiCancellationToken::from_ptr(token);
 
-            assert!(!view.is_stopped());
+            assert!(!view.should_stop());
             assert!(view.check().is_ok());
 
             enough_cancellation_cancel(source);
 
-            assert!(view.is_stopped());
+            assert!(view.should_stop());
             assert_eq!(view.check(), Err(StopReason::Cancelled));
 
             enough_token_destroy(token);
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn token_view_never() {
         let view = FfiCancellationTokenView::never();
-        assert!(!view.is_stopped());
+        assert!(!view.should_stop());
         assert!(view.check().is_ok());
     }
 
@@ -580,15 +580,15 @@ mod tests {
     }
 
     #[test]
-    fn interop_with_enough_std() {
-        use enough::CancellationSource;
+    fn interop_with_enough() {
+        use enough::ArcStop;
 
-        let source = CancellationSource::new();
+        let source = ArcStop::new();
         let token = source.token();
 
         // Both implement Stop
         fn use_stop(stop: impl Stop) -> bool {
-            stop.is_stopped()
+            stop.should_stop()
         }
 
         assert!(!use_stop(token));

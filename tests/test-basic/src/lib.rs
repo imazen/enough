@@ -47,7 +47,7 @@ fn never_is_zero_cost() {
 #[test]
 fn stop_trait_object_works() {
     let stop: &dyn Stop = &Never;
-    assert!(!stop.is_stopped());
+    assert!(!stop.should_stop());
     assert!(stop.check().is_ok());
 }
 
@@ -57,7 +57,7 @@ fn reference_impl_works() {
     let reference: &Never = &never;
 
     fn takes_stop(s: impl Stop) -> bool {
-        s.is_stopped()
+        s.should_stop()
     }
 
     assert!(!takes_stop(reference));
@@ -91,7 +91,7 @@ fn box_impl_works() {
     use alloc::boxed::Box;
 
     let boxed: Box<dyn Stop> = Box::new(Never);
-    assert!(!boxed.is_stopped());
+    assert!(!boxed.should_stop());
 }
 
 #[cfg(feature = "alloc")]
@@ -101,5 +101,5 @@ fn arc_impl_works() {
     use alloc::sync::Arc;
 
     let arc: Arc<dyn Stop> = Arc::new(Never);
-    assert!(!arc.is_stopped());
+    assert!(!arc.should_stop());
 }

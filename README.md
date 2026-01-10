@@ -9,144 +9,172 @@ Minimal cooperative cancellation for Rust.
 
 ## Why "enough"?
 
-Sometimes you've had *enough*. The operation is taking too long, the user hit cancel, or resources are constrained. This crate provides a minimal, shared trait that libraries can use to support cooperative cancellation without taking on heavy dependencies.
+Sometimes you've had *enough*. The operation is taking too long, the user hit cancel, or resources are constrained. This crate provides a minimal, shared trait that libraries can use to support cooperative cancellation without heavy dependencies.
 
-## Features
+## Design Rationale
 
-- **`no_std` core** - The `Stop` trait works anywhere, no allocator required
-- **Zero dependencies** - Core trait has no dependencies at all
-- **Zero-cost `Never`** - Optimized away completely when cancellation not needed
-- **Minimal API** - Just `check()` and `is_stopped()`, nothing more
-- **Timeout support** - Deadlines that only tighten, never loosen
-- **Hierarchical cancellation** - Child sources inherit parent cancellation
-- **FFI ready** - Bridge to C#, Python, Node.js via `enough-ffi`
+**Problem:** Image codecs, compression libraries, and other CPU-intensive operations need cancellation support, but shouldn't dictate which cancellation system you use.
+
+**Solution:** A minimal `Stop` trait that any cancellation system can implement:
+
+```rust
+pub trait Stop: Send + Sync {
+    fn check(&self) -> Result<(), StopReason>;
+    fn should_stop(&self) -> bool { self.check().is_err() }
+}
+```
+
+**Key decisions:**
+- **`no_std` core** - Works in embedded, WASM, everywhere
+- **Zero dependencies** - Won't bloat your dependency tree
+- **Bring your own impl** - Works with tokio, custom systems, FFI
+- **Error propagation via `?`** - Integrates cleanly with Result chains
 
 ## Quick Start
 
 ### For Library Authors
 
-Accept `impl Stop` in long-running functions. This is the only thing you need from this crate:
+Accept `impl Stop` - that's it:
 
 ```rust
 use enough::{Stop, StopReason};
 
-pub fn decode(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, DecodeError> {
+pub fn process(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
     let mut output = Vec::new();
     for (i, chunk) in data.chunks(1024).enumerate() {
-        // Check periodically - every 16-100 iterations is typical
         if i % 16 == 0 {
-            stop.check()?;
+            stop.check()?;  // Returns Err(StopReason) if stopped
         }
-        // process chunk...
-        output.extend_from_slice(chunk);
+        // ... process chunk ...
     }
     Ok(output)
 }
 
-// One-line error integration
-#[derive(Debug)]
-pub enum DecodeError {
-    Stopped(StopReason),
-    // ... other errors
-}
-
-impl From<StopReason> for DecodeError {
-    fn from(r: StopReason) -> Self { DecodeError::Stopped(r) }
+impl From<StopReason> for MyError {
+    fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 }
 ```
 
 ### For Application Developers
 
-Enable the `std` feature for concrete implementations:
+Choose the implementation that fits your needs:
 
 ```rust
-use enough::{CancellationSource, Stop};
+use enough::{ArcStop, Stop};
 use std::time::Duration;
 
 // Create a cancellation source
-let source = CancellationSource::new();
+let source = ArcStop::new();
+let token = source.token();
 
-// Get a token with optional timeout
-let token = source.token().with_timeout(Duration::from_secs(30));
+// Pass to libraries
+let handle = std::thread::spawn(move || {
+    my_codec::process(&data, token)
+});
 
-// Pass to library functions
-let result = my_codec::decode(&data, token);
-
-// Or cancel programmatically
+// Cancel when needed
 source.cancel();
 ```
 
-### Zero-Cost Default
-
-When callers don't need cancellation, use `Never`:
+### Zero-Cost When Not Needed
 
 ```rust
 use enough::Never;
 
 // Compiles to nothing - zero runtime cost
-let result = my_codec::decode(&data, Never);
+let result = my_codec::process(&data, Never);
 ```
 
-## Crates
+## Type Overview
 
-| Crate | Description | Features |
-|-------|-------------|----------|
-| [`enough`](https://crates.io/crates/enough) | Core `Stop` trait | `no_std`, zero deps |
-| [`enough`](https://crates.io/crates/enough) with `std` | `CancellationSource`, timeouts, child cancellation | Requires `std` |
-| [`enough-ffi`](https://crates.io/crates/enough-ffi) | C-compatible FFI for cross-language use | C#, Python, Node.js |
-| [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to `tokio_util::sync::CancellationToken` | Async runtimes |
+| Type | Feature | Use Case |
+|------|---------|----------|
+| `Never` | core | Zero-cost "never stop" |
+| `AtomicStop` / `AtomicToken` | core | Stack-based, borrowed, Relaxed ordering |
+| `SyncStop` / `SyncToken` | core | Stack-based, Acquire/Release for data sync |
+| `FnStop` | core | Wrap any closure |
+| `OrStop` | core | Combine multiple stop sources |
+| `ArcStop` / `ArcToken` | alloc | Heap, owned tokens can outlive source |
+| `BoxStop` | alloc | Type-erased dynamic dispatch |
+| `ChildSource` / `ChildToken` | alloc | Hierarchical (parent cancels children) |
+| `WithTimeout` | std | Add deadline to any Stop |
 
 ## Feature Flags
 
-The `enough` crate has these features:
+```toml
+[dependencies]
+enough = "0.1"                    # no_std core only
+enough = { version = "0.1", features = ["alloc"] }  # + Arc types
+enough = { version = "0.1", features = ["std"] }    # + timeouts (implies alloc)
+```
 
-- **`std`** (default: off) - Enables `CancellationSource`, `CancellationToken`, timeouts, child cancellation, and `std::error::Error` impl
-- **`alloc`** (default: off) - Enables blanket `Stop` impls for `Box<T>` and `Arc<T>`
+## Memory Ordering
 
-## Usage Patterns
-
-### Timeout That Only Tightens
-
-Timeouts compose safely - child timeouts can only be stricter:
+Two variants for different needs:
 
 ```rust
-use enough::CancellationSource;
+use enough::{AtomicStop, SyncStop};
+
+// AtomicStop: Relaxed ordering (faster on ARM)
+// Use when you just need to signal "stop"
+let stop = AtomicStop::new();
+stop.cancel();  // Relaxed store
+stop.should_stop();  // Relaxed load
+
+// SyncStop: Release/Acquire ordering
+// Use when stop signals data is ready
+let stop = SyncStop::new();
+// Thread A:
+shared_result.store(42, Relaxed);
+stop.cancel();  // Release: flushes shared_result
+
+// Thread B:
+if stop.should_stop() {  // Acquire: syncs with Release
+    shared_result.load(Relaxed);  // Guaranteed to see 42
+}
+```
+
+## Common Patterns
+
+### Timeouts
+
+```rust
+use enough::{ArcStop, TimeoutExt};
 use std::time::Duration;
 
-let source = CancellationSource::new();
+let source = ArcStop::new();
+let token = source.token()
+    .with_timeout(Duration::from_secs(30));
 
-// Parent operation: 60 seconds
-let parent_token = source.token().with_timeout(Duration::from_secs(60));
-
-// Sub-operation: wants 10 seconds, but will respect parent's remaining time
-let step_token = parent_token.clone().with_timeout(Duration::from_secs(10));
-// Effective: min(parent_remaining, 10s)
+// Stops if cancelled OR timeout expires
 ```
 
 ### Hierarchical Cancellation
 
-Create cancellation trees where children inherit parent cancellation:
+```rust
+use enough::{ArcStop, children::ChildSource};
+
+let parent = ArcStop::new();
+let child_a = ChildSource::new(parent.token());
+let child_b = ChildSource::new(parent.token());
+
+child_a.cancel();  // Only child_a stops
+parent.cancel();   // Both children stop
+```
+
+### Combining Sources
 
 ```rust
-use enough::{CancellationSource, ChildCancellationSource};
+use enough::{ArcStop, OrStop};
 
-let parent = CancellationSource::new();
-let child_a = ChildCancellationSource::new(parent.token());
-let child_b = ChildCancellationSource::new(parent.token());
+let app_cancel = ArcStop::new();
+let timeout = ArcStop::new();
 
-// Cancel child_a only - child_b continues
-child_a.cancel();
-assert!(child_a.is_cancelled());
-assert!(!child_b.is_cancelled());
-
-// Cancel parent - all children stop
-parent.cancel();
-assert!(child_b.is_cancelled());
+// Stop if either triggers
+let combined = OrStop::new(app_cancel.token(), timeout.token());
 ```
 
 ### With Tokio
-
-Bridge to async cancellation:
 
 ```rust
 use enough_tokio::TokioStop;
@@ -156,148 +184,42 @@ let token = CancellationToken::new();
 let stop = TokioStop::new(token.clone());
 
 tokio::task::spawn_blocking(move || {
-    // Use stop with any library that accepts impl Stop
-    my_codec::decode(&data, stop)
+    my_codec::process(&data, stop)
 });
 ```
 
-### FFI Integration
+## Related Crates
 
-#### C# / .NET
-
-```csharp
-// P/Invoke declarations
-[DllImport("mylib")]
-static extern IntPtr enough_cancellation_create();
-
-[DllImport("mylib")]
-static extern void enough_cancellation_cancel(IntPtr source);
-
-[DllImport("mylib")]
-static extern IntPtr enough_token_create(IntPtr source);
-
-[DllImport("mylib")]
-static extern bool enough_token_is_cancelled(IntPtr token);
-
-[DllImport("mylib")]
-static extern void enough_token_destroy(IntPtr token);
-
-[DllImport("mylib")]
-static extern void enough_cancellation_destroy(IntPtr source);
-
-// Usage with .NET CancellationToken
-public byte[] Decode(byte[] data, CancellationToken ct)
-{
-    var source = enough_cancellation_create();
-    var token = enough_token_create(source);
-    try
-    {
-        using var reg = ct.Register(() => enough_cancellation_cancel(source));
-        return NativeMethods.decode(data, token);
-    }
-    finally
-    {
-        enough_token_destroy(token);
-        enough_cancellation_destroy(source);
-    }
-}
-```
-
-#### Rust FFI Functions
-
-```rust
-use enough_ffi::FfiCancellationToken;
-use enough::Stop;
-
-#[no_mangle]
-pub extern "C" fn decode(
-    data: *const u8,
-    len: usize,
-    token: *const FfiCancellationToken,
-) -> i32 {
-    // Create a view from the pointer - no ownership transfer
-    let stop = unsafe { FfiCancellationToken::from_ptr(token) };
-
-    // Use with any library accepting impl Stop
-    match my_codec::decode(unsafe { std::slice::from_raw_parts(data, len) }, stop) {
-        Ok(_) => 0,
-        Err(e) if e.is_stopped() => -1,
-        Err(_) => -2,
-    }
-}
-```
+| Crate | Purpose |
+|-------|---------|
+| `enough` | Core trait + implementations |
+| `enough-ffi` | C FFI for cross-language use |
+| `enough-tokio` | Bridge to tokio's CancellationToken |
+| `almost-enough` | Ergonomic extensions (`.or()`, `.into_boxed()`, `StopDropRoll`) |
 
 ## Performance
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| `Never.check()` | 0ns | Optimized away entirely |
-| `CancellationToken.check()` | ~1ns | Single atomic load |
-| `token.with_timeout().check()` | ~20-30ns | Includes `Instant::now()` |
+| `Never.check()` | 0ns | Optimized away |
+| `AtomicToken.check()` | ~1-2ns | Single atomic load |
+| `WithTimeout.check()` | ~20-30ns | Includes `Instant::now()` |
 
-**Recommendation:** Check every 16-100 iterations for negligible overhead on real workloads.
+Check every 16-100 iterations for negligible overhead.
 
-## API Summary
+## Adaptability
 
-### Core (`no_std`)
+The trait-based design means you can:
 
-```rust
-// The trait libraries should accept
-pub trait Stop: Send + Sync {
-    fn check(&self) -> Result<(), StopReason>;
-    fn is_stopped(&self) -> bool;
-}
+1. **Start simple** - Use `Never` during development
+2. **Add cancellation** - Switch to `ArcStop` when needed
+3. **Add timeouts** - Wrap with `.with_timeout()`
+4. **Go hierarchical** - Use `ChildSource` for complex flows
+5. **Integrate with async** - Use `enough-tokio`
+6. **Call from FFI** - Use `enough-ffi`
 
-// Zero-cost "never stop" implementation
-pub struct Never;
-
-// Why the operation stopped
-#[non_exhaustive]
-pub enum StopReason {
-    Cancelled,
-    TimedOut,
-}
-```
-
-### With `std` Feature
-
-```rust
-// Create and control cancellation
-pub struct CancellationSource { /* ... */ }
-impl CancellationSource {
-    pub fn new() -> Self;
-    pub fn cancel(&self);
-    pub fn is_cancelled(&self) -> bool;
-    pub fn token(&self) -> CancellationToken;
-}
-
-// Pass to operations
-pub struct CancellationToken { /* ... */ }
-impl CancellationToken {
-    pub fn never() -> Self;
-    pub fn with_timeout(self, duration: Duration) -> Self;
-    pub fn with_deadline(self, deadline: Instant) -> Self;
-}
-impl Stop for CancellationToken { /* ... */ }
-
-// Hierarchical cancellation
-pub struct ChildCancellationSource { /* ... */ }
-pub struct ChildCancellationToken { /* ... */ }
-```
-
-## Design Philosophy
-
-1. **Minimal surface** - Only what's needed, nothing more
-2. **Zero-cost abstraction** - `Never` compiles away completely
-3. **No runtime dependencies** - Core trait is dependency-free
-4. **Cooperative, not preemptive** - Libraries check when convenient
-5. **Composable** - Timeouts tighten, cancellation inherits
+Libraries accepting `impl Stop` work with all of these without changes.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Licensed under either of Apache License 2.0 or MIT license at your option.

@@ -7,7 +7,7 @@ Minimal cooperative cancellation for Rust.
 [![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.56-blue.svg)](https://blog.rust-lang.org/2021/10/21/Rust-1.56.0.html)
 
-A minimal, `no_std` trait for cooperative cancellation in long-running operations. Zero dependencies in the core crate.
+A minimal, `no_std` trait for cooperative cancellation. Zero dependencies.
 
 ## For Library Authors
 
@@ -33,18 +33,16 @@ impl From<StopReason> for MyError {
 
 ## For Application Developers
 
-Enable the `std` feature:
-
 ```toml
 [dependencies]
 enough = { version = "0.1", features = ["std"] }
 ```
 
 ```rust
-use enough::{CancellationSource, Stop};
+use enough::{ArcStop, Stop, TimeoutExt};
 use std::time::Duration;
 
-let source = CancellationSource::new();
+let source = ArcStop::new();
 let token = source.token().with_timeout(Duration::from_secs(30));
 
 // Pass to library
@@ -65,13 +63,29 @@ let result = my_lib::decode(&data, Never);
 
 ## Features
 
-- **`std`** - Enables `CancellationSource`, timeouts, child cancellation
-- **`alloc`** - Enables `Stop` impls for `Box<T>` and `Arc<T>`
+- **None (default)** - `no_std` core: `Stop` trait, `Never`, `AtomicStop`, `SyncStop`, `FnStop`, `OrStop`
+- **`alloc`** - Adds `ArcStop`, `BoxStop`, `ChildSource` + `Box<T>`/`Arc<T>` impls
+- **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`)
+
+## Type Overview
+
+| Type | Feature | Use Case |
+|------|---------|----------|
+| `Never` | core | Zero-cost "never stop" |
+| `AtomicStop` / `AtomicToken` | core | Stack-based, Relaxed ordering |
+| `SyncStop` / `SyncToken` | core | Stack-based, Acquire/Release for data sync |
+| `FnStop` | core | Wrap any closure |
+| `OrStop` | core | Combine multiple stop sources |
+| `ArcStop` / `ArcToken` | alloc | Heap-based, owned tokens |
+| `BoxStop` | alloc | Type-erased dynamic dispatch |
+| `ChildSource` / `ChildToken` | alloc | Hierarchical (parent cancels children) |
+| `WithTimeout` | std | Add deadline to any Stop |
 
 ## See Also
 
+- [`almost-enough`](https://crates.io/crates/almost-enough) - Ergonomic extensions (`.or()`, `.into_boxed()`, guards)
 - [`enough-ffi`](https://crates.io/crates/enough-ffi) - FFI helpers for C#, Python, Node.js
-- [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio integration
+- [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio CancellationToken bridge
 
 ## License
 

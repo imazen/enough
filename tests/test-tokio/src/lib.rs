@@ -13,11 +13,11 @@ async fn tokio_stop_basic() {
     let token = CancellationToken::new();
     let stop = TokioStop::new(token.clone());
 
-    assert!(!stop.is_stopped());
+    assert!(!stop.should_stop());
 
     token.cancel();
 
-    assert!(stop.is_stopped());
+    assert!(stop.should_stop());
 }
 
 #[tokio::test]
@@ -30,7 +30,7 @@ async fn tokio_stop_in_spawn_blocking() {
 
     let handle = tokio::task::spawn_blocking(move || {
         for _ in 0..1000 {
-            if stop.is_stopped() {
+            if stop.should_stop() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -61,7 +61,7 @@ async fn tokio_stop_cancelled_await() {
     stop.cancelled().await;
 
     cancel_task.await.unwrap();
-    assert!(stop.is_stopped());
+    assert!(stop.should_stop());
 }
 
 #[tokio::test]
@@ -69,11 +69,11 @@ async fn tokio_stop_child() {
     let parent = TokioStop::new(CancellationToken::new());
     let child = parent.child();
 
-    assert!(!child.is_stopped());
+    assert!(!child.should_stop());
 
     parent.cancel();
 
-    assert!(child.is_stopped());
+    assert!(child.should_stop());
 }
 
 #[tokio::test]
@@ -100,24 +100,24 @@ async fn tokio_extension_trait() {
     let token = CancellationToken::new();
     let stop = token.as_stop();
 
-    assert!(!stop.is_stopped());
+    assert!(!stop.should_stop());
 
     token.cancel();
 
-    assert!(stop.is_stopped());
+    assert!(stop.should_stop());
 }
 
 #[tokio::test]
-async fn tokio_with_enough_std() {
-    // Test that tokio and std tokens can work together through the Stop trait
+async fn tokio_with_enough() {
+    // Test that tokio and enough tokens can work together through the Stop trait
     let tokio_token = CancellationToken::new();
     let tokio_stop = TokioStop::new(tokio_token.clone());
 
-    let std_source = enough::CancellationSource::new();
+    let std_source = enough::ArcStop::new();
     let std_token = std_source.token();
 
     fn use_stop(stop: impl Stop) -> bool {
-        stop.is_stopped()
+        stop.should_stop()
     }
 
     assert!(!use_stop(tokio_stop.clone()));
@@ -143,7 +143,7 @@ async fn tokio_concurrent_tasks() {
 
         handles.push(tokio::spawn(async move {
             for _ in 0..100 {
-                if stop.is_stopped() {
+                if stop.should_stop() {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

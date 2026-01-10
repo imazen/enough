@@ -60,11 +60,11 @@ use tokio_util::sync::CancellationToken;
 /// let token = CancellationToken::new();
 /// let stop = TokioStop::new(token.clone());
 ///
-/// assert!(!stop.is_stopped());
+/// assert!(!stop.should_stop());
 ///
 /// token.cancel();
 ///
-/// assert!(stop.is_stopped());
+/// assert!(stop.should_stop());
 /// ```
 #[derive(Clone)]
 pub struct TokioStop {
@@ -122,7 +122,7 @@ impl Stop for TokioStop {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
+    fn should_stop(&self) -> bool {
         self.token.is_cancelled()
     }
 }
@@ -168,12 +168,12 @@ mod tests {
         let token = CancellationToken::new();
         let stop = TokioStop::new(token.clone());
 
-        assert!(!stop.is_stopped());
+        assert!(!stop.should_stop());
         assert!(stop.check().is_ok());
 
         token.cancel();
 
-        assert!(stop.is_stopped());
+        assert!(stop.should_stop());
         assert_eq!(stop.check(), Err(StopReason::Cancelled));
     }
 
@@ -182,11 +182,11 @@ mod tests {
         let parent = TokioStop::new(CancellationToken::new());
         let child = parent.child();
 
-        assert!(!child.is_stopped());
+        assert!(!child.should_stop());
 
         parent.cancel();
 
-        assert!(child.is_stopped());
+        assert!(child.should_stop());
     }
 
     #[test]
@@ -203,8 +203,8 @@ mod tests {
 
         token.cancel();
 
-        assert!(stop1.is_stopped());
-        assert!(stop2.is_stopped());
+        assert!(stop1.should_stop());
+        assert!(stop2.should_stop());
     }
 
     #[test]
@@ -219,9 +219,9 @@ mod tests {
         let token = CancellationToken::new();
         let stop = token.as_stop();
 
-        assert!(!stop.is_stopped());
+        assert!(!stop.should_stop());
         token.cancel();
-        assert!(stop.is_stopped());
+        assert!(stop.should_stop());
     }
 
     #[tokio::test]
@@ -238,6 +238,6 @@ mod tests {
         // Wait for cancellation
         stop.cancelled().await;
 
-        assert!(stop.is_stopped());
+        assert!(stop.should_stop());
     }
 }

@@ -1,78 +1,78 @@
-//! Tests for AtomicBool-based CancellationSource and CancellationToken.
+//! Tests for ArcStop and ArcToken.
 #![allow(unused_imports, dead_code)]
 
-use enough::{CancellationSource, CancellationToken, Stop};
+use enough::{ArcStop, ArcToken, Stop};
 use std::sync::Arc;
 use std::thread;
 
 #[test]
 fn source_basic_usage() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     assert!(!source.is_cancelled());
 
     let token = source.token();
-    assert!(!token.is_stopped());
+    assert!(!token.should_stop());
 
     source.cancel();
 
     assert!(source.is_cancelled());
-    assert!(token.is_stopped());
+    assert!(token.should_stop());
 }
 
 #[test]
 fn token_is_clone() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let t1 = source.token();
     let t2 = t1.clone();
     let t3 = t1.clone();
 
     source.cancel();
 
-    assert!(t1.is_stopped());
-    assert!(t2.is_stopped());
-    assert!(t3.is_stopped());
+    assert!(t1.should_stop());
+    assert!(t2.should_stop());
+    assert!(t3.should_stop());
 }
 
 #[test]
 fn multiple_tokens_same_source() {
-    let source = CancellationSource::new();
-    let tokens: Vec<_> = (0..100).map(|_| source.token()).collect();
+    let source = ArcStop::new();
+    let tokens: Vec<ArcToken> = (0..100).map(|_| source.token()).collect();
 
-    assert!(tokens.iter().all(|t| !t.is_stopped()));
+    assert!(tokens.iter().all(|t| !t.should_stop()));
 
     source.cancel();
 
-    assert!(tokens.iter().all(|t| t.is_stopped()));
+    assert!(tokens.iter().all(|t| t.should_stop()));
 }
 
 #[test]
 fn cross_thread_cancellation() {
-    let source = Arc::new(CancellationSource::new());
+    let source = ArcStop::new();
     let token = source.token();
 
-    let source_clone = Arc::clone(&source);
+    let source_clone = source.clone();
     let handle = thread::spawn(move || {
         thread::sleep(std::time::Duration::from_millis(10));
         source_clone.cancel();
     });
 
     // Spin until cancelled
-    while !token.is_stopped() {
+    while !token.should_stop() {
         thread::yield_now();
     }
 
     handle.join().unwrap();
-    assert!(token.is_stopped());
+    assert!(token.should_stop());
 }
 
 #[test]
 fn concurrent_check_and_cancel() {
-    let source = Arc::new(CancellationSource::new());
+    let source = ArcStop::new();
     let token = source.token();
 
     let handles: Vec<_> = (0..10)
         .map(|i| {
-            let source = Arc::clone(&source);
+            let source = source.clone();
             let token = token.clone();
             thread::spawn(move || {
                 for _ in 0..1000 {
@@ -93,13 +93,14 @@ fn concurrent_check_and_cancel() {
 }
 
 #[test]
-fn never_token() {
-    let token = CancellationToken::never();
-    assert!(!token.is_stopped());
+fn never_stops() {
+    use enough::Never;
+    let stop = Never;
+    assert!(!stop.should_stop());
 
     // Even with many checks, never stops
     for _ in 0..10000 {
-        assert!(token.check().is_ok());
+        assert!(stop.check().is_ok());
     }
 }
 
@@ -108,7 +109,7 @@ fn pass_to_function() {
     fn process(data: &[u8], stop: impl Stop) -> Result<usize, &'static str> {
         let mut count = 0;
         for chunk in data.chunks(10) {
-            if stop.is_stopped() {
+            if stop.should_stop() {
                 return Err("cancelled");
             }
             count += chunk.len();
@@ -116,7 +117,7 @@ fn pass_to_function() {
         Ok(count)
     }
 
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     // Not cancelled - completes
@@ -131,11 +132,11 @@ fn pass_to_function() {
 
 #[test]
 fn dyn_stop_usage() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     fn takes_dyn(stop: &dyn Stop) -> bool {
-        stop.is_stopped()
+        stop.should_stop()
     }
 
     assert!(!takes_dyn(&token));

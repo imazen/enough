@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/enough",
+    "crates/almost-enough",
     "crates/enough-tokio",
     "crates/enough-ffi",
     "tests/test-basic",
@@ -25,5 +26,6 @@ categories = ["concurrency", "no-std", "rust-patterns"]
 
 [workspace.dependencies]
 enough = { path = "crates/enough", features = ["std"] }
+almost-enough = { path = "crates/almost-enough", features = ["std"] }
 enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }

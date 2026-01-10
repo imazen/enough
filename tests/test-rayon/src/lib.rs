@@ -1,7 +1,7 @@
 //! Tests for rayon parallel processing with cancellation.
 #![allow(unused_imports, dead_code)]
 
-use enough::{CancellationSource, Stop, StopReason};
+use enough::{ArcStop, ArcToken, Stop, StopReason};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -16,7 +16,7 @@ fn process_item(item: usize, stop: &impl Stop) -> Result<usize, StopReason> {
 
 #[test]
 fn parallel_iter_with_token() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     let items: Vec<usize> = (0..1000).collect();
@@ -32,14 +32,14 @@ fn parallel_iter_with_token() {
 
 #[test]
 fn parallel_iter_cancelled() {
-    let source = Arc::new(CancellationSource::new());
+    let source = ArcStop::new();
     let token = source.token();
     let processed = Arc::new(AtomicUsize::new(0));
 
     let items: Vec<usize> = (0..10000).collect();
 
     // Cancel after processing starts
-    let source_clone = Arc::clone(&source);
+    let source_clone = source.clone();
     let processed_clone = Arc::clone(&processed);
     std::thread::spawn(move || {
         // Wait until some items are processed
@@ -72,7 +72,7 @@ fn parallel_iter_cancelled() {
 
 #[test]
 fn parallel_chunks_with_token() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
@@ -90,24 +90,25 @@ fn parallel_chunks_with_token() {
 
 #[test]
 fn parallel_find_with_early_exit() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
     let checked = Arc::new(AtomicUsize::new(0));
 
     let items: Vec<usize> = (0..10000).collect();
     let checked_clone = Arc::clone(&checked);
+    let source_clone = source.clone();
 
     let found = items.par_iter().find_any(|&&item| {
         checked_clone.fetch_add(1, Ordering::Relaxed);
 
         // Check cancellation
-        if token.is_stopped() {
+        if token.should_stop() {
             return false;
         }
 
         // Cancel when we find target
         if item == 500 {
-            source.cancel();
+            source_clone.cancel();
             return true;
         }
 
@@ -130,12 +131,12 @@ fn token_is_send_sync_for_rayon() {
     // This test just ensures the token can be used with rayon
     // The fact that it compiles is the test
 
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     // Token must be Send + Sync for par_iter
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<enough::CancellationToken>();
+    assert_send_sync::<ArcToken>();
 
     let _: Vec<_> = (0..100)
         .into_par_iter()
@@ -148,7 +149,7 @@ fn token_is_send_sync_for_rayon() {
 
 #[test]
 fn nested_parallel_with_token() {
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     let outer: Vec<Vec<usize>> = (0..10).map(|i| (i * 10..(i + 1) * 10).collect()).collect();
@@ -156,7 +157,7 @@ fn nested_parallel_with_token() {
     let result: usize = outer
         .par_iter()
         .map(|inner| {
-            if token.is_stopped() {
+            if token.should_stop() {
                 return 0;
             }
             inner.par_iter().map(|&x| x).sum::<usize>()

@@ -1,31 +1,32 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
 #![allow(unused_imports, dead_code)]
 
-use enough::{CancellationSource, ChildCancellationSource, Stop};
+use enough::children::ChildSource;
+use enough::{ArcStop, Stop, TimeoutExt};
 
 #[test]
 fn child_inherits_parent() {
-    let parent = CancellationSource::new();
-    let child = ChildCancellationSource::new(parent.token());
+    let parent = ArcStop::new();
+    let child = ChildSource::new(parent.token());
 
     assert!(!child.is_cancelled());
 
     parent.cancel();
 
     assert!(child.is_cancelled());
-    assert!(child.token().is_stopped());
+    assert!(child.token().should_stop());
 }
 
 #[test]
 fn child_cancel_independent() {
-    let parent = CancellationSource::new();
-    let child = ChildCancellationSource::new(parent.token());
+    let parent = ArcStop::new();
+    let child = ChildSource::new(parent.token());
 
     child.cancel();
 
     // Child is cancelled
     assert!(child.is_cancelled());
-    assert!(child.token().is_stopped());
+    assert!(child.token().should_stop());
 
     // Parent is NOT cancelled
     assert!(!parent.is_cancelled());
@@ -33,9 +34,9 @@ fn child_cancel_independent() {
 
 #[test]
 fn siblings_independent() {
-    let parent = CancellationSource::new();
-    let child_a = ChildCancellationSource::new(parent.token());
-    let child_b = ChildCancellationSource::new(parent.token());
+    let parent = ArcStop::new();
+    let child_a = ChildSource::new(parent.token());
+    let child_b = ChildSource::new(parent.token());
 
     child_a.cancel();
 
@@ -51,8 +52,8 @@ fn siblings_independent() {
 
 #[test]
 fn grandchild_inherits_all() {
-    let grandparent = CancellationSource::new();
-    let parent = ChildCancellationSource::new(grandparent.token());
+    let grandparent = ArcStop::new();
+    let parent = ChildSource::new(grandparent.token());
     let child = parent.child();
 
     assert!(!child.is_cancelled());
@@ -64,8 +65,8 @@ fn grandchild_inherits_all() {
 
 #[test]
 fn grandchild_parent_cancel() {
-    let grandparent = CancellationSource::new();
-    let parent = ChildCancellationSource::new(grandparent.token());
+    let grandparent = ArcStop::new();
+    let parent = ChildSource::new(grandparent.token());
     let child = parent.child();
 
     // Parent cancel propagates to child
@@ -78,8 +79,8 @@ fn grandchild_parent_cancel() {
 
 #[test]
 fn deep_hierarchy() {
-    let root = CancellationSource::new();
-    let l1 = ChildCancellationSource::new(root.token());
+    let root = ArcStop::new();
+    let l1 = ChildSource::new(root.token());
     let l2 = l1.child();
     let l3 = l2.child();
     let l4 = l3.child();
@@ -96,27 +97,26 @@ fn deep_hierarchy() {
 fn child_token_with_timeout() {
     use std::time::Duration;
 
-    let parent = CancellationSource::new();
-    let child = ChildCancellationSource::new(parent.token());
+    let parent = ArcStop::new();
+    let child = ChildSource::new(parent.token());
     let token = child.token().with_timeout(Duration::from_millis(50));
 
-    assert!(!token.is_stopped());
+    assert!(!token.should_stop());
 
     std::thread::sleep(Duration::from_millis(100));
 
-    assert!(token.is_stopped());
+    assert!(token.should_stop());
 }
 
 #[test]
 fn child_across_threads() {
-    use std::sync::Arc;
     use std::thread;
 
-    let parent = Arc::new(CancellationSource::new());
-    let parent_clone = Arc::clone(&parent);
+    let parent = ArcStop::new();
+    let parent_clone = parent.clone();
 
     let handle = thread::spawn(move || {
-        let child = ChildCancellationSource::new(parent_clone.token());
+        let child = ChildSource::new(parent_clone.token());
 
         // Spin until cancelled
         while !child.is_cancelled() {
@@ -134,9 +134,9 @@ fn child_across_threads() {
 
 #[test]
 fn many_children() {
-    let parent = CancellationSource::new();
+    let parent = ArcStop::new();
     let children: Vec<_> = (0..100)
-        .map(|_| ChildCancellationSource::new(parent.token()))
+        .map(|_| ChildSource::new(parent.token()))
         .collect();
 
     assert!(children.iter().all(|c| !c.is_cancelled()));

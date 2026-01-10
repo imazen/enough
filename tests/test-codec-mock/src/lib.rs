@@ -1,7 +1,7 @@
 //! Mock codec tests - simulates real codec usage patterns.
 #![allow(unused_imports, dead_code)]
 
-use enough::{CancellationSource, Never, Stop, StopReason};
+use enough::{ArcStop, Never, Stop, TimeoutExt, StopReason};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -155,7 +155,7 @@ fn decoder_completes_without_cancellation() {
 #[test]
 fn decoder_respects_cancellation() {
     let decoder = MockDecoder::new().with_check_frequency(1);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let data = vec![0u8; 10000];
 
     // Cancel immediately
@@ -172,7 +172,7 @@ fn decoder_respects_timeout() {
     let decoder = MockDecoder::new()
         .with_check_frequency(1)
         .with_block_size(10);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token().with_timeout(Duration::from_millis(1));
 
     // Large data that will take time
@@ -200,7 +200,7 @@ fn encoder_completes_without_cancellation() {
 #[test]
 fn encoder_respects_cancellation() {
     let encoder = MockEncoder::new(80);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let data = vec![100u8; 10000];
 
     source.cancel();
@@ -219,13 +219,13 @@ fn concurrent_decode_with_shared_cancel() {
             .with_block_size(10)
             .with_check_frequency(1),
     );
-    let source = Arc::new(CancellationSource::new());
+    let source = ArcStop::new();
     let data = Arc::new(vec![0u8; 1_000_000]); // 1MB of data
 
     let handles: Vec<_> = (0..4)
         .map(|_| {
             let decoder = Arc::clone(&decoder);
-            let source = Arc::clone(&source);
+            let source = source.clone();
             let data = Arc::clone(&data);
 
             thread::spawn(move || decoder.decode(&data, source.token()))
@@ -249,7 +249,7 @@ fn concurrent_decode_with_shared_cancel() {
 fn decode_encode_pipeline() -> Result<(), CodecError> {
     let decoder = MockDecoder::new();
     let encoder = MockEncoder::new(90);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     let input = vec![42u8; 1000];
@@ -267,7 +267,7 @@ fn decode_encode_pipeline() -> Result<(), CodecError> {
 fn decode_encode_pipeline_cancelled() {
     let decoder = MockDecoder::new();
     let encoder = MockEncoder::new(90);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token();
 
     let input = vec![42u8; 1000];
@@ -285,7 +285,7 @@ fn timeout_in_pipeline() {
     let decoder = MockDecoder::new()
         .with_block_size(10)
         .with_check_frequency(1);
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     let token = source.token().with_timeout(Duration::from_millis(1));
 
     let input = vec![42u8; 100000];
@@ -306,8 +306,8 @@ fn different_stop_impls_work() {
     // Never
     assert!(decoder.decode(&data, Never).is_ok());
 
-    // CancellationToken
-    let source = CancellationSource::new();
+    // ArcToken
+    let source = ArcStop::new();
     assert!(decoder.decode(&data, source.token()).is_ok());
 
     // Reference
@@ -328,7 +328,7 @@ fn error_type_integration() {
         Ok(())
     }
 
-    let source = CancellationSource::new();
+    let source = ArcStop::new();
     assert!(might_fail(source.token()).is_ok());
 
     source.cancel();

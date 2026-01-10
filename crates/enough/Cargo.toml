@@ -12,7 +12,7 @@ readme = "README.md"
 
 [features]
 default = []
-std = []
+std = ["alloc"]  # std implies alloc
 alloc = []
 
 [dependencies]

@@ -39,11 +39,11 @@ fn ffi_token_view_from_pointer() {
         // Rust FFI code receives the token pointer and creates a view
         let view = FfiCancellationToken::from_ptr(token);
 
-        assert!(!view.is_stopped());
+        assert!(!view.should_stop());
 
         enough_cancellation_cancel(source);
 
-        assert!(view.is_stopped());
+        assert!(view.should_stop());
 
         enough_token_destroy(token);
         enough_cancellation_destroy(source);
@@ -68,7 +68,7 @@ fn ffi_null_safety() {
 
         // Null token view is safe
         let view = FfiCancellationToken::from_ptr(std::ptr::null());
-        assert!(!view.is_stopped());
+        assert!(!view.should_stop());
     }
 }
 
@@ -79,7 +79,7 @@ fn ffi_never_token() {
         assert!(!enough_token_is_cancelled(token));
 
         let view = FfiCancellationToken::from_ptr(token);
-        assert!(!view.is_stopped());
+        assert!(!view.should_stop());
         assert!(view.check().is_ok());
 
         enough_token_destroy(token);
@@ -99,7 +99,7 @@ fn ffi_cross_thread() {
             let view = FfiCancellationToken::from_ptr(token);
 
             // Wait for cancellation
-            while !view.is_stopped() {
+            while !view.should_stop() {
                 thread::yield_now();
             }
 
@@ -182,7 +182,7 @@ fn ffi_token_from_destroyed_uncancelled_source() {
 #[test]
 fn ffi_with_stop_trait() {
     fn use_stop(stop: impl Stop) -> bool {
-        stop.is_stopped()
+        stop.should_stop()
     }
 
     unsafe {
@@ -224,7 +224,7 @@ fn ffi_simulated_csharp_pattern() {
         // Rust library uses view
         fn process(data: &[u8], stop: impl Stop) -> Result<usize, &'static str> {
             for (i, _chunk) in data.chunks(10).enumerate() {
-                if i % 100 == 0 && stop.is_stopped() {
+                if i % 100 == 0 && stop.should_stop() {
                     return Err("cancelled");
                 }
             }
@@ -249,11 +249,11 @@ fn ffi_simulated_csharp_pattern() {
 }
 
 #[test]
-fn ffi_interop_with_enough_std() {
-    // Test that FFI tokens and std tokens work together
-    use enough::CancellationSource;
+fn ffi_interop_with_enough() {
+    // Test that FFI tokens and enough tokens work together
+    use enough::ArcStop;
 
-    let std_source = CancellationSource::new();
+    let std_source = ArcStop::new();
     let std_token = std_source.token();
 
     unsafe {
@@ -263,7 +263,7 @@ fn ffi_interop_with_enough_std() {
 
         // Both implement Stop
         fn use_any_stop(s: impl Stop) -> bool {
-            s.is_stopped()
+            s.should_stop()
         }
 
         assert!(!use_any_stop(std_token.clone()));

@@ -39,23 +39,58 @@
 //!
 //! ## For Application Developers
 //!
-//! Enable the `std` feature for concrete implementations:
+//! ### Zero-Allocation (no_std)
+//!
+//! Use [`AtomicStop`] when the source outlives all tokens:
+//!
+//! ```rust
+//! use enough::{AtomicStop, Stop};
+//!
+//! let source = AtomicStop::new();
+//! let token = source.token();
+//!
+//! assert!(!token.should_stop());
+//!
+//! source.cancel();
+//! assert!(token.should_stop());
+//! ```
+//!
+//! ### Owned Tokens (alloc)
+//!
+//! Enable the `alloc` feature for [`ArcStop`] with owned, cloneable tokens:
+//!
+//! ```rust
+//! # #[cfg(feature = "alloc")]
+//! # fn main() {
+//! use enough::{ArcStop, Stop};
+//!
+//! let source = ArcStop::new();
+//! let token = source.token(); // Owned, can outlive source
+//!
+//! assert!(!token.should_stop());
+//!
+//! source.cancel();
+//! assert!(token.should_stop());
+//! # }
+//! # #[cfg(not(feature = "alloc"))]
+//! # fn main() {}
+//! ```
+//!
+//! ### Timeouts (std)
+//!
+//! Enable the `std` feature for timeout support:
 //!
 //! ```rust
 //! # #[cfg(feature = "std")]
 //! # fn main() {
-//! use enough::{CancellationSource, Stop};
+//! use enough::{ArcStop, Stop, TimeoutExt};
 //! use std::time::Duration;
 //!
-//! let source = CancellationSource::new();
+//! let source = ArcStop::new();
 //! let token = source.token().with_timeout(Duration::from_secs(30));
 //!
-//! // Check in operations
-//! assert!(!token.is_stopped());
-//!
-//! // Cancel when needed
-//! source.cancel();
-//! assert!(token.is_stopped());
+//! // Token will stop if cancelled OR if 30 seconds pass
+//! assert!(!token.should_stop());
 //! # }
 //! # #[cfg(not(feature = "std"))]
 //! # fn main() {}
@@ -63,9 +98,25 @@
 //!
 //! ## Feature Flags
 //!
-//! - `std` - Enables `CancellationSource`, `CancellationToken`, timeouts, and
-//!   child cancellation. Also enables `std::error::Error` impl for `StopReason`.
-//! - `alloc` - Enables blanket impls for `Box<T>` and `Arc<T>`
+//! - **None (default)** - Core trait, `Never`, `AtomicStop`, `SyncStop`, `FnStop`, `OrStop`
+//! - **`alloc`** - Adds `ArcStop`, `ArcToken`, `BoxStop`, `ChildSource`, `ChildToken`,
+//!   and blanket impls for `Box<T>`, `Arc<T>`
+//! - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`) and
+//!   `std::error::Error` impl for `StopReason`
+//!
+//! ## Type Overview
+//!
+//! | Type | Feature | Allocation | Use Case |
+//! |------|---------|------------|----------|
+//! | [`Never`] | core | None | Zero-cost "never stop" |
+//! | [`AtomicStop`] / [`AtomicToken`] | core | None | Stack-based, Relaxed ordering |
+//! | [`SyncStop`] / [`SyncToken`] | core | None | Stack-based, Acquire/Release ordering |
+//! | [`FnStop`] | core | None | Wrap a closure |
+//! | [`OrStop`] | core | None | Combine multiple stops |
+//! | [`ArcStop`] / [`ArcToken`] | alloc | Heap | Owned tokens, can outlive source |
+//! | [`BoxStop`] | alloc | Heap | Dynamic dispatch, avoid monomorphization |
+//! | [`ChildSource`](children::ChildSource) | alloc | Heap | Hierarchical cancellation |
+//! | [`WithTimeout`] | std | None | Add deadline to any `Stop` |
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
@@ -74,19 +125,41 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+// Core modules (no_std, no alloc)
+mod atomic;
+mod func;
+mod or;
 mod reason;
+mod sync;
 
-#[cfg(feature = "std")]
-mod child;
-#[cfg(feature = "std")]
-mod source;
+// Alloc-dependent modules
+#[cfg(feature = "alloc")]
+mod arc;
+#[cfg(feature = "alloc")]
+mod boxed;
+#[cfg(feature = "alloc")]
+pub mod children;
 
+// Std-dependent modules
+#[cfg(feature = "std")]
+pub mod time;
+
+// Re-exports: Core
+pub use atomic::{AtomicStop, AtomicToken};
+pub use func::FnStop;
+pub use or::OrStop;
 pub use reason::StopReason;
+pub use sync::{SyncStop, SyncToken};
 
+// Re-exports: Alloc
+#[cfg(feature = "alloc")]
+pub use arc::{ArcStop, ArcToken};
+#[cfg(feature = "alloc")]
+pub use boxed::BoxStop;
+
+// Re-exports: Std
 #[cfg(feature = "std")]
-pub use child::{ChildCancellationSource, ChildCancellationToken};
-#[cfg(feature = "std")]
-pub use source::{CancellationSource, CancellationToken};
+pub use time::{TimeoutExt, WithTimeout};
 
 /// Cooperative cancellation check.
 ///
@@ -106,7 +179,7 @@ pub use source::{CancellationSource, CancellationToken};
 ///
 /// impl Stop for MyToken<'_> {
 ///     fn check(&self) -> Result<(), StopReason> {
-///         if self.cancelled.load(Ordering::Acquire) {
+///         if self.cancelled.load(Ordering::Relaxed) {
 ///             Err(StopReason::Cancelled)
 ///         } else {
 ///             Ok(())
@@ -128,7 +201,7 @@ pub trait Stop: Send + Sync {
     /// Convenience method for when you want to handle stopping yourself
     /// rather than using the `?` operator.
     #[inline]
-    fn is_stopped(&self) -> bool {
+    fn should_stop(&self) -> bool {
         self.check().is_err()
     }
 }
@@ -162,7 +235,7 @@ impl Stop for Never {
     }
 
     #[inline(always)]
-    fn is_stopped(&self) -> bool {
+    fn should_stop(&self) -> bool {
         false
     }
 }
@@ -175,8 +248,8 @@ impl<T: Stop + ?Sized> Stop for &T {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
-        (**self).is_stopped()
+    fn should_stop(&self) -> bool {
+        (**self).should_stop()
     }
 }
 
@@ -188,8 +261,8 @@ impl<T: Stop + ?Sized> Stop for &mut T {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
-        (**self).is_stopped()
+    fn should_stop(&self) -> bool {
+        (**self).should_stop()
     }
 }
 
@@ -201,8 +274,8 @@ impl<T: Stop + ?Sized> Stop for alloc::boxed::Box<T> {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
-        (**self).is_stopped()
+    fn should_stop(&self) -> bool {
+        (**self).should_stop()
     }
 }
 
@@ -214,8 +287,8 @@ impl<T: Stop + ?Sized> Stop for alloc::sync::Arc<T> {
     }
 
     #[inline]
-    fn is_stopped(&self) -> bool {
-        (**self).is_stopped()
+    fn should_stop(&self) -> bool {
+        (**self).should_stop()
     }
 }
 
@@ -225,7 +298,7 @@ mod tests {
 
     #[test]
     fn never_does_not_stop() {
-        assert!(!Never.is_stopped());
+        assert!(!Never.should_stop());
         assert!(Never.check().is_ok());
     }
 
@@ -246,7 +319,7 @@ mod tests {
     fn reference_impl_works() {
         let never = Never;
         let reference: &dyn Stop = &never;
-        assert!(!reference.is_stopped());
+        assert!(!reference.should_stop());
     }
 
     #[test]
@@ -271,5 +344,21 @@ mod tests {
         }
 
         assert!(might_stop(Never).is_ok());
+    }
+
+    #[test]
+    fn dyn_stop_works() {
+        fn process(stop: &dyn Stop) -> bool {
+            stop.should_stop()
+        }
+
+        let never = Never;
+        assert!(!process(&never));
+
+        let source = AtomicStop::new();
+        assert!(!process(&source));
+
+        source.cancel();
+        assert!(process(&source));
     }
 }
