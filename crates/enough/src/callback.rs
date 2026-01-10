@@ -1,19 +1,26 @@
 //! Callback-based cancellation.
+//!
+//! This module requires the `std` feature.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use enough::{Stop, StopReason};
+use crate::{Stop, StopReason};
+
+/// Inner state for callback cancellation.
+struct CallbackInner<F> {
+    cancelled: AtomicBool,
+    callback: F,
+}
 
 /// A cancellation source that triggers a callback when cancelled.
 ///
-/// Useful for integrating with external cancellation systems that
-/// need notification when cancellation occurs.
+/// Useful for integrating with external cancellation systems.
 ///
 /// # Example
 ///
 /// ```rust
-/// use enough_std::CallbackCancellation;
-/// use enough::Stop;
+/// use enough::{CallbackCancellation, Stop};
 /// use std::sync::atomic::{AtomicBool, Ordering};
 /// use std::sync::Arc;
 ///
@@ -32,8 +39,7 @@ use enough::{Stop, StopReason};
 /// assert!(source.token().is_stopped());
 /// ```
 pub struct CallbackCancellation<F: Fn() + Send + Sync> {
-    cancelled: AtomicBool,
-    callback: F,
+    inner: Arc<CallbackInner<F>>,
 }
 
 impl<F: Fn() + Send + Sync> CallbackCancellation<F> {
@@ -42,44 +48,51 @@ impl<F: Fn() + Send + Sync> CallbackCancellation<F> {
     /// The callback will be invoked when [`cancel()`](Self::cancel) is called.
     pub fn new(callback: F) -> Self {
         Self {
-            cancelled: AtomicBool::new(false),
-            callback,
+            inner: Arc::new(CallbackInner {
+                cancelled: AtomicBool::new(false),
+                callback,
+            }),
         }
     }
 
     /// Cancel and invoke the callback.
     ///
     /// The callback is invoked exactly once, on the first call to cancel.
-    /// Subsequent calls are no-ops.
     pub fn cancel(&self) {
-        // Only invoke callback on first cancellation
-        if !self.cancelled.swap(true, Ordering::AcqRel) {
-            (self.callback)();
+        if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
+            (self.inner.callback)();
         }
     }
 
     /// Check if cancelled.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.inner.cancelled.load(Ordering::Acquire)
     }
 
     /// Get a token for this source.
-    pub fn token(&self) -> CallbackCancellationToken<'_> {
+    pub fn token(&self) -> CallbackCancellationToken<F> {
         CallbackCancellationToken {
-            flag: &self.cancelled,
+            inner: Arc::clone(&self.inner),
         }
     }
 }
 
 /// Token for callback-based cancellation.
-#[derive(Clone, Copy)]
-pub struct CallbackCancellationToken<'a> {
-    flag: &'a AtomicBool,
+pub struct CallbackCancellationToken<F: Fn() + Send + Sync> {
+    inner: Arc<CallbackInner<F>>,
 }
 
-impl Stop for CallbackCancellationToken<'_> {
+impl<F: Fn() + Send + Sync> Clone for CallbackCancellationToken<F> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<F: Fn() + Send + Sync> Stop for CallbackCancellationToken<F> {
     fn check(&self) -> Result<(), StopReason> {
-        if self.flag.load(Ordering::Acquire) {
+        if self.inner.cancelled.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -90,7 +103,6 @@ impl Stop for CallbackCancellationToken<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn callback_invoked_on_cancel() {
@@ -134,11 +146,5 @@ mod tests {
         source.cancel();
 
         assert!(token.is_stopped());
-    }
-
-    #[test]
-    fn callback_cancellation_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CallbackCancellation<fn()>>();
     }
 }

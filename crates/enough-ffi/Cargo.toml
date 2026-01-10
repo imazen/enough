@@ -11,6 +11,5 @@ default = []
 
 [dependencies]
 enough = { workspace = true }
-enough-std = { workspace = true }
 
 [dev-dependencies]

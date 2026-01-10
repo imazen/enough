@@ -188,7 +188,7 @@ fn ffi_simulated_csharp_pattern() {
 #[test]
 fn ffi_interop_with_enough_std() {
     // Test that FFI tokens and std tokens work together
-    use enough_std::CancellationSource;
+    use enough::CancellationSource;
 
     let std_source = CancellationSource::new();
     let std_token = std_source.token();
@@ -202,7 +202,7 @@ fn ffi_interop_with_enough_std() {
             s.is_stopped()
         }
 
-        assert!(!use_any_stop(std_token));
+        assert!(!use_any_stop(std_token.clone()));
         assert!(!use_any_stop(ffi_token));
 
         std_source.cancel();

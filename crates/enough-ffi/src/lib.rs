@@ -289,8 +289,8 @@ mod tests {
 
     #[test]
     fn ffi_with_enough_std() {
-        // Test interop with enough-std types
-        use enough_std::CancellationSource;
+        // Test interop with enough types
+        use enough::CancellationSource;
 
         let source = CancellationSource::new();
         let token = source.token();

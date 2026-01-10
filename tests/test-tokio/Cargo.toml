@@ -5,8 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-enough = { path = "../../crates/enough" }
-enough-std = { path = "../../crates/enough-std" }
-enough-tokio = { path = "../../crates/enough-tokio" }
+enough = { workspace = true }
+enough-tokio = { workspace = true }
 tokio = { version = "1.43", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 tokio-util = { version = "0.7" }

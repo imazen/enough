@@ -1,13 +1,12 @@
 //! Tests for rayon parallel processing with cancellation.
 
-use enough::{Stop, StopReason};
-use enough_std::CancellationSource;
+use enough::{CancellationSource, Stop, StopReason};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Simulated work that respects cancellation
-fn process_item(item: usize, stop: impl Stop) -> Result<usize, StopReason> {
+fn process_item(item: usize, stop: &impl Stop) -> Result<usize, StopReason> {
     // Check cancellation every item
     stop.check()?;
     // Simulate some work
@@ -23,7 +22,7 @@ fn parallel_iter_with_token() {
 
     let results: Vec<_> = items
         .par_iter()
-        .map(|&item| process_item(item, token))
+        .map(|&item| process_item(item, &token))
         .collect();
 
     // All should succeed
@@ -53,7 +52,7 @@ fn parallel_iter_cancelled() {
         .par_iter()
         .map(|&item| {
             processed.fetch_add(1, Ordering::Relaxed);
-            process_item(item, token)
+            process_item(item, &token)
         })
         .collect();
 
@@ -135,7 +134,7 @@ fn token_is_send_sync_for_rayon() {
 
     // Token must be Send + Sync for par_iter
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<enough_std::CancellationToken>();
+    assert_send_sync::<enough::CancellationToken>();
 
     let _: Vec<_> = (0..100)
         .into_par_iter()

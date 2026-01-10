@@ -112,7 +112,7 @@ async fn tokio_with_enough_std() {
     let tokio_token = CancellationToken::new();
     let tokio_stop = TokioStop::new(tokio_token.clone());
 
-    let std_source = enough_std::CancellationSource::new();
+    let std_source = enough::CancellationSource::new();
     let std_token = std_source.token();
 
     fn use_stop(stop: impl Stop) -> bool {
@@ -120,7 +120,7 @@ async fn tokio_with_enough_std() {
     }
 
     assert!(!use_stop(tokio_stop.clone()));
-    assert!(!use_stop(std_token));
+    assert!(!use_stop(std_token.clone()));
 
     tokio_token.cancel();
     std_source.cancel();

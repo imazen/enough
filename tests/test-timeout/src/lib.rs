@@ -1,7 +1,6 @@
 //! Tests for timeout behavior.
 
-use enough::{Stop, StopReason};
-use enough_std::{CancellationSource, CancellationToken};
+use enough::{CancellationSource, CancellationToken, Stop, StopReason};
 use std::time::{Duration, Instant};
 
 #[test]

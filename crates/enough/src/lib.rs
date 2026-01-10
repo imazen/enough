@@ -39,28 +39,35 @@
 //!
 //! ## For Application Developers
 //!
-//! Use concrete implementations from [`enough-std`] or create your own:
+//! Enable the `std` feature for concrete implementations:
 //!
-//! ```rust,ignore
-//! use enough_std::{CancellationSource, CancellationToken};
+//! ```rust
+//! # #[cfg(feature = "std")]
+//! # fn main() {
+//! use enough::{CancellationSource, Stop};
 //! use std::time::Duration;
 //!
 //! let source = CancellationSource::new();
 //! let token = source.token().with_timeout(Duration::from_secs(30));
 //!
-//! // Pass to library
-//! let result = my_codec::decode(&data, token);
+//! // Check in operations
+//! assert!(!token.is_stopped());
 //!
-//! // Or cancel manually
+//! // Cancel when needed
 //! source.cancel();
+//! assert!(token.is_stopped());
+//! # }
+//! # #[cfg(not(feature = "std"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Feature Flags
 //!
-//! - `std` - Enables `std::error::Error` impl for `StopReason`
+//! - `std` - Enables `CancellationSource`, `CancellationToken`, timeouts, and
+//!   child cancellation. Also enables `std::error::Error` impl for `StopReason`.
 //! - `alloc` - Enables blanket impls for `Box<T>` and `Arc<T>`
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
@@ -69,7 +76,21 @@ extern crate alloc;
 
 mod reason;
 
+#[cfg(feature = "std")]
+mod callback;
+#[cfg(feature = "std")]
+mod child;
+#[cfg(feature = "std")]
+mod source;
+
 pub use reason::StopReason;
+
+#[cfg(feature = "std")]
+pub use callback::{CallbackCancellation, CallbackCancellationToken};
+#[cfg(feature = "std")]
+pub use child::{ChildCancellationSource, ChildCancellationToken};
+#[cfg(feature = "std")]
+pub use source::{CancellationSource, CancellationToken};
 
 /// Cooperative cancellation check.
 ///

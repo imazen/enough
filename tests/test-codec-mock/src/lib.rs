@@ -1,7 +1,6 @@
 //! Mock codec tests - simulates real codec usage patterns.
 
-use enough::{Never, Stop, StopReason};
-use enough_std::CancellationSource;
+use enough::{CancellationSource, Never, Stop, StopReason};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -255,7 +254,7 @@ fn decode_encode_pipeline() -> Result<(), CodecError> {
     let input = vec![42u8; 1000];
 
     // Pipeline: decode then encode
-    let decoded = decoder.decode(&input, token)?;
+    let decoded = decoder.decode(&input, token.clone())?;
     let encoded = encoder.encode(&decoded, token)?;
 
     assert!(!encoded.is_empty());
@@ -273,7 +272,7 @@ fn decode_encode_pipeline_cancelled() {
     let input = vec![42u8; 1000];
 
     // Cancel before encode
-    let decoded = decoder.decode(&input, token).unwrap();
+    let decoded = decoder.decode(&input, token.clone()).unwrap();
     source.cancel();
     let result = encoder.encode(&decoded, token);
 

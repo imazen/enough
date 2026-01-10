@@ -1,7 +1,6 @@
 //! Tests for AtomicBool-based CancellationSource and CancellationToken.
 
-use enough::Stop;
-use enough_std::{CancellationSource, CancellationToken};
+use enough::{CancellationSource, CancellationToken, Stop};
 use std::sync::Arc;
 use std::thread;
 
@@ -20,11 +19,11 @@ fn source_basic_usage() {
 }
 
 #[test]
-fn token_is_copy() {
+fn token_is_clone() {
     let source = CancellationSource::new();
     let t1 = source.token();
-    let t2 = t1; // Copy
-    let t3 = t1; // Still valid
+    let t2 = t1.clone();
+    let t3 = t1.clone();
 
     source.cancel();
 
@@ -73,7 +72,7 @@ fn concurrent_check_and_cancel() {
     let handles: Vec<_> = (0..10)
         .map(|i| {
             let source = Arc::clone(&source);
-            let token = token;
+            let token = token.clone();
             thread::spawn(move || {
                 for _ in 0..1000 {
                     if i == 0 && !source.is_cancelled() {
@@ -134,7 +133,7 @@ fn pass_to_function() {
     let token = source.token();
 
     // Not cancelled - completes
-    let result = process(&[0u8; 100], token);
+    let result = process(&[0u8; 100], token.clone());
     assert_eq!(result, Ok(100));
 
     // Cancel and try again

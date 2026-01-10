@@ -1,7 +1,6 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
 
-use enough::Stop;
-use enough_std::{CancellationSource, ChildCancellationSource};
+use enough::{CancellationSource, ChildCancellationSource, Stop};
 
 #[test]
 fn child_inherits_parent() {
