@@ -1,0 +1,17 @@
+[package]
+name = "enough-tokio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tokio integration for the enough cancellation trait"
+
+[features]
+default = []
+
+[dependencies]
+enough = { workspace = true }
+tokio-util = { version = "0.7" }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["rt", "time", "macros"] }

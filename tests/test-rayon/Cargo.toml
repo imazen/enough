@@ -1,0 +1,10 @@
+[package]
+name = "test-rayon"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+enough = { path = "../../crates/enough" }
+enough-std = { path = "../../crates/enough-std" }
+rayon = "1.10"

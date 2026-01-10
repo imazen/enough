@@ -1,0 +1,16 @@
+[package]
+name = "enough-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FFI helpers for the enough cancellation trait"
+
+[features]
+default = []
+
+[dependencies]
+enough = { workspace = true }
+enough-std = { workspace = true }
+
+[dev-dependencies]

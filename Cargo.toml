@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/enough",
+    "crates/enough-std",
+    "crates/enough-tokio",
+    "crates/enough-ffi",
+    "tests/test-basic",
+    "tests/test-atomic",
+    "tests/test-timeout",
+    "tests/test-child",
+    "tests/test-rayon",
+    "tests/test-tokio",
+    "tests/test-ffi",
+    "tests/test-codec-mock",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/imazen/enough"
+keywords = ["cancellation", "cooperative", "async", "ffi", "no_std"]
+categories = ["concurrency", "no-std", "rust-patterns"]
+
+[workspace.dependencies]
+enough = { path = "crates/enough" }
+enough-std = { path = "crates/enough-std" }
+enough-tokio = { path = "crates/enough-tokio" }
+enough-ffi = { path = "crates/enough-ffi" }

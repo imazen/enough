@@ -1,0 +1,19 @@
+[package]
+name = "enough"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Minimal cooperative cancellation trait for long-running operations"
+readme = "README.md"
+
+[features]
+default = []
+std = []
+alloc = []
+
+[dependencies]
+
+[dev-dependencies]
