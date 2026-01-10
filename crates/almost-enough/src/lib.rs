@@ -10,13 +10,13 @@
 //! The [`StopExt`] trait adds combinator methods to any [`Stop`] implementation:
 //!
 //! ```rust
-//! use almost_enough::{AtomicStop, Stop, StopExt};
+//! use almost_enough::{StopSource, Stop, StopExt};
 //!
-//! let timeout = AtomicStop::new();
-//! let cancel = AtomicStop::new();
+//! let timeout = StopSource::new();
+//! let cancel = StopSource::new();
 //!
 //! // Combine: stop if either stops
-//! let combined = timeout.token().or(cancel.token());
+//! let combined = timeout.as_ref().or(cancel.as_ref());
 //! assert!(!combined.should_stop());
 //!
 //! cancel.cancel();
@@ -30,22 +30,47 @@
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
-//! use almost_enough::{ArcStop, BoxStop, Stop, StopExt};
+//! use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
 //!
 //! fn outer(stop: impl Stop + 'static) {
 //!     // Erase the concrete type to avoid monomorphizing inner()
 //!     inner(stop.into_boxed());
 //! }
 //!
-//! fn inner(stop: BoxStop) {
+//! fn inner(stop: BoxedStop) {
 //!     // Only one version of this function exists
 //!     while !stop.should_stop() {
 //!         break;
 //!     }
 //! }
 //!
-//! let source = ArcStop::new();
-//! outer(source.token());
+//! let stop = Stopper::new();
+//! outer(stop);
+//! # }
+//! # #[cfg(not(feature = "alloc"))]
+//! # fn main() {}
+//! ```
+//!
+//! ## Hierarchical Cancellation with `.child()`
+//!
+//! Create child stops that inherit cancellation from their parent:
+//!
+//! ```rust
+//! # #[cfg(feature = "alloc")]
+//! # fn main() {
+//! use almost_enough::{Stopper, Stop, StopExt};
+//!
+//! let parent = Stopper::new();
+//! let child = parent.child();
+//!
+//! // Child cancellation doesn't affect parent
+//! child.cancel();
+//! assert!(!parent.should_stop());
+//!
+//! // But parent cancellation propagates to children
+//! let child2 = parent.child();
+//! parent.cancel();
+//! assert!(child2.should_stop());
 //! # }
 //! # #[cfg(not(feature = "alloc"))]
 //! # fn main() {}
@@ -58,9 +83,9 @@
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
-//! use almost_enough::{ArcStop, StopDropRoll};
+//! use almost_enough::{Stopper, StopDropRoll};
 //!
-//! fn do_work(source: &ArcStop) -> Result<(), &'static str> {
+//! fn do_work(source: &Stopper) -> Result<(), &'static str> {
 //!     let guard = source.stop_on_drop();
 //!
 //!     // If we return early or panic, source is stopped
@@ -75,7 +100,7 @@
 //!     Ok(())
 //! }
 //!
-//! let source = ArcStop::new();
+//! let source = Stopper::new();
 //! do_work(&source).unwrap();
 //! # }
 //! # #[cfg(not(feature = "alloc"))]
@@ -87,8 +112,8 @@
 //! This crate mirrors `enough`'s feature flags:
 //!
 //! - **`std`** (default) - Full functionality including timeouts
-//! - **`alloc`** - Arc-based types, `into_boxed()`, `StopDropRoll`
-//! - **None** - Core trait and atomic types only
+//! - **`alloc`** - Arc-based types, `into_boxed()`, `child()`, `StopDropRoll`
+//! - **None** - Core trait and stack-based types only
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
@@ -113,13 +138,13 @@ pub use guard::{Cancellable, CancelGuard, StopDropRoll};
 /// # Example
 ///
 /// ```rust
-/// use almost_enough::{AtomicStop, Stop, StopExt};
+/// use almost_enough::{StopSource, Stop, StopExt};
 ///
-/// let source_a = AtomicStop::new();
-/// let source_b = AtomicStop::new();
+/// let source_a = StopSource::new();
+/// let source_b = StopSource::new();
 ///
 /// // Combine with .or()
-/// let combined = source_a.token().or(source_b.token());
+/// let combined = source_a.as_ref().or(source_b.as_ref());
 ///
 /// assert!(!combined.should_stop());
 ///
@@ -135,12 +160,12 @@ pub trait StopExt: Stop + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use almost_enough::{AtomicStop, Stop, StopExt};
+    /// use almost_enough::{StopSource, Stop, StopExt};
     ///
-    /// let timeout = AtomicStop::new();
-    /// let cancel = AtomicStop::new();
+    /// let timeout = StopSource::new();
+    /// let cancel = StopSource::new();
     ///
-    /// let combined = timeout.token().or(cancel.token());
+    /// let combined = timeout.as_ref().or(cancel.as_ref());
     /// assert!(!combined.should_stop());
     ///
     /// cancel.cancel();
@@ -152,13 +177,13 @@ pub trait StopExt: Stop + Sized {
     /// Multiple sources can be chained:
     ///
     /// ```rust
-    /// use almost_enough::{AtomicStop, Stop, StopExt};
+    /// use almost_enough::{StopSource, Stop, StopExt};
     ///
-    /// let a = AtomicStop::new();
-    /// let b = AtomicStop::new();
-    /// let c = AtomicStop::new();
+    /// let a = StopSource::new();
+    /// let b = StopSource::new();
+    /// let c = StopSource::new();
     ///
-    /// let combined = a.token().or(b.token()).or(c.token());
+    /// let combined = a.as_ref().or(b.as_ref()).or(c.as_ref());
     ///
     /// c.cancel();
     /// assert!(combined.should_stop());
@@ -172,14 +197,14 @@ pub trait StopExt: Stop + Sized {
     ///
     /// This is useful for preventing monomorphization at API boundaries.
     /// Instead of generating a new function for each `impl Stop` type,
-    /// you can erase the type to `BoxStop` and have a single implementation.
+    /// you can erase the type to `BoxedStop` and have a single implementation.
     ///
     /// # Example
     ///
     /// ```rust
     /// # #[cfg(feature = "alloc")]
     /// # fn main() {
-    /// use almost_enough::{ArcStop, BoxStop, Stop, StopExt};
+    /// use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
     ///
     /// // This function is monomorphized for each Stop type
     /// fn process_generic(stop: impl Stop + 'static) {
@@ -188,25 +213,65 @@ pub trait StopExt: Stop + Sized {
     /// }
     ///
     /// // This function has only one implementation
-    /// fn process_concrete(stop: BoxStop) {
+    /// fn process_concrete(stop: BoxedStop) {
     ///     while !stop.should_stop() {
     ///         break;
     ///     }
     /// }
     ///
-    /// let source = ArcStop::new();
-    /// process_generic(source.token());
+    /// let stop = Stopper::new();
+    /// process_generic(stop);
     /// # }
     /// # #[cfg(not(feature = "alloc"))]
     /// # fn main() {}
     /// ```
     #[cfg(feature = "alloc")]
     #[inline]
-    fn into_boxed(self) -> BoxStop
+    fn into_boxed(self) -> BoxedStop
     where
         Self: 'static,
     {
-        BoxStop::new(self)
+        BoxedStop::new(self)
+    }
+
+    /// Create a child stop that inherits cancellation from this stop.
+    ///
+    /// The returned [`TreeStopper`] will stop if:
+    /// - Its own `cancel()` is called
+    /// - This parent stop is cancelled
+    ///
+    /// Cancelling the child does NOT affect the parent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "alloc")]
+    /// # fn main() {
+    /// use almost_enough::{Stopper, Stop, StopExt};
+    ///
+    /// let parent = Stopper::new();
+    /// let child = parent.child();
+    ///
+    /// // Child cancellation is independent
+    /// child.cancel();
+    /// assert!(!parent.should_stop());
+    /// assert!(child.should_stop());
+    ///
+    /// // Parent cancellation propagates
+    /// let child2 = parent.child();
+    /// parent.cancel();
+    /// assert!(child2.should_stop());
+    /// # }
+    /// # #[cfg(not(feature = "alloc"))]
+    /// # fn main() {}
+    /// ```
+    #[cfg(feature = "alloc")]
+    #[inline]
+    fn child(&self) -> TreeStopper
+    where
+        Self: Clone + 'static,
+    {
+        TreeStopper::with_parent(self.clone())
     }
 }
 
@@ -219,9 +284,9 @@ mod tests {
 
     #[test]
     fn or_extension_works() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = a.token().or(b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = a.as_ref().or(b.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -231,11 +296,11 @@ mod tests {
 
     #[test]
     fn or_chain_works() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let c = AtomicStop::new();
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let c = StopSource::new();
 
-        let combined = a.token().or(b.token()).or(c.token());
+        let combined = a.as_ref().or(b.as_ref()).or(c.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -245,8 +310,8 @@ mod tests {
 
     #[test]
     fn or_with_never() {
-        let source = AtomicStop::new();
-        let combined = Never.or(source.token());
+        let source = StopSource::new();
+        let combined = Never.or(source.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -259,35 +324,34 @@ mod tests {
         // Verify that re-exports from enough work
         let _: StopReason = StopReason::Cancelled;
         let _ = Never;
-        let source = AtomicStop::new();
-        let _ = source.token();
+        let source = StopSource::new();
+        let _ = source.as_ref();
     }
 
     #[cfg(feature = "alloc")]
     #[test]
     fn alloc_reexports_work() {
-        let source = ArcStop::new();
-        let _ = source.token();
-        let _ = BoxStop::new(Never);
+        let stop = Stopper::new();
+        let _ = stop.clone();
+        let _ = BoxedStop::new(Never);
     }
 
     #[cfg(feature = "alloc")]
     #[test]
     fn into_boxed_works() {
-        let source = ArcStop::new();
-        let token = source.token();
-        let boxed: BoxStop = token.into_boxed();
+        let stop = Stopper::new();
+        let boxed: BoxedStop = stop.clone().into_boxed();
 
         assert!(!boxed.should_stop());
 
-        source.cancel();
+        stop.cancel();
         assert!(boxed.should_stop());
     }
 
     #[cfg(feature = "alloc")]
     #[test]
     fn into_boxed_with_never() {
-        let boxed: BoxStop = Never.into_boxed();
+        let boxed: BoxedStop = Never.into_boxed();
         assert!(!boxed.should_stop());
     }
 
@@ -299,12 +363,49 @@ mod tests {
             inner(stop.into_boxed());
         }
 
-        fn inner(stop: BoxStop) {
+        fn inner(stop: BoxedStop) {
             let _ = stop.should_stop();
         }
 
-        let source = ArcStop::new();
-        outer(source.token());
+        let stop = Stopper::new();
+        outer(stop);
         outer(Never);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn child_extension_works() {
+        let parent = Stopper::new();
+        let child = parent.child();
+
+        assert!(!child.should_stop());
+
+        parent.cancel();
+        assert!(child.should_stop());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn child_independent_cancel() {
+        let parent = Stopper::new();
+        let child = parent.child();
+
+        child.cancel();
+
+        assert!(child.should_stop());
+        assert!(!parent.should_stop());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn child_chain() {
+        let grandparent = Stopper::new();
+        let parent = grandparent.child();
+        let child = parent.child();
+
+        grandparent.cancel();
+
+        assert!(parent.should_stop());
+        assert!(child.should_stop());
     }
 }

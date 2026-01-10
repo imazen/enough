@@ -39,17 +39,17 @@ enough = { version = "0.1", features = ["std"] }
 ```
 
 ```rust
-use enough::{ArcStop, Stop, TimeoutExt};
+use enough::{Stopper, Stop, TimeoutExt};
 use std::time::Duration;
 
-let source = ArcStop::new();
-let token = source.token().with_timeout(Duration::from_secs(30));
+let stop = Stopper::new();
+let timed = stop.clone().with_timeout(Duration::from_secs(30));
 
 // Pass to library
-let result = my_lib::decode(&data, token);
+let result = my_lib::decode(&data, timed);
 
 // Or cancel manually
-source.cancel();
+stop.cancel();
 ```
 
 ## Zero-Cost Default
@@ -63,8 +63,8 @@ let result = my_lib::decode(&data, Never);
 
 ## Features
 
-- **None (default)** - `no_std` core: `Stop` trait, `Never`, `AtomicStop`, `SyncStop`, `FnStop`, `OrStop`
-- **`alloc`** - Adds `ArcStop`, `BoxStop`, `ChildSource` + `Box<T>`/`Arc<T>` impls
+- **None (default)** - `no_std` core: `Stop` trait, `Never`, `StopSource`, `FnStop`, `OrStop`
+- **`alloc`** - Adds `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop` + `Box<T>`/`Arc<T>` impls
 - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`)
 
 ## Type Overview
@@ -72,18 +72,18 @@ let result = my_lib::decode(&data, Never);
 | Type | Feature | Use Case |
 |------|---------|----------|
 | `Never` | core | Zero-cost "never stop" |
-| `AtomicStop` / `AtomicToken` | core | Stack-based, Relaxed ordering |
-| `SyncStop` / `SyncToken` | core | Stack-based, Acquire/Release for data sync |
+| `StopSource` / `StopRef` | core | Stack-based, borrowed, Relaxed ordering |
 | `FnStop` | core | Wrap any closure |
 | `OrStop` | core | Combine multiple stop sources |
-| `ArcStop` / `ArcToken` | alloc | Heap-based, owned tokens |
-| `BoxStop` | alloc | Type-erased dynamic dispatch |
-| `ChildSource` / `ChildToken` | alloc | Hierarchical (parent cancels children) |
+| `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
+| `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
+| `TreeStopper` | alloc | Hierarchical parent-child cancellation |
+| `BoxedStop` | alloc | Type-erased dynamic dispatch |
 | `WithTimeout` | std | Add deadline to any Stop |
 
 ## See Also
 
-- [`almost-enough`](https://crates.io/crates/almost-enough) - Ergonomic extensions (`.or()`, `.into_boxed()`, guards)
+- [`almost-enough`](https://crates.io/crates/almost-enough) - Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, guards)
 - [`enough-ffi`](https://crates.io/crates/enough-ffi) - FFI helpers for C#, Python, Node.js
 - [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio CancellationToken bridge
 

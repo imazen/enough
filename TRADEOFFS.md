@@ -521,23 +521,23 @@ Stop (trait)
 
 ---
 
-## Proposed Renames (NOT YET IMPLEMENTED)
+## Implemented Renames
 
-These renames would simplify the API by merging source/token for Arc types:
+These renames simplify the API by merging source/token for Arc types:
 
-| Current Name | Proposed Name | Rationale |
-|--------------|---------------|-----------|
+| Old Name | New Name | Rationale |
+|----------|----------|-----------|
 | `ArcStop` + `ArcToken` | `Stopper` | Unified clone model (like tokio) |
+| `SyncStop` + `SyncToken` | `SyncStopper` | Release/Acquire ordering variant |
 | `AtomicStop` | `StopSource` | Clearer: it's the source of the signal |
 | `AtomicToken` | `StopRef` | Clearer: it's a reference/view |
 | `ChildSource` + `ChildToken` | `TreeStopper` | Opt-in hierarchy, unified clone |
 | `BoxStop` | `BoxedStop` | Consistent with Rust naming (`Boxed...`) |
-| *(new)* | `SyncStopper` | Release/Acquire ordering variant |
 
 ### API Changes
 
-| Current | Proposed |
-|---------|----------|
+| Old | New |
+|-----|-----|
 | `ArcStop::new()` | `Stopper::new()` |
 | `source.token()` | `stop.clone()` |
 | `ChildSource::new(parent.token())` | `TreeStopper::new()` or `parent.child()` |
@@ -546,7 +546,7 @@ These renames would simplify the API by merging source/token for Arc types:
 
 ### Status
 
-**NOT IMPLEMENTED.** Current crates still use `ArcStop`, `AtomicStop`, etc.
+**IMPLEMENTED.** The renames above are now live in the crates.
 
 ---
 
@@ -559,18 +559,38 @@ These renames would simplify the API by merging source/token for Arc types:
 **Solution:** `StopExt::into_boxed()` method in `almost-enough` crate.
 
 ```rust
-use almost_enough::{ArcStop, BoxStop, Stop, StopExt};
+use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
 
 fn process(stop: impl Stop + 'static) {
     inner_work(stop.into_boxed());  // Single inner_work() impl
 }
 
-fn inner_work(stop: BoxStop) {
+fn inner_work(stop: BoxedStop) {
     // Only one version of this function
 }
 ```
 
 **Status:** Implemented. Requires `'static` bound.
+
+---
+
+### Hierarchical Cancellation via `.child()`
+
+**Problem:** Users want to create child stoppers from any `Stop` implementation.
+
+**Solution:** `StopExt::child()` method in `almost-enough` crate.
+
+```rust
+use almost_enough::{Stopper, Stop, StopExt};
+
+let parent = Stopper::new();
+let child = parent.child();  // TreeStopper
+
+parent.cancel();
+assert!(child.should_stop());
+```
+
+**Status:** Implemented. Requires `Clone + 'static` bound.
 
 ---
 
@@ -581,9 +601,9 @@ fn inner_work(stop: BoxStop) {
 **Solution:** `CancelGuard<C>` type and `StopDropRoll` trait in `almost-enough` crate.
 
 ```rust
-use almost_enough::{ArcStop, StopDropRoll};
+use almost_enough::{Stopper, StopDropRoll};
 
-fn work(source: &ArcStop) -> Result<(), Error> {
+fn work(source: &Stopper) -> Result<(), Error> {
     let guard = source.stop_on_drop();
     do_work()?;
     guard.disarm();  // Don't stop if we succeed
@@ -598,7 +618,7 @@ fn work(source: &ArcStop) -> Result<(), Error> {
 - `Cancellable::stop()` - aligns with `Stop` trait, avoids conflict with `cancel()`
 
 **Features:**
-- Works with `ArcStop` and `ChildSource`
+- Works with `Stopper` and `TreeStopper`
 - `Cancellable` trait for extensibility
 - `guard.is_armed()` to check state
 - `guard.source()` to access underlying source
@@ -614,16 +634,16 @@ fn work(source: &ArcStop) -> Result<(), Error> {
 **Decision:** Extension trait in `almost-enough`.
 
 **Current structure:**
-- **`enough`** - Core trait and all implementations (unchanged API surface)
+- **`enough`** - Core trait and all implementations
   - `Stop` trait with `check()` and `should_stop()` only
   - `StopReason` enum
-  - `Never`, `AtomicStop`, `ArcStop`, `BoxStop`, `FnStop`, `OrStop`
-  - `ChildSource`, `ChildToken`
+  - `Never`, `StopSource`, `StopRef`, `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop`, `FnStop`, `OrStop`
   - `TimeoutExt`, `WithTimeout`
   - Blanket impls for `&T`, `&mut T`, `Box<T>`, `Arc<T>`
 
 - **`almost-enough`** - Re-exports `enough` plus ergonomic extensions
-  - `StopExt` extension trait with `.or()` method
+  - `StopExt` extension trait with `.or()`, `.into_boxed()`, `.child()` methods
+  - `StopDropRoll` trait with `.stop_on_drop()` for RAII guards
   - Re-exports everything from `enough`
 
 **Usage:**
@@ -633,8 +653,8 @@ use enough::{Stop, StopReason};
 pub fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> { ... }
 
 // Application authors: use `almost-enough` for ergonomic combinators
-use almost_enough::{AtomicStop, Stop, StopExt};
-let combined = source_a.token().or(source_b.token());
+use almost_enough::{StopSource, Stop, StopExt};
+let combined = source_a.as_ref().or(source_b.as_ref());
 ```
 
 **Rationale:** Library authors only need to accept `impl Stop`. Application authors get ergonomic `.or()` chaining via `almost-enough`. The extension trait pattern keeps the core trait minimal while providing full ergonomics for those who want it.

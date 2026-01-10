@@ -1,16 +1,16 @@
-//! Tests for ArcStop and ArcToken.
+//! Tests for Stopper.
 #![allow(unused_imports, dead_code)]
 
-use enough::{ArcStop, ArcToken, Stop};
+use enough::{Stopper, Stop};
 use std::sync::Arc;
 use std::thread;
 
 #[test]
 fn source_basic_usage() {
-    let source = ArcStop::new();
+    let source = Stopper::new();
     assert!(!source.is_cancelled());
 
-    let token = source.token();
+    let token = source.clone();
     assert!(!token.should_stop());
 
     source.cancel();
@@ -21,8 +21,8 @@ fn source_basic_usage() {
 
 #[test]
 fn token_is_clone() {
-    let source = ArcStop::new();
-    let t1 = source.token();
+    let source = Stopper::new();
+    let t1 = source.clone();
     let t2 = t1.clone();
     let t3 = t1.clone();
 
@@ -35,8 +35,8 @@ fn token_is_clone() {
 
 #[test]
 fn multiple_tokens_same_source() {
-    let source = ArcStop::new();
-    let tokens: Vec<ArcToken> = (0..100).map(|_| source.token()).collect();
+    let source = Stopper::new();
+    let tokens: Vec<Stopper> = (0..100).map(|_| source.clone()).collect();
 
     assert!(tokens.iter().all(|t| !t.should_stop()));
 
@@ -47,8 +47,8 @@ fn multiple_tokens_same_source() {
 
 #[test]
 fn cross_thread_cancellation() {
-    let source = ArcStop::new();
-    let token = source.token();
+    let source = Stopper::new();
+    let token = source.clone();
 
     let source_clone = source.clone();
     let handle = thread::spawn(move || {
@@ -67,8 +67,8 @@ fn cross_thread_cancellation() {
 
 #[test]
 fn concurrent_check_and_cancel() {
-    let source = ArcStop::new();
-    let token = source.token();
+    let source = Stopper::new();
+    let token = source.clone();
 
     let handles: Vec<_> = (0..10)
         .map(|i| {
@@ -117,8 +117,8 @@ fn pass_to_function() {
         Ok(count)
     }
 
-    let source = ArcStop::new();
-    let token = source.token();
+    let source = Stopper::new();
+    let token = source.clone();
 
     // Not cancelled - completes
     let result = process(&[0u8; 100], token.clone());
@@ -132,8 +132,8 @@ fn pass_to_function() {
 
 #[test]
 fn dyn_stop_usage() {
-    let source = ArcStop::new();
-    let token = source.token();
+    let source = Stopper::new();
+    let token = source.clone();
 
     fn takes_dyn(stop: &dyn Stop) -> bool {
         stop.should_stop()

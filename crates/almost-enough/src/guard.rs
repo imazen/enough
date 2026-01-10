@@ -7,9 +7,9 @@
 //! # Example
 //!
 //! ```rust
-//! use almost_enough::{ArcStop, StopDropRoll};
+//! use almost_enough::{Stopper, StopDropRoll};
 //!
-//! fn process(source: &ArcStop) -> Result<(), &'static str> {
+//! fn process(source: &Stopper) -> Result<(), &'static str> {
 //!     // Guard will cancel on drop unless disarmed
 //!     let guard = source.stop_on_drop();
 //!
@@ -25,16 +25,16 @@
 //!     Ok(())
 //! }
 //!
-//! let source = ArcStop::new();
+//! let source = Stopper::new();
 //! process(&source).unwrap();
 //! assert!(!source.is_cancelled()); // Not cancelled because we disarmed
 //! ```
 
-use crate::{children::ChildSource, ArcStop};
+use crate::{Stopper, TreeStopper};
 
 /// Trait for types that can be stopped/cancelled.
 ///
-/// This is implemented for [`ArcStop`] and [`ChildSource`] to allow
+/// This is implemented for [`Stopper`] and [`TreeStopper`] to allow
 /// creating [`CancelGuard`]s via the [`StopDropRoll`] trait.
 ///
 /// The method is named `stop()` to align with the [`Stop`](crate::Stop) trait
@@ -44,14 +44,14 @@ pub trait Cancellable: Clone + Send {
     fn stop(&self);
 }
 
-impl Cancellable for ArcStop {
+impl Cancellable for Stopper {
     #[inline]
     fn stop(&self) {
         self.cancel();
     }
 }
 
-impl Cancellable for ChildSource {
+impl Cancellable for TreeStopper {
     #[inline]
     fn stop(&self) {
         self.cancel();
@@ -66,9 +66,9 @@ impl Cancellable for ChildSource {
 /// # Example
 ///
 /// ```rust
-/// use almost_enough::{ArcStop, StopDropRoll};
+/// use almost_enough::{Stopper, StopDropRoll};
 ///
-/// let source = ArcStop::new();
+/// let source = Stopper::new();
 ///
 /// {
 ///     let guard = source.stop_on_drop();
@@ -83,9 +83,9 @@ impl Cancellable for ChildSource {
 /// Call [`disarm()`](Self::disarm) to prevent cancellation:
 ///
 /// ```rust
-/// use almost_enough::{ArcStop, StopDropRoll};
+/// use almost_enough::{Stopper, StopDropRoll};
 ///
-/// let source = ArcStop::new();
+/// let source = Stopper::new();
 ///
 /// {
 ///     let guard = source.stop_on_drop();
@@ -118,9 +118,9 @@ impl<C: Cancellable> CancelGuard<C> {
     /// # Example
     ///
     /// ```rust
-    /// use almost_enough::{ArcStop, StopDropRoll};
+    /// use almost_enough::{Stopper, StopDropRoll};
     ///
-    /// let source = ArcStop::new();
+    /// let source = Stopper::new();
     /// let guard = source.stop_on_drop();
     ///
     /// // Operation succeeded, don't cancel
@@ -154,22 +154,22 @@ impl<C: Cancellable> Drop for CancelGuard<C> {
     }
 }
 
-/// Extension trait for creating [`CancelGuard`]s - stop, drop, and roll!
+/// Extension trait for creating [`CancelGuard`]s.
 ///
 /// This trait is implemented for types that support cancellation,
 /// allowing you to create RAII guards that stop on drop.
 ///
 /// # Supported Types
 ///
-/// - [`ArcStop`] - Stops the source (and all tokens/children)
-/// - [`ChildSource`] - Stops just the child (not siblings or parent)
+/// - [`Stopper`] - Stops all clones
+/// - [`TreeStopper`] - Stops just this node (not siblings or parent)
 ///
 /// # Example
 ///
 /// ```rust
-/// use almost_enough::{ArcStop, StopDropRoll};
+/// use almost_enough::{Stopper, StopDropRoll};
 ///
-/// fn fallible_work(source: &ArcStop) -> Result<i32, &'static str> {
+/// fn fallible_work(source: &Stopper) -> Result<i32, &'static str> {
 ///     let guard = source.stop_on_drop();
 ///
 ///     // If we return Err or panic, source is stopped
@@ -184,19 +184,18 @@ impl<C: Cancellable> Drop for CancelGuard<C> {
 ///     Ok(42)
 /// }
 ///
-/// let source = ArcStop::new();
+/// let source = Stopper::new();
 /// assert_eq!(fallible_work(&source), Ok(42));
 /// assert!(!source.is_cancelled());
 /// ```
 ///
-/// # With ChildSource
+/// # With TreeStopper
 ///
 /// ```rust
-/// use almost_enough::{ArcStop, StopDropRoll, Stop};
-/// use almost_enough::children::ChildSource;
+/// use almost_enough::{Stopper, TreeStopper, StopDropRoll, Stop, StopExt};
 ///
-/// let parent = ArcStop::new();
-/// let child = ChildSource::new(parent.token());
+/// let parent = Stopper::new();
+/// let child = parent.child();
 ///
 /// {
 ///     let guard = child.stop_on_drop();
@@ -224,11 +223,11 @@ impl<C: Cancellable> StopDropRoll for C {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Stop;
+    use crate::{Stop, StopExt};
 
     #[test]
     fn guard_cancels_on_drop() {
-        let source = ArcStop::new();
+        let source = Stopper::new();
         assert!(!source.is_cancelled());
 
         {
@@ -240,7 +239,7 @@ mod tests {
 
     #[test]
     fn guard_disarm_prevents_cancel() {
-        let source = ArcStop::new();
+        let source = Stopper::new();
 
         {
             let guard = source.stop_on_drop();
@@ -252,7 +251,7 @@ mod tests {
 
     #[test]
     fn guard_is_armed() {
-        let source = ArcStop::new();
+        let source = Stopper::new();
         let guard = source.stop_on_drop();
 
         assert!(guard.is_armed());
@@ -262,7 +261,7 @@ mod tests {
 
     #[test]
     fn guard_source_accessor() {
-        let source = ArcStop::new();
+        let source = Stopper::new();
         let guard = source.stop_on_drop();
 
         assert!(guard.source().is_some());
@@ -270,34 +269,34 @@ mod tests {
 
     #[test]
     fn guard_pattern_success() {
-        fn work(source: &ArcStop) -> Result<i32, &'static str> {
+        fn work(source: &Stopper) -> Result<i32, &'static str> {
             let guard = source.stop_on_drop();
             let result = Ok(42);
             guard.disarm();
             result
         }
 
-        let source = ArcStop::new();
+        let source = Stopper::new();
         assert_eq!(work(&source), Ok(42));
         assert!(!source.is_cancelled());
     }
 
     #[test]
     fn guard_pattern_failure() {
-        fn work(source: &ArcStop) -> Result<i32, &'static str> {
+        fn work(source: &Stopper) -> Result<i32, &'static str> {
             let _guard = source.stop_on_drop();
             Err("failed")
             // guard dropped, source cancelled
         }
 
-        let source = ArcStop::new();
+        let source = Stopper::new();
         assert_eq!(work(&source), Err("failed"));
         assert!(source.is_cancelled());
     }
 
     #[test]
     fn guard_multiple_clones() {
-        let source = ArcStop::new();
+        let source = Stopper::new();
         let source2 = source.clone();
 
         {
@@ -310,23 +309,23 @@ mod tests {
     }
 
     #[test]
-    fn guard_with_token() {
-        let source = ArcStop::new();
-        let token = source.token();
+    fn guard_with_clone() {
+        let source = Stopper::new();
+        let clone = source.clone();
 
-        assert!(!token.should_stop());
+        assert!(!clone.should_stop());
 
         {
             let _guard = source.stop_on_drop();
         }
 
-        assert!(token.should_stop());
+        assert!(clone.should_stop());
     }
 
     #[test]
-    fn guard_child_source() {
-        let parent = ArcStop::new();
-        let child = ChildSource::new(parent.token());
+    fn guard_tree_stopper() {
+        let parent = Stopper::new();
+        let child = parent.child();
 
         {
             let _guard = child.stop_on_drop();
@@ -339,9 +338,9 @@ mod tests {
     }
 
     #[test]
-    fn guard_child_source_disarm() {
-        let parent = ArcStop::new();
-        let child = ChildSource::new(parent.token());
+    fn guard_tree_stopper_disarm() {
+        let parent = Stopper::new();
+        let child = parent.child();
 
         {
             let guard = child.stop_on_drop();

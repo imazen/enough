@@ -11,14 +11,14 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{AtomicStop, Stop, TimeoutExt};
+//! use enough::{StopSource, Stop, TimeoutExt};
 //! use std::time::Duration;
 //!
-//! let source = AtomicStop::new();
-//! let token = source.token().with_timeout(Duration::from_secs(30));
+//! let source = StopSource::new();
+//! let stop = source.as_ref().with_timeout(Duration::from_secs(30));
 //!
-//! // Token will stop if cancelled OR if 30 seconds pass
-//! assert!(!token.should_stop());
+//! // Stop will trigger if cancelled OR if 30 seconds pass
+//! assert!(!stop.should_stop());
 //! ```
 //!
 //! # Timeout Tightening
@@ -26,11 +26,11 @@
 //! Timeouts can only get stricter, never looser. This is safe for composition:
 //!
 //! ```rust
-//! use enough::{AtomicStop, TimeoutExt};
+//! use enough::{StopSource, TimeoutExt};
 //! use std::time::Duration;
 //!
-//! let source = AtomicStop::new();
-//! let token = source.token()
+//! let source = StopSource::new();
+//! let stop = source.as_ref()
 //!     .with_timeout(Duration::from_secs(60))  // 60 second outer limit
 //!     .with_timeout(Duration::from_secs(10)); // 10 second inner limit
 //!
@@ -49,12 +49,12 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{AtomicStop, Stop};
+/// use enough::{StopSource, Stop};
 /// use enough::time::WithTimeout;
 /// use std::time::Duration;
 ///
-/// let source = AtomicStop::new();
-/// let timeout = WithTimeout::new(source.token(), Duration::from_millis(100));
+/// let source = StopSource::new();
+/// let timeout = WithTimeout::new(source.as_ref(), Duration::from_millis(100));
 ///
 /// assert!(!timeout.should_stop());
 ///
@@ -138,13 +138,13 @@ impl<T: Stop> Stop for WithTimeout<T> {
 /// # Example
 ///
 /// ```rust
-/// use enough::{AtomicStop, Stop, TimeoutExt};
+/// use enough::{StopSource, Stop, TimeoutExt};
 /// use std::time::Duration;
 ///
-/// let source = AtomicStop::new();
-/// let token = source.token().with_timeout(Duration::from_secs(30));
+/// let source = StopSource::new();
+/// let stop = source.as_ref().with_timeout(Duration::from_secs(30));
 ///
-/// assert!(!token.should_stop());
+/// assert!(!stop.should_stop());
 /// ```
 pub trait TimeoutExt: Stop + Sized {
     /// Add a timeout to this stop.
@@ -157,16 +157,16 @@ pub trait TimeoutExt: Stop + Sized {
     /// If called multiple times, the earliest deadline wins:
     ///
     /// ```rust
-    /// use enough::{AtomicStop, TimeoutExt};
+    /// use enough::{StopSource, TimeoutExt};
     /// use std::time::Duration;
     ///
-    /// let source = AtomicStop::new();
-    /// let token = source.token()
+    /// let source = StopSource::new();
+    /// let stop = source.as_ref()
     ///     .with_timeout(Duration::from_secs(60))
     ///     .with_timeout(Duration::from_secs(10));
     ///
     /// // Effective timeout is ~10 seconds
-    /// assert!(token.remaining() < Duration::from_secs(11));
+    /// assert!(stop.remaining() < Duration::from_secs(11));
     /// ```
     #[inline]
     fn with_timeout(self, duration: Duration) -> WithTimeout<Self> {
@@ -212,102 +212,102 @@ impl<T: Stop> WithTimeout<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AtomicStop;
+    use crate::StopSource;
 
     #[test]
     fn with_timeout_basic() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_millis(100));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_millis(100));
 
-        assert!(!token.should_stop());
-        assert!(token.check().is_ok());
+        assert!(!stop.should_stop());
+        assert!(stop.check().is_ok());
 
         std::thread::sleep(Duration::from_millis(150));
 
-        assert!(token.should_stop());
-        assert_eq!(token.check(), Err(StopReason::TimedOut));
+        assert!(stop.should_stop());
+        assert_eq!(stop.check(), Err(StopReason::TimedOut));
     }
 
     #[test]
     fn cancel_before_timeout() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_secs(60));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_secs(60));
 
         source.cancel();
 
-        assert!(token.should_stop());
-        assert_eq!(token.check(), Err(StopReason::Cancelled));
+        assert!(stop.should_stop());
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
     }
 
     #[test]
     fn timeout_tightens() {
-        let source = AtomicStop::new();
-        let token = source
-            .token()
+        let source = StopSource::new();
+        let stop = source
+            .as_ref()
             .with_timeout(Duration::from_secs(60))
             .tighten(Duration::from_secs(1));
 
-        let remaining = token.remaining();
+        let remaining = stop.remaining();
         assert!(remaining < Duration::from_secs(2));
     }
 
     #[test]
     fn with_deadline_basic() {
-        let source = AtomicStop::new();
+        let source = StopSource::new();
         let deadline = Instant::now() + Duration::from_millis(100);
-        let token = source.token().with_deadline(deadline);
+        let stop = source.as_ref().with_deadline(deadline);
 
-        assert!(!token.should_stop());
+        assert!(!stop.should_stop());
 
         std::thread::sleep(Duration::from_millis(150));
 
-        assert!(token.should_stop());
+        assert!(stop.should_stop());
     }
 
     #[test]
     fn remaining_accuracy() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_secs(10));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_secs(10));
 
-        let remaining = token.remaining();
+        let remaining = stop.remaining();
         assert!(remaining > Duration::from_secs(9));
         assert!(remaining <= Duration::from_secs(10));
     }
 
     #[test]
     fn remaining_after_expiry() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_millis(1));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_millis(1));
 
         std::thread::sleep(Duration::from_millis(10));
 
-        assert_eq!(token.remaining(), Duration::ZERO);
+        assert_eq!(stop.remaining(), Duration::ZERO);
     }
 
     #[test]
     fn inner_access() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_secs(10));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_secs(10));
 
-        assert!(!token.inner().should_stop());
+        assert!(!stop.inner().should_stop());
 
         source.cancel();
 
-        assert!(token.inner().should_stop());
+        assert!(stop.inner().should_stop());
     }
 
     #[test]
     fn into_inner() {
-        let source = AtomicStop::new();
-        let token = source.token().with_timeout(Duration::from_secs(10));
+        let source = StopSource::new();
+        let stop = source.as_ref().with_timeout(Duration::from_secs(10));
 
-        let inner = token.into_inner();
+        let inner = stop.into_inner();
         assert!(!inner.should_stop());
     }
 
     #[test]
     fn with_timeout_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<WithTimeout<crate::AtomicToken<'_>>>();
+        assert_send_sync::<WithTimeout<crate::StopRef<'_>>>();
     }
 }

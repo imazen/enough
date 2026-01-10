@@ -1,16 +1,16 @@
 //! Boxed dynamic dispatch for Stop.
 //!
-//! This module provides [`BoxStop`], a heap-allocated wrapper that enables
+//! This module provides [`BoxedStop`], a heap-allocated wrapper that enables
 //! dynamic dispatch without monomorphization bloat.
 //!
 //! # When to Use
 //!
 //! Generic functions like `fn process(stop: impl Stop)` are monomorphized
-//! for each concrete type, increasing binary size. `BoxStop` provides a
+//! for each concrete type, increasing binary size. `BoxedStop` provides a
 //! single concrete type for dynamic dispatch:
 //!
 //! ```rust
-//! use enough::{BoxStop, Stop};
+//! use enough::{BoxedStop, Stop};
 //!
 //! // Monomorphized for each Stop type - increases binary size
 //! fn process_generic(stop: impl Stop) {
@@ -18,7 +18,7 @@
 //! }
 //!
 //! // Single implementation - no monomorphization bloat
-//! fn process_boxed(stop: BoxStop) {
+//! fn process_boxed(stop: BoxedStop) {
 //!     // ...
 //! }
 //! ```
@@ -28,7 +28,7 @@
 //! For borrowed dynamic dispatch with zero allocation, use `&dyn Stop`:
 //!
 //! ```rust
-//! use enough::{AtomicStop, Stop};
+//! use enough::{StopSource, Stop};
 //!
 //! fn process(stop: &dyn Stop) {
 //!     if stop.should_stop() {
@@ -37,7 +37,7 @@
 //!     // ...
 //! }
 //!
-//! let source = AtomicStop::new();
+//! let source = StopSource::new();
 //! process(&source);
 //! ```
 
@@ -53,9 +53,9 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{BoxStop, AtomicStop, ArcStop, Never, Stop};
+/// use enough::{BoxedStop, StopSource, Stopper, Never, Stop};
 ///
-/// fn process(stop: BoxStop) {
+/// fn process(stop: BoxedStop) {
 ///     for i in 0..1000 {
 ///         if i % 100 == 0 && stop.should_stop() {
 ///             return;
@@ -65,13 +65,13 @@ use crate::{Stop, StopReason};
 /// }
 ///
 /// // Works with any Stop implementation
-/// process(BoxStop::new(Never));
-/// process(BoxStop::new(AtomicStop::new()));
-/// process(BoxStop::new(ArcStop::new()));
+/// process(BoxedStop::new(Never));
+/// process(BoxedStop::new(StopSource::new()));
+/// process(BoxedStop::new(Stopper::new()));
 /// ```
-pub struct BoxStop(Box<dyn Stop + Send + Sync>);
+pub struct BoxedStop(Box<dyn Stop + Send + Sync>);
 
-impl BoxStop {
+impl BoxedStop {
     /// Create a new boxed stop from any [`Stop`] implementation.
     #[inline]
     pub fn new<T: Stop + 'static>(stop: T) -> Self {
@@ -79,7 +79,7 @@ impl BoxStop {
     }
 }
 
-impl Stop for BoxStop {
+impl Stop for BoxedStop {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
         self.0.check()
@@ -91,60 +91,60 @@ impl Stop for BoxStop {
     }
 }
 
-impl core::fmt::Debug for BoxStop {
+impl core::fmt::Debug for BoxedStop {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("BoxStop").finish()
+        f.debug_tuple("BoxedStop").finish()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ArcStop, AtomicStop, Never};
+    use crate::{Never, StopSource, Stopper};
 
     #[test]
-    fn boxstop_from_never() {
-        let stop = BoxStop::new(Never);
+    fn boxed_stop_from_never() {
+        let stop = BoxedStop::new(Never);
         assert!(!stop.should_stop());
         assert!(stop.check().is_ok());
     }
 
     #[test]
-    fn boxstop_from_arc() {
-        let source = ArcStop::new();
-        let stop = BoxStop::new(source.token());
+    fn boxed_stop_from_stopper() {
+        let stopper = Stopper::new();
+        let stop = BoxedStop::new(stopper.clone());
 
         assert!(!stop.should_stop());
 
-        source.cancel();
+        stopper.cancel();
 
         assert!(stop.should_stop());
         assert_eq!(stop.check(), Err(StopReason::Cancelled));
     }
 
     #[test]
-    fn boxstop_is_send_sync() {
+    fn boxed_stop_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<BoxStop>();
+        assert_send_sync::<BoxedStop>();
     }
 
     #[test]
-    fn boxstop_debug() {
-        let stop = BoxStop::new(Never);
+    fn boxed_stop_debug() {
+        let stop = BoxedStop::new(Never);
         let debug = alloc::format!("{:?}", stop);
-        assert!(debug.contains("BoxStop"));
+        assert!(debug.contains("BoxedStop"));
     }
 
     #[test]
-    fn boxstop_avoids_monomorphization() {
+    fn boxed_stop_avoids_monomorphization() {
         // This function has a single concrete implementation
-        fn process(stop: BoxStop) -> bool {
+        fn process(stop: BoxedStop) -> bool {
             stop.should_stop()
         }
 
         // All these use the same process function
-        assert!(!process(BoxStop::new(Never)));
-        assert!(!process(BoxStop::new(AtomicStop::new())));
-        assert!(!process(BoxStop::new(ArcStop::new())));
+        assert!(!process(BoxedStop::new(Never)));
+        assert!(!process(BoxedStop::new(StopSource::new())));
+        assert!(!process(BoxedStop::new(Stopper::new())));
     }
 }

@@ -581,17 +581,16 @@ mod tests {
 
     #[test]
     fn interop_with_enough() {
-        use enough::ArcStop;
+        use enough::Stopper;
 
-        let source = ArcStop::new();
-        let token = source.token();
+        let stop = Stopper::new();
 
         // Both implement Stop
         fn use_stop(stop: impl Stop) -> bool {
             stop.should_stop()
         }
 
-        assert!(!use_stop(token));
+        assert!(!use_stop(stop));
         assert!(!use_stop(FfiCancellationToken::never()));
         assert!(!use_stop(FfiCancellationTokenView::never()));
     }

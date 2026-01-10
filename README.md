@@ -60,20 +60,19 @@ impl From<StopReason> for MyError {
 Choose the implementation that fits your needs:
 
 ```rust
-use enough::{ArcStop, Stop};
-use std::time::Duration;
+use enough::{Stopper, Stop};
 
-// Create a cancellation source
-let source = ArcStop::new();
-let token = source.token();
+// Create a cancellation source - clone to share
+let stop = Stopper::new();
+let stop2 = stop.clone();
 
 // Pass to libraries
 let handle = std::thread::spawn(move || {
-    my_codec::process(&data, token)
+    my_codec::process(&data, stop2)
 });
 
-// Cancel when needed
-source.cancel();
+// Any clone can cancel
+stop.cancel();
 ```
 
 ### Zero-Cost When Not Needed
@@ -90,13 +89,13 @@ let result = my_codec::process(&data, Never);
 | Type | Feature | Use Case |
 |------|---------|----------|
 | `Never` | core | Zero-cost "never stop" |
-| `AtomicStop` / `AtomicToken` | core | Stack-based, borrowed, Relaxed ordering |
-| `SyncStop` / `SyncToken` | core | Stack-based, Acquire/Release for data sync |
+| `StopSource` / `StopRef` | core | Stack-based, borrowed, Relaxed ordering |
 | `FnStop` | core | Wrap any closure |
 | `OrStop` | core | Combine multiple stop sources |
-| `ArcStop` / `ArcToken` | alloc | Heap, owned tokens can outlive source |
-| `BoxStop` | alloc | Type-erased dynamic dispatch |
-| `ChildSource` / `ChildToken` | alloc | Hierarchical (parent cancels children) |
+| `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
+| `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
+| `TreeStopper` | alloc | Hierarchical parent-child cancellation |
+| `BoxedStop` | alloc | Type-erased dynamic dispatch |
 | `WithTimeout` | std | Add deadline to any Stop |
 
 ## Feature Flags
@@ -113,17 +112,17 @@ enough = { version = "0.1", features = ["std"] }    # + timeouts (implies alloc)
 Two variants for different needs:
 
 ```rust
-use enough::{AtomicStop, SyncStop};
+use enough::{Stopper, SyncStopper};
 
-// AtomicStop: Relaxed ordering (faster on ARM)
+// Stopper: Relaxed ordering (faster on ARM)
 // Use when you just need to signal "stop"
-let stop = AtomicStop::new();
+let stop = Stopper::new();
 stop.cancel();  // Relaxed store
 stop.should_stop();  // Relaxed load
 
-// SyncStop: Release/Acquire ordering
+// SyncStopper: Release/Acquire ordering
 // Use when stop signals data is ready
-let stop = SyncStop::new();
+let stop = SyncStopper::new();
 // Thread A:
 shared_result.store(42, Relaxed);
 stop.cancel();  // Release: flushes shared_result
@@ -139,12 +138,11 @@ if stop.should_stop() {  // Acquire: syncs with Release
 ### Timeouts
 
 ```rust
-use enough::{ArcStop, TimeoutExt};
+use enough::{Stopper, TimeoutExt};
 use std::time::Duration;
 
-let source = ArcStop::new();
-let token = source.token()
-    .with_timeout(Duration::from_secs(30));
+let stop = Stopper::new();
+let timed = stop.clone().with_timeout(Duration::from_secs(30));
 
 // Stops if cancelled OR timeout expires
 ```
@@ -152,11 +150,11 @@ let token = source.token()
 ### Hierarchical Cancellation
 
 ```rust
-use enough::{ArcStop, children::ChildSource};
+use enough::TreeStopper;
 
-let parent = ArcStop::new();
-let child_a = ChildSource::new(parent.token());
-let child_b = ChildSource::new(parent.token());
+let parent = TreeStopper::new();
+let child_a = parent.child();
+let child_b = parent.child();
 
 child_a.cancel();  // Only child_a stops
 parent.cancel();   // Both children stop
@@ -165,13 +163,13 @@ parent.cancel();   // Both children stop
 ### Combining Sources
 
 ```rust
-use enough::{ArcStop, OrStop};
+use enough::{Stopper, OrStop};
 
-let app_cancel = ArcStop::new();
-let timeout = ArcStop::new();
+let app_cancel = Stopper::new();
+let timeout = Stopper::new();
 
 // Stop if either triggers
-let combined = OrStop::new(app_cancel.token(), timeout.token());
+let combined = OrStop::new(app_cancel.clone(), timeout.clone());
 ```
 
 ### With Tokio
@@ -195,14 +193,14 @@ tokio::task::spawn_blocking(move || {
 | `enough` | Core trait + implementations |
 | `enough-ffi` | C FFI for cross-language use |
 | `enough-tokio` | Bridge to tokio's CancellationToken |
-| `almost-enough` | Ergonomic extensions (`.or()`, `.into_boxed()`, `StopDropRoll`) |
+| `almost-enough` | Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, `StopDropRoll`) |
 
 ## Performance
 
 | Operation | Time | Notes |
 |-----------|------|-------|
 | `Never.check()` | 0ns | Optimized away |
-| `AtomicToken.check()` | ~1-2ns | Single atomic load |
+| `Stopper.check()` | ~1-2ns | Single atomic load |
 | `WithTimeout.check()` | ~20-30ns | Includes `Instant::now()` |
 
 Check every 16-100 iterations for negligible overhead.
@@ -212,9 +210,9 @@ Check every 16-100 iterations for negligible overhead.
 The trait-based design means you can:
 
 1. **Start simple** - Use `Never` during development
-2. **Add cancellation** - Switch to `ArcStop` when needed
+2. **Add cancellation** - Switch to `Stopper` when needed
 3. **Add timeouts** - Wrap with `.with_timeout()`
-4. **Go hierarchical** - Use `ChildSource` for complex flows
+4. **Go hierarchical** - Use `TreeStopper` for complex flows
 5. **Integrate with async** - Use `enough-tokio`
 6. **Call from FFI** - Use `enough-ffi`
 

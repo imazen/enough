@@ -39,41 +39,43 @@
 //!
 //! ## For Application Developers
 //!
-//! ### Zero-Allocation (no_std)
+//! ### The Default: Stopper
 //!
-//! Use [`AtomicStop`] when the source outlives all tokens:
-//!
-//! ```rust
-//! use enough::{AtomicStop, Stop};
-//!
-//! let source = AtomicStop::new();
-//! let token = source.token();
-//!
-//! assert!(!token.should_stop());
-//!
-//! source.cancel();
-//! assert!(token.should_stop());
-//! ```
-//!
-//! ### Owned Tokens (alloc)
-//!
-//! Enable the `alloc` feature for [`ArcStop`] with owned, cloneable tokens:
+//! [`Stopper`] is the recommended type for most use cases:
 //!
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
-//! use enough::{ArcStop, Stop};
+//! use enough::{Stopper, Stop};
 //!
-//! let source = ArcStop::new();
-//! let token = source.token(); // Owned, can outlive source
+//! let stop = Stopper::new();
+//! let stop2 = stop.clone();  // Clone to share
 //!
-//! assert!(!token.should_stop());
+//! // Pass to operations
+//! assert!(!stop2.should_stop());
 //!
-//! source.cancel();
-//! assert!(token.should_stop());
+//! // Any clone can cancel
+//! stop.cancel();
+//! assert!(stop2.should_stop());
 //! # }
 //! # #[cfg(not(feature = "alloc"))]
 //! # fn main() {}
+//! ```
+//!
+//! ### Zero-Allocation (no_std)
+//!
+//! Use [`StopSource`]/[`StopRef`] for stack-based cancellation:
+//!
+//! ```rust
+//! use enough::{StopSource, Stop};
+//!
+//! let source = StopSource::new();
+//! let stop = source.as_ref();  // Borrowed reference
+//!
+//! assert!(!stop.should_stop());
+//!
+//! source.cancel();
+//! assert!(stop.should_stop());
 //! ```
 //!
 //! ### Timeouts (std)
@@ -83,14 +85,14 @@
 //! ```rust
 //! # #[cfg(feature = "std")]
 //! # fn main() {
-//! use enough::{ArcStop, Stop, TimeoutExt};
+//! use enough::{Stopper, Stop, TimeoutExt};
 //! use std::time::Duration;
 //!
-//! let source = ArcStop::new();
-//! let token = source.token().with_timeout(Duration::from_secs(30));
+//! let stop = Stopper::new();
+//! let timed = stop.clone().with_timeout(Duration::from_secs(30));
 //!
-//! // Token will stop if cancelled OR if 30 seconds pass
-//! assert!(!token.should_stop());
+//! // Stops if cancelled OR if 30 seconds pass
+//! assert!(!timed.should_stop());
 //! # }
 //! # #[cfg(not(feature = "std"))]
 //! # fn main() {}
@@ -98,25 +100,25 @@
 //!
 //! ## Feature Flags
 //!
-//! - **None (default)** - Core trait, `Never`, `AtomicStop`, `SyncStop`, `FnStop`, `OrStop`
-//! - **`alloc`** - Adds `ArcStop`, `ArcToken`, `BoxStop`, `ChildSource`, `ChildToken`,
+//! - **None (default)** - Core trait, `Never`, `StopSource`, `StopRef`, `FnStop`, `OrStop`
+//! - **`alloc`** - Adds `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop`,
 //!   and blanket impls for `Box<T>`, `Arc<T>`
 //! - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`) and
 //!   `std::error::Error` impl for `StopReason`
 //!
 //! ## Type Overview
 //!
-//! | Type | Feature | Allocation | Use Case |
-//! |------|---------|------------|----------|
-//! | [`Never`] | core | None | Zero-cost "never stop" |
-//! | [`AtomicStop`] / [`AtomicToken`] | core | None | Stack-based, Relaxed ordering |
-//! | [`SyncStop`] / [`SyncToken`] | core | None | Stack-based, Acquire/Release ordering |
-//! | [`FnStop`] | core | None | Wrap a closure |
-//! | [`OrStop`] | core | None | Combine multiple stops |
-//! | [`ArcStop`] / [`ArcToken`] | alloc | Heap | Owned tokens, can outlive source |
-//! | [`BoxStop`] | alloc | Heap | Dynamic dispatch, avoid monomorphization |
-//! | [`ChildSource`](children::ChildSource) | alloc | Heap | Hierarchical cancellation |
-//! | [`WithTimeout`] | std | None | Add deadline to any `Stop` |
+//! | Type | Feature | Use Case |
+//! |------|---------|----------|
+//! | [`Never`] | core | Zero-cost "never stop" |
+//! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
+//! | [`FnStop`] | core | Wrap any closure |
+//! | [`OrStop`] | core | Combine multiple stops |
+//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
+//! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
+//! | [`TreeStopper`] | alloc | Hierarchical parent-child cancellation |
+//! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
+//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
@@ -126,36 +128,40 @@
 extern crate alloc;
 
 // Core modules (no_std, no alloc)
-mod atomic;
 mod func;
 mod or;
 mod reason;
-mod sync;
+mod source;
 
 // Alloc-dependent modules
 #[cfg(feature = "alloc")]
-mod arc;
-#[cfg(feature = "alloc")]
 mod boxed;
 #[cfg(feature = "alloc")]
-pub mod children;
+mod stopper;
+#[cfg(feature = "alloc")]
+mod sync_stopper;
+#[cfg(feature = "alloc")]
+mod tree;
 
 // Std-dependent modules
 #[cfg(feature = "std")]
 pub mod time;
 
 // Re-exports: Core
-pub use atomic::{AtomicStop, AtomicToken};
 pub use func::FnStop;
 pub use or::OrStop;
 pub use reason::StopReason;
-pub use sync::{SyncStop, SyncToken};
+pub use source::{StopRef, StopSource};
 
 // Re-exports: Alloc
 #[cfg(feature = "alloc")]
-pub use arc::{ArcStop, ArcToken};
+pub use boxed::BoxedStop;
 #[cfg(feature = "alloc")]
-pub use boxed::BoxStop;
+pub use stopper::Stopper;
+#[cfg(feature = "alloc")]
+pub use sync_stopper::SyncStopper;
+#[cfg(feature = "alloc")]
+pub use tree::TreeStopper;
 
 // Re-exports: Std
 #[cfg(feature = "std")]
@@ -173,11 +179,11 @@ pub use time::{TimeoutExt, WithTimeout};
 /// use enough::{Stop, StopReason};
 /// use core::sync::atomic::{AtomicBool, Ordering};
 ///
-/// pub struct MyToken<'a> {
+/// pub struct MyStop<'a> {
 ///     cancelled: &'a AtomicBool,
 /// }
 ///
-/// impl Stop for MyToken<'_> {
+/// impl Stop for MyStop<'_> {
 ///     fn check(&self) -> Result<(), StopReason> {
 ///         if self.cancelled.load(Ordering::Relaxed) {
 ///             Err(StopReason::Cancelled)
@@ -355,7 +361,7 @@ mod tests {
         let never = Never;
         assert!(!process(&never));
 
-        let source = AtomicStop::new();
+        let source = StopSource::new();
         assert!(!process(&source));
 
         source.cancel();

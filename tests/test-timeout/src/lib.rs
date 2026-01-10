@@ -1,13 +1,13 @@
 //! Tests for timeout behavior.
 #![allow(unused_imports, dead_code)]
 
-use enough::{ArcStop, ArcToken, Never, Stop, TimeoutExt, StopReason};
+use enough::{Stopper, Never, Stop, TimeoutExt, StopReason};
 use std::time::{Duration, Instant};
 
 #[test]
 fn timeout_expires() {
-    let source = ArcStop::new();
-    let token = source.token().with_timeout(Duration::from_millis(50));
+    let source = Stopper::new();
+    let token = source.clone().with_timeout(Duration::from_millis(50));
 
     assert!(!token.should_stop());
 
@@ -19,8 +19,8 @@ fn timeout_expires() {
 
 #[test]
 fn timeout_not_expired() {
-    let source = ArcStop::new();
-    let token = source.token().with_timeout(Duration::from_secs(60));
+    let source = Stopper::new();
+    let token = source.clone().with_timeout(Duration::from_secs(60));
 
     assert!(!token.should_stop());
     assert!(token.check().is_ok());
@@ -28,8 +28,8 @@ fn timeout_not_expired() {
 
 #[test]
 fn cancel_before_timeout() {
-    let source = ArcStop::new();
-    let token = source.token().with_timeout(Duration::from_secs(60));
+    let source = Stopper::new();
+    let token = source.clone().with_timeout(Duration::from_secs(60));
 
     source.cancel();
 
@@ -39,10 +39,10 @@ fn cancel_before_timeout() {
 
 #[test]
 fn timeout_tightens_not_loosens() {
-    let source = ArcStop::new();
+    let source = Stopper::new();
 
     // Parent: 60 seconds
-    let parent = source.token().with_timeout(Duration::from_secs(60));
+    let parent = source.clone().with_timeout(Duration::from_secs(60));
 
     // Child: 1 second - should be ~1s, not 61s
     let child = parent.tighten(Duration::from_secs(1));
@@ -54,10 +54,10 @@ fn timeout_tightens_not_loosens() {
 
 #[test]
 fn multiple_timeouts_take_min() {
-    let source = ArcStop::new();
+    let source = Stopper::new();
 
     let token = source
-        .token()
+        .clone()
         .with_timeout(Duration::from_secs(60))
         .tighten(Duration::from_secs(30))
         .tighten(Duration::from_secs(10))
@@ -70,9 +70,9 @@ fn multiple_timeouts_take_min() {
 
 #[test]
 fn absolute_deadline() {
-    let source = ArcStop::new();
+    let source = Stopper::new();
     let deadline = Instant::now() + Duration::from_millis(50);
-    let token = source.token().with_deadline(deadline);
+    let token = source.clone().with_deadline(deadline);
 
     assert!(!token.should_stop());
     assert_eq!(token.deadline(), deadline);
@@ -84,8 +84,8 @@ fn absolute_deadline() {
 
 #[test]
 fn remaining_decreases() {
-    let source = ArcStop::new();
-    let token = source.token().with_timeout(Duration::from_secs(10));
+    let source = Stopper::new();
+    let token = source.clone().with_timeout(Duration::from_secs(10));
 
     let r1 = token.remaining();
     std::thread::sleep(Duration::from_millis(100));
@@ -115,8 +115,8 @@ fn timeout_chain_through_functions() {
         stop.check()
     }
 
-    let source = ArcStop::new();
-    let token = source.token().with_timeout(Duration::from_secs(60));
+    let source = Stopper::new();
+    let token = source.clone().with_timeout(Duration::from_secs(60));
 
     let result = level1(token);
     assert!(result.is_ok());

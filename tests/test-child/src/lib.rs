@@ -1,32 +1,31 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
 #![allow(unused_imports, dead_code)]
 
-use enough::children::ChildSource;
-use enough::{ArcStop, Stop, TimeoutExt};
+use enough::{Stop, Stopper, TimeoutExt, TreeStopper};
 
 #[test]
 fn child_inherits_parent() {
-    let parent = ArcStop::new();
-    let child = ChildSource::new(parent.token());
+    let parent = Stopper::new();
+    let child = TreeStopper::with_parent(parent.clone());
 
     assert!(!child.is_cancelled());
 
     parent.cancel();
 
     assert!(child.is_cancelled());
-    assert!(child.token().should_stop());
+    assert!(child.clone().should_stop());
 }
 
 #[test]
 fn child_cancel_independent() {
-    let parent = ArcStop::new();
-    let child = ChildSource::new(parent.token());
+    let parent = Stopper::new();
+    let child = TreeStopper::with_parent(parent.clone());
 
     child.cancel();
 
     // Child is cancelled
     assert!(child.is_cancelled());
-    assert!(child.token().should_stop());
+    assert!(child.clone().should_stop());
 
     // Parent is NOT cancelled
     assert!(!parent.is_cancelled());
@@ -34,9 +33,9 @@ fn child_cancel_independent() {
 
 #[test]
 fn siblings_independent() {
-    let parent = ArcStop::new();
-    let child_a = ChildSource::new(parent.token());
-    let child_b = ChildSource::new(parent.token());
+    let parent = Stopper::new();
+    let child_a = TreeStopper::with_parent(parent.clone());
+    let child_b = TreeStopper::with_parent(parent.clone());
 
     child_a.cancel();
 
@@ -52,8 +51,8 @@ fn siblings_independent() {
 
 #[test]
 fn grandchild_inherits_all() {
-    let grandparent = ArcStop::new();
-    let parent = ChildSource::new(grandparent.token());
+    let grandparent = Stopper::new();
+    let parent = TreeStopper::with_parent(grandparent.clone());
     let child = parent.child();
 
     assert!(!child.is_cancelled());
@@ -65,8 +64,8 @@ fn grandchild_inherits_all() {
 
 #[test]
 fn grandchild_parent_cancel() {
-    let grandparent = ArcStop::new();
-    let parent = ChildSource::new(grandparent.token());
+    let grandparent = Stopper::new();
+    let parent = TreeStopper::with_parent(grandparent.clone());
     let child = parent.child();
 
     // Parent cancel propagates to child
@@ -79,8 +78,8 @@ fn grandchild_parent_cancel() {
 
 #[test]
 fn deep_hierarchy() {
-    let root = ArcStop::new();
-    let l1 = ChildSource::new(root.token());
+    let root = Stopper::new();
+    let l1 = TreeStopper::with_parent(root.clone());
     let l2 = l1.child();
     let l3 = l2.child();
     let l4 = l3.child();
@@ -97,9 +96,9 @@ fn deep_hierarchy() {
 fn child_token_with_timeout() {
     use std::time::Duration;
 
-    let parent = ArcStop::new();
-    let child = ChildSource::new(parent.token());
-    let token = child.token().with_timeout(Duration::from_millis(50));
+    let parent = Stopper::new();
+    let child = TreeStopper::with_parent(parent.clone());
+    let token = child.clone().with_timeout(Duration::from_millis(50));
 
     assert!(!token.should_stop());
 
@@ -112,11 +111,11 @@ fn child_token_with_timeout() {
 fn child_across_threads() {
     use std::thread;
 
-    let parent = ArcStop::new();
+    let parent = Stopper::new();
     let parent_clone = parent.clone();
 
     let handle = thread::spawn(move || {
-        let child = ChildSource::new(parent_clone.token());
+        let child = TreeStopper::with_parent(parent_clone.clone());
 
         // Spin until cancelled
         while !child.is_cancelled() {
@@ -134,9 +133,9 @@ fn child_across_threads() {
 
 #[test]
 fn many_children() {
-    let parent = ArcStop::new();
+    let parent = Stopper::new();
     let children: Vec<_> = (0..100)
-        .map(|_| ChildSource::new(parent.token()))
+        .map(|_| TreeStopper::with_parent(parent.clone()))
         .collect();
 
     assert!(children.iter().all(|c| !c.is_cancelled()));

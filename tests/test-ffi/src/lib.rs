@@ -251,10 +251,9 @@ fn ffi_simulated_csharp_pattern() {
 #[test]
 fn ffi_interop_with_enough() {
     // Test that FFI tokens and enough tokens work together
-    use enough::ArcStop;
+    use enough::Stopper;
 
-    let std_source = ArcStop::new();
-    let std_token = std_source.token();
+    let std_stop = Stopper::new();
 
     unsafe {
         let ffi_source = enough_cancellation_create();
@@ -266,13 +265,13 @@ fn ffi_interop_with_enough() {
             s.should_stop()
         }
 
-        assert!(!use_any_stop(std_token.clone()));
+        assert!(!use_any_stop(std_stop.clone()));
         assert!(!use_any_stop(ffi_view));
 
-        std_source.cancel();
+        std_stop.cancel();
         enough_cancellation_cancel(ffi_source);
 
-        assert!(use_any_stop(std_token));
+        assert!(use_any_stop(std_stop));
         assert!(use_any_stop(ffi_view));
 
         enough_token_destroy(ffi_token);

@@ -6,13 +6,13 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{AtomicStop, OrStop, Stop};
+//! use enough::{StopSource, OrStop, Stop};
 //!
-//! let source_a = AtomicStop::new();
-//! let source_b = AtomicStop::new();
+//! let source_a = StopSource::new();
+//! let source_b = StopSource::new();
 //!
 //! // Combine: stop if either stops
-//! let combined = OrStop::new(source_a.token(), source_b.token());
+//! let combined = OrStop::new(source_a.as_ref(), source_b.as_ref());
 //!
 //! assert!(!combined.should_stop());
 //!
@@ -29,12 +29,12 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{AtomicStop, OrStop, Stop};
+/// use enough::{StopSource, OrStop, Stop};
 ///
-/// let timeout_source = AtomicStop::new();
-/// let cancel_source = AtomicStop::new();
+/// let timeout_source = StopSource::new();
+/// let cancel_source = StopSource::new();
 ///
-/// let combined = OrStop::new(timeout_source.token(), cancel_source.token());
+/// let combined = OrStop::new(timeout_source.as_ref(), cancel_source.as_ref());
 ///
 /// // Not stopped yet
 /// assert!(!combined.should_stop());
@@ -91,13 +91,13 @@ impl<A: Stop, B: Stop> Stop for OrStop<A, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AtomicStop, Never};
+    use crate::{StopSource, Never};
 
     #[test]
     fn or_stop_neither() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
 
         assert!(!combined.should_stop());
         assert!(combined.check().is_ok());
@@ -105,9 +105,9 @@ mod tests {
 
     #[test]
     fn or_stop_first() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
 
         a.cancel();
 
@@ -117,9 +117,9 @@ mod tests {
 
     #[test]
     fn or_stop_second() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
 
         b.cancel();
 
@@ -129,9 +129,9 @@ mod tests {
 
     #[test]
     fn or_stop_both() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
 
         a.cancel();
         b.cancel();
@@ -141,11 +141,11 @@ mod tests {
 
     #[test]
     fn or_stop_chain() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let c = AtomicStop::new();
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let c = StopSource::new();
 
-        let combined = OrStop::new(OrStop::new(a.token(), b.token()), c.token());
+        let combined = OrStop::new(OrStop::new(a.as_ref(), b.as_ref()), c.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -155,8 +155,8 @@ mod tests {
 
     #[test]
     fn or_stop_with_never() {
-        let source = AtomicStop::new();
-        let combined = OrStop::new(Never, source.token());
+        let source = StopSource::new();
+        let combined = OrStop::new(Never, source.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -167,14 +167,14 @@ mod tests {
     #[test]
     fn or_stop_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<OrStop<crate::AtomicToken<'_>, crate::AtomicToken<'_>>>();
+        assert_send_sync::<OrStop<crate::StopRef<'_>, crate::StopRef<'_>>>();
     }
 
     #[test]
     fn or_stop_accessors() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
 
         assert!(!combined.first().should_stop());
         assert!(!combined.second().should_stop());
@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn or_stop_is_clone() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
         let combined2 = combined.clone();
 
         a.cancel();
@@ -201,9 +201,9 @@ mod tests {
 
     #[test]
     fn or_stop_is_copy() {
-        let a = AtomicStop::new();
-        let b = AtomicStop::new();
-        let combined = OrStop::new(a.token(), b.token());
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
         let combined2 = combined; // Copy
         let _ = combined; // Still valid
 
