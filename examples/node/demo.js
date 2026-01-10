@@ -21,13 +21,13 @@ const MockRustLibrary = {
      * Simulates a Rust function that does CPU-intensive work
      * while periodically checking for cancellation.
      */
-    processData(input, cancelHandle) {
+    processData(input, tokenHandle) {
         const output = Buffer.alloc(input.length);
 
         for (let i = 0; i < input.length; i++) {
             // Rust code would call: stop.check()?;
-            // We simulate by checking the handle
-            if (nativeLib.enough_cancellation_is_cancelled(cancelHandle)) {
+            // We simulate by checking the token handle
+            if (nativeLib.enough_token_is_cancelled(tokenHandle)) {
                 const error = new Error('Operation cancelled by Rust');
                 error.name = 'AbortError';
                 throw error;

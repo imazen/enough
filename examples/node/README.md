@@ -2,6 +2,14 @@
 
 This demonstrates how to bridge JavaScript's `AbortController`/`AbortSignal` to Rust's cooperative cancellation system through FFI.
 
+## Safety Model
+
+The Rust implementation uses Arc-based reference counting, making it safe even if:
+- The JS handle is garbage collected while Rust code is still using the token
+- The source is destroyed while tokens exist
+
+A `FinalizationRegistry` is used as a safety net to free native resources if `dispose()` is not called.
+
 ## Key Concepts
 
 ### 1. Synchronous Usage
@@ -60,10 +68,13 @@ try {
 
 ## How It Works
 
-1. **Create**: `enough_cancellation_create()` allocates a Rust cancellation source
-2. **Bridge**: `AbortSignal.addEventListener('abort', ...)` forwards JS abort to Rust
-3. **Check**: Rust code periodically calls `stop.check()` or `stop.is_stopped()`
-4. **Cleanup**: `enough_cancellation_destroy()` frees the Rust source
+1. **Create Source**: `enough_cancellation_create()` allocates a Rust cancellation source
+2. **Create Token**: `enough_token_create(source)` creates a token from the source
+3. **Bridge**: `AbortSignal.addEventListener('abort', ...)` forwards JS abort to Rust via `enough_cancellation_cancel(source)`
+4. **Check**: Rust code receives the token pointer and calls `stop.is_stopped()` or `stop.check()`
+5. **Cleanup**: `enough_token_destroy(token)` then `enough_cancellation_destroy(source)` frees resources
+
+The source and token separation allows safe destruction order - tokens hold Arc references to shared state.
 
 ## Installation
 
@@ -113,16 +124,20 @@ const result = runWithCancellation(
 Your Rust function would look like:
 
 ```rust
+use enough_ffi::FfiCancellationToken;
+use enough::Stop;
+
 #[no_mangle]
 pub extern "C" fn process_image(
     data: *const u8,
     len: usize,
-    cancel: *const FfiCancellationSource,
+    token: *const FfiCancellationToken,
 ) -> i32 {
-    let token = unsafe { FfiCancellationToken::from_ptr(cancel) };
+    // Create a non-owning view from the token pointer
+    let stop = unsafe { FfiCancellationToken::from_ptr(token) };
 
-    // Use token with any library that accepts impl Stop
-    match my_codec::decode(data, len, token) {
+    // Use stop with any library that accepts impl Stop
+    match my_codec::decode(data, len, stop) {
         Ok(_) => 0,
         Err(e) if e.is_cancelled() => -1,
         Err(_) => -2,

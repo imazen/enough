@@ -2,6 +2,10 @@
 //
 // This demonstrates how to bridge .NET CancellationToken to Rust's
 // cooperative cancellation through FFI.
+//
+// Safety: The Rust implementation uses Arc-based reference counting,
+// making it safe even if the C# handle is disposed while Rust code
+// is still using the token. The token keeps the shared state alive.
 
 using System;
 using System.Runtime.InteropServices;
@@ -18,42 +22,71 @@ namespace Enough
         // Update this to match your library name/path
         private const string LibName = "enough_ffi";
 
+        // Source management
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr enough_cancellation_create();
 
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void enough_cancellation_cancel(IntPtr ptr);
+        public static extern void enough_cancellation_cancel(IntPtr source);
 
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        public static extern bool enough_cancellation_is_cancelled(IntPtr ptr);
+        public static extern bool enough_cancellation_is_cancelled(IntPtr source);
 
         [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void enough_cancellation_destroy(IntPtr ptr);
+        public static extern void enough_cancellation_destroy(IntPtr source);
+
+        // Token management
+        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr enough_token_create(IntPtr source);
+
+        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr enough_token_create_never();
+
+        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        public static extern bool enough_token_is_cancelled(IntPtr token);
+
+        [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void enough_token_destroy(IntPtr token);
     }
 
     /// <summary>
-    /// A handle to a Rust cancellation source.
+    /// A handle to a Rust cancellation source and token pair.
     ///
     /// This class bridges .NET's CancellationToken to Rust's cooperative
     /// cancellation system. When the .NET token is cancelled, the Rust
     /// side sees it immediately.
+    ///
+    /// Thread-safety: The underlying Rust implementation uses Arc-based
+    /// reference counting, so even if Dispose races with Rust code using
+    /// the token, no undefined behavior will occur. The shared cancellation
+    /// state lives as long as any reference (source or token) exists.
     /// </summary>
     public sealed class CancellationHandle : IDisposable
     {
-        private IntPtr _handle;
+        private IntPtr _sourcePtr;
+        private IntPtr _tokenPtr;
         private CancellationTokenRegistration _registration;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         /// <summary>
         /// Create a new cancellation handle.
         /// </summary>
         public CancellationHandle()
         {
-            _handle = NativeMethods.enough_cancellation_create();
-            if (_handle == IntPtr.Zero)
+            _sourcePtr = NativeMethods.enough_cancellation_create();
+            if (_sourcePtr == IntPtr.Zero)
             {
-                throw new OutOfMemoryException("Failed to create cancellation handle");
+                throw new OutOfMemoryException("Failed to create cancellation source");
+            }
+
+            _tokenPtr = NativeMethods.enough_token_create(_sourcePtr);
+            if (_tokenPtr == IntPtr.Zero)
+            {
+                NativeMethods.enough_cancellation_destroy(_sourcePtr);
+                _sourcePtr = IntPtr.Zero;
+                throw new OutOfMemoryException("Failed to create cancellation token");
             }
         }
 
@@ -64,31 +97,44 @@ namespace Enough
         public CancellationHandle(CancellationToken cancellationToken) : this()
         {
             // Register to forward cancellation from .NET to Rust
-            _registration = cancellationToken.Register(() =>
-            {
-                var handle = _handle;
-                if (handle != IntPtr.Zero)
-                {
-                    NativeMethods.enough_cancellation_cancel(handle);
-                }
-            });
+            // Use useSynchronizationContext: false to avoid deadlocks
+            _registration = cancellationToken.Register(CancelCallback, useSynchronizationContext: false);
 
             // If already cancelled, signal immediately
             if (cancellationToken.IsCancellationRequested)
             {
-                NativeMethods.enough_cancellation_cancel(_handle);
+                NativeMethods.enough_cancellation_cancel(_sourcePtr);
+            }
+        }
+
+        private void CancelCallback()
+        {
+            // Safe to call even after Dispose because:
+            // 1. We check for IntPtr.Zero
+            // 2. Rust handles null gracefully
+            // 3. Arc ref counting keeps shared state alive until all refs dropped
+            var source = Volatile.Read(ref _sourcePtr);
+            if (source != IntPtr.Zero)
+            {
+                NativeMethods.enough_cancellation_cancel(source);
             }
         }
 
         /// <summary>
-        /// Get the raw pointer to pass to Rust FFI functions.
+        /// Get the raw token pointer to pass to Rust FFI functions.
         /// </summary>
-        public IntPtr Handle
+        /// <remarks>
+        /// The token uses Arc-based reference counting in Rust. Even if this
+        /// handle is disposed while Rust is using the token, no crash will occur.
+        /// However, if disposed without cancellation, the token will never
+        /// become cancelled (since no one can call cancel anymore).
+        /// </remarks>
+        public IntPtr TokenHandle
         {
             get
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                return _handle;
+                return _tokenPtr;
             }
         }
 
@@ -99,9 +145,9 @@ namespace Enough
         {
             get
             {
-                var handle = _handle;
-                return handle != IntPtr.Zero &&
-                       NativeMethods.enough_cancellation_is_cancelled(handle);
+                var token = Volatile.Read(ref _tokenPtr);
+                return token != IntPtr.Zero &&
+                       NativeMethods.enough_token_is_cancelled(token);
             }
         }
 
@@ -110,13 +156,19 @@ namespace Enough
         /// </summary>
         public void Cancel()
         {
-            var handle = _handle;
-            if (handle != IntPtr.Zero)
+            var source = Volatile.Read(ref _sourcePtr);
+            if (source != IntPtr.Zero)
             {
-                NativeMethods.enough_cancellation_cancel(handle);
+                NativeMethods.enough_cancellation_cancel(source);
             }
         }
 
+        /// <summary>
+        /// Dispose of native resources.
+        ///
+        /// Safe to call even if Rust code is still using the token - the
+        /// Arc-based reference counting ensures the shared state stays alive.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;
@@ -124,10 +176,39 @@ namespace Enough
 
             _registration.Dispose();
 
-            var handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);
-            if (handle != IntPtr.Zero)
+            // Destroy token first (it holds a ref to the shared state)
+            var token = Interlocked.Exchange(ref _tokenPtr, IntPtr.Zero);
+            if (token != IntPtr.Zero)
             {
-                NativeMethods.enough_cancellation_destroy(handle);
+                NativeMethods.enough_token_destroy(token);
+            }
+
+            // Then destroy source
+            var source = Interlocked.Exchange(ref _sourcePtr, IntPtr.Zero);
+            if (source != IntPtr.Zero)
+            {
+                NativeMethods.enough_cancellation_destroy(source);
+            }
+
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Ensure native resources are freed if Dispose wasn't called.
+        /// </summary>
+        ~CancellationHandle()
+        {
+            // Only clean up native resources in finalizer
+            var token = Interlocked.Exchange(ref _tokenPtr, IntPtr.Zero);
+            if (token != IntPtr.Zero)
+            {
+                NativeMethods.enough_token_destroy(token);
+            }
+
+            var source = Interlocked.Exchange(ref _sourcePtr, IntPtr.Zero);
+            if (source != IntPtr.Zero)
+            {
+                NativeMethods.enough_cancellation_destroy(source);
             }
         }
     }
@@ -145,7 +226,7 @@ namespace Enough
         /// </summary>
         /// <typeparam name="T">The result type</typeparam>
         /// <param name="operation">
-        /// A function that takes a cancellation handle pointer and returns a result.
+        /// A function that takes a cancellation token pointer and returns a result.
         /// The Rust code should periodically check the cancellation state.
         /// </param>
         /// <param name="cancellationToken">The .NET cancellation token to bridge</param>
@@ -160,7 +241,7 @@ namespace Enough
             return await Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return operation(handle.Handle);
+                return operation(handle.TokenHandle);
             }, cancellationToken);
         }
 
@@ -173,7 +254,7 @@ namespace Enough
         {
             using var handle = new CancellationHandle(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            return operation(handle.Handle);
+            return operation(handle.TokenHandle);
         }
     }
 }
