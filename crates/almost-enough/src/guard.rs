@@ -30,11 +30,11 @@
 //! assert!(!source.is_cancelled()); // Not cancelled because we disarmed
 //! ```
 
-use crate::{Stopper, TreeStopper};
+use crate::{Stopper, ChildStopper};
 
 /// Trait for types that can be stopped/cancelled.
 ///
-/// This is implemented for [`Stopper`] and [`TreeStopper`] to allow
+/// This is implemented for [`Stopper`] and [`ChildStopper`] to allow
 /// creating [`CancelGuard`]s via the [`StopDropRoll`] trait.
 ///
 /// The method is named `stop()` to align with the [`Stop`](crate::Stop) trait
@@ -51,7 +51,7 @@ impl Cancellable for Stopper {
     }
 }
 
-impl Cancellable for TreeStopper {
+impl Cancellable for ChildStopper {
     #[inline]
     fn stop(&self) {
         self.cancel();
@@ -162,7 +162,7 @@ impl<C: Cancellable> Drop for CancelGuard<C> {
 /// # Supported Types
 ///
 /// - [`Stopper`] - Stops all clones
-/// - [`TreeStopper`] - Stops just this node (not siblings or parent)
+/// - [`ChildStopper`] - Stops just this node (not siblings or parent)
 ///
 /// # Example
 ///
@@ -189,10 +189,10 @@ impl<C: Cancellable> Drop for CancelGuard<C> {
 /// assert!(!source.is_cancelled());
 /// ```
 ///
-/// # With TreeStopper
+/// # With ChildStopper
 ///
 /// ```rust
-/// use almost_enough::{Stopper, TreeStopper, StopDropRoll, Stop, StopExt};
+/// use almost_enough::{Stopper, ChildStopper, StopDropRoll, Stop, StopExt};
 ///
 /// let parent = Stopper::new();
 /// let child = parent.child();

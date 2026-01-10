@@ -236,7 +236,7 @@ pub trait StopExt: Stop + Sized {
 
     /// Create a child stop that inherits cancellation from this stop.
     ///
-    /// The returned [`TreeStopper`] will stop if:
+    /// The returned [`ChildStopper`] will stop if:
     /// - Its own `cancel()` is called
     /// - This parent stop is cancelled
     ///
@@ -267,11 +267,11 @@ pub trait StopExt: Stop + Sized {
     /// ```
     #[cfg(feature = "alloc")]
     #[inline]
-    fn child(&self) -> TreeStopper
+    fn child(&self) -> ChildStopper
     where
         Self: Clone + 'static,
     {
-        TreeStopper::with_parent(self.clone())
+        ChildStopper::with_parent(self.clone())
     }
 }
 

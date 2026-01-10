@@ -1,12 +1,12 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
 #![allow(unused_imports, dead_code)]
 
-use enough::{Stop, Stopper, TimeoutExt, TreeStopper};
+use enough::{Stop, Stopper, TimeoutExt, ChildStopper};
 
 #[test]
 fn child_inherits_parent() {
     let parent = Stopper::new();
-    let child = TreeStopper::with_parent(parent.clone());
+    let child = ChildStopper::with_parent(parent.clone());
 
     assert!(!child.is_cancelled());
 
@@ -19,7 +19,7 @@ fn child_inherits_parent() {
 #[test]
 fn child_cancel_independent() {
     let parent = Stopper::new();
-    let child = TreeStopper::with_parent(parent.clone());
+    let child = ChildStopper::with_parent(parent.clone());
 
     child.cancel();
 
@@ -34,8 +34,8 @@ fn child_cancel_independent() {
 #[test]
 fn siblings_independent() {
     let parent = Stopper::new();
-    let child_a = TreeStopper::with_parent(parent.clone());
-    let child_b = TreeStopper::with_parent(parent.clone());
+    let child_a = ChildStopper::with_parent(parent.clone());
+    let child_b = ChildStopper::with_parent(parent.clone());
 
     child_a.cancel();
 
@@ -52,7 +52,7 @@ fn siblings_independent() {
 #[test]
 fn grandchild_inherits_all() {
     let grandparent = Stopper::new();
-    let parent = TreeStopper::with_parent(grandparent.clone());
+    let parent = ChildStopper::with_parent(grandparent.clone());
     let child = parent.child();
 
     assert!(!child.is_cancelled());
@@ -65,7 +65,7 @@ fn grandchild_inherits_all() {
 #[test]
 fn grandchild_parent_cancel() {
     let grandparent = Stopper::new();
-    let parent = TreeStopper::with_parent(grandparent.clone());
+    let parent = ChildStopper::with_parent(grandparent.clone());
     let child = parent.child();
 
     // Parent cancel propagates to child
@@ -79,7 +79,7 @@ fn grandchild_parent_cancel() {
 #[test]
 fn deep_hierarchy() {
     let root = Stopper::new();
-    let l1 = TreeStopper::with_parent(root.clone());
+    let l1 = ChildStopper::with_parent(root.clone());
     let l2 = l1.child();
     let l3 = l2.child();
     let l4 = l3.child();
@@ -97,7 +97,7 @@ fn child_token_with_timeout() {
     use std::time::Duration;
 
     let parent = Stopper::new();
-    let child = TreeStopper::with_parent(parent.clone());
+    let child = ChildStopper::with_parent(parent.clone());
     let token = child.clone().with_timeout(Duration::from_millis(50));
 
     assert!(!token.should_stop());
@@ -115,7 +115,7 @@ fn child_across_threads() {
     let parent_clone = parent.clone();
 
     let handle = thread::spawn(move || {
-        let child = TreeStopper::with_parent(parent_clone.clone());
+        let child = ChildStopper::with_parent(parent_clone.clone());
 
         // Spin until cancelled
         while !child.is_cancelled() {
@@ -135,7 +135,7 @@ fn child_across_threads() {
 fn many_children() {
     let parent = Stopper::new();
     let children: Vec<_> = (0..100)
-        .map(|_| TreeStopper::with_parent(parent.clone()))
+        .map(|_| ChildStopper::with_parent(parent.clone()))
         .collect();
 
     assert!(children.iter().all(|c| !c.is_cancelled()));

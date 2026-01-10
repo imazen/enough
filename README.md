@@ -94,7 +94,7 @@ let result = my_codec::process(&data, Never);
 | `OrStop` | core | Combine multiple stop sources |
 | `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
 | `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
-| `TreeStopper` | alloc | Hierarchical parent-child cancellation |
+| `ChildStopper` | alloc | Hierarchical parent-child cancellation |
 | `BoxedStop` | alloc | Type-erased dynamic dispatch |
 | `WithTimeout` | std | Add deadline to any Stop |
 
@@ -150,9 +150,9 @@ let timed = stop.clone().with_timeout(Duration::from_secs(30));
 ### Hierarchical Cancellation
 
 ```rust
-use enough::TreeStopper;
+use enough::ChildStopper;
 
-let parent = TreeStopper::new();
+let parent = ChildStopper::new();
 let child_a = parent.child();
 let child_b = parent.child();
 
@@ -212,7 +212,7 @@ The trait-based design means you can:
 1. **Start simple** - Use `Never` during development
 2. **Add cancellation** - Switch to `Stopper` when needed
 3. **Add timeouts** - Wrap with `.with_timeout()`
-4. **Go hierarchical** - Use `TreeStopper` for complex flows
+4. **Go hierarchical** - Use `ChildStopper` for complex flows
 5. **Integrate with async** - Use `enough-tokio`
 6. **Call from FFI** - Use `enough-ffi`
 

@@ -64,7 +64,7 @@ let result = my_lib::decode(&data, Never);
 ## Features
 
 - **None (default)** - `no_std` core: `Stop` trait, `Never`, `StopSource`, `FnStop`, `OrStop`
-- **`alloc`** - Adds `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop` + `Box<T>`/`Arc<T>` impls
+- **`alloc`** - Adds `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop` + `Box<T>`/`Arc<T>` impls
 - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`)
 
 ## Type Overview
@@ -77,7 +77,7 @@ let result = my_lib::decode(&data, Never);
 | `OrStop` | core | Combine multiple stop sources |
 | `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
 | `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
-| `TreeStopper` | alloc | Hierarchical parent-child cancellation |
+| `ChildStopper` | alloc | Hierarchical parent-child cancellation |
 | `BoxedStop` | alloc | Type-erased dynamic dispatch |
 | `WithTimeout` | std | Add deadline to any Stop |
 

@@ -1,21 +1,21 @@
 //! Hierarchical cancellation with tree structure.
 //!
-//! [`TreeStopper`] provides cancellation that can form parent-child relationships.
+//! [`ChildStopper`] provides cancellation that can form parent-child relationships.
 //! When a parent is cancelled, all children are also cancelled. Children can be
 //! cancelled independently without affecting siblings or parents.
 //!
 //! # Overview
 //!
-//! - [`TreeStopper::new()`] - Create a root (no parent)
-//! - [`TreeStopper::with_parent()`] - Create a child of any `Stop` implementation
-//! - [`tree.child()`](TreeStopper::child) - Create a child of this tree node
+//! - [`ChildStopper::new()`] - Create a root (no parent)
+//! - [`ChildStopper::with_parent()`] - Create a child of any `Stop` implementation
+//! - [`tree.child()`](ChildStopper::child) - Create a child of this tree node
 //!
 //! # Example
 //!
 //! ```rust
-//! use enough::{TreeStopper, Stop};
+//! use enough::{ChildStopper, Stop};
 //!
-//! let parent = TreeStopper::new();
+//! let parent = ChildStopper::new();
 //! let child_a = parent.child();
 //! let child_b = parent.child();
 //!
@@ -34,9 +34,9 @@
 //! Children can have their own children, creating a cancellation tree:
 //!
 //! ```rust
-//! use enough::{TreeStopper, Stop};
+//! use enough::{ChildStopper, Stop};
 //!
-//! let grandparent = TreeStopper::new();
+//! let grandparent = ChildStopper::new();
 //! let parent = grandparent.child();
 //! let child = parent.child();
 //!
@@ -48,13 +48,13 @@
 //!
 //! # With Other Stop Types
 //!
-//! You can create a `TreeStopper` as a child of any `Stop` implementation:
+//! You can create a `ChildStopper` as a child of any `Stop` implementation:
 //!
 //! ```rust
-//! use enough::{Stopper, TreeStopper, Stop};
+//! use enough::{Stopper, ChildStopper, Stop};
 //!
 //! let root = Stopper::new();
-//! let child = TreeStopper::with_parent(root.clone());
+//! let child = ChildStopper::with_parent(root.clone());
 //!
 //! root.cancel();
 //! assert!(child.should_stop());
@@ -84,16 +84,16 @@ impl std::fmt::Debug for TreeInner {
 
 /// A cancellation primitive with tree-structured parent-child relationships.
 ///
-/// `TreeStopper` uses a unified clone model: clone to share, any clone can cancel.
+/// `ChildStopper` uses a unified clone model: clone to share, any clone can cancel.
 /// When cancelled, it does NOT affect its parent or siblings - only this node
 /// and any of its children.
 ///
 /// # Example
 ///
 /// ```rust
-/// use enough::{TreeStopper, Stop};
+/// use enough::{ChildStopper, Stop};
 ///
-/// let parent = TreeStopper::new();
+/// let parent = ChildStopper::new();
 /// let child = parent.child();
 ///
 /// // Clone to share across threads
@@ -113,11 +113,11 @@ impl std::fmt::Debug for TreeInner {
 /// - `check()`: ~5-20ns depending on tree depth (walks parent chain)
 /// - Root nodes: no parent check, similar to `Stopper`
 #[derive(Debug, Clone)]
-pub struct TreeStopper {
+pub struct ChildStopper {
     inner: Arc<TreeInner>,
 }
 
-impl TreeStopper {
+impl ChildStopper {
     /// Create a new root tree node (no parent).
     ///
     /// This creates a tree root that can have children added via [`child()`](Self::child).
@@ -125,9 +125,9 @@ impl TreeStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{TreeStopper, Stop};
+    /// use enough::{ChildStopper, Stop};
     ///
-    /// let root = TreeStopper::new();
+    /// let root = ChildStopper::new();
     /// let child = root.child();
     ///
     /// root.cancel();
@@ -152,10 +152,10 @@ impl TreeStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{Stopper, TreeStopper, Stop};
+    /// use enough::{Stopper, ChildStopper, Stop};
     ///
     /// let root = Stopper::new();
-    /// let child = TreeStopper::with_parent(root.clone());
+    /// let child = ChildStopper::with_parent(root.clone());
     ///
     /// root.cancel();
     /// assert!(child.should_stop());
@@ -178,9 +178,9 @@ impl TreeStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{TreeStopper, Stop};
+    /// use enough::{ChildStopper, Stop};
     ///
-    /// let parent = TreeStopper::new();
+    /// let parent = ChildStopper::new();
     /// let child = parent.child();
     /// let grandchild = child.child();
     ///
@@ -190,8 +190,8 @@ impl TreeStopper {
     /// assert!(grandchild.should_stop());  // Inherits from parent
     /// ```
     #[inline]
-    pub fn child(&self) -> TreeStopper {
-        TreeStopper::with_parent(self.clone())
+    pub fn child(&self) -> ChildStopper {
+        ChildStopper::with_parent(self.clone())
     }
 
     /// Cancel this node (and all its children).
@@ -216,13 +216,13 @@ impl TreeStopper {
     }
 }
 
-impl Default for TreeStopper {
+impl Default for ChildStopper {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Stop for TreeStopper {
+impl Stop for ChildStopper {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
         if self.inner.self_cancelled.load(Ordering::Relaxed) {
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn tree_root_basic() {
-        let root = TreeStopper::new();
+        let root = ChildStopper::new();
         assert!(!root.is_cancelled());
         assert!(!root.should_stop());
         assert!(root.check().is_ok());
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn tree_child_inherits_parent() {
-        let parent = TreeStopper::new();
+        let parent = ChildStopper::new();
         let child = parent.child();
 
         assert!(!child.is_cancelled());
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn tree_child_cancel_independent() {
-        let parent = TreeStopper::new();
+        let parent = ChildStopper::new();
         let child = parent.child();
 
         child.cancel();
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn tree_siblings_independent() {
-        let parent = TreeStopper::new();
+        let parent = ChildStopper::new();
         let child_a = parent.child();
         let child_b = parent.child();
 
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn tree_grandchild() {
-        let grandparent = TreeStopper::new();
+        let grandparent = ChildStopper::new();
         let parent = grandparent.child();
         let child = parent.child();
 
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn tree_three_generations() {
-        let g1 = TreeStopper::new();
+        let g1 = ChildStopper::new();
         let g2 = g1.child();
         let g3 = g2.child();
 
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn tree_with_stopper_parent() {
         let root = Stopper::new();
-        let child = TreeStopper::with_parent(root.clone());
+        let child = ChildStopper::with_parent(root.clone());
 
         assert!(!child.is_cancelled());
 
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn tree_clone_shares_state() {
-        let t1 = TreeStopper::new();
+        let t1 = ChildStopper::new();
         let t2 = t1.clone();
 
         t2.cancel();
@@ -352,12 +352,12 @@ mod tests {
     #[test]
     fn tree_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<TreeStopper>();
+        assert_send_sync::<ChildStopper>();
     }
 
     #[test]
     fn tree_is_default() {
-        let t: TreeStopper = Default::default();
+        let t: ChildStopper = Default::default();
         assert!(!t.is_cancelled());
     }
 }

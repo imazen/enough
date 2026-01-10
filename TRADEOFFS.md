@@ -139,10 +139,10 @@ pub fn is_cancelled(&self) -> bool {
 ## 3. Hierarchy: Built-in vs Opt-in
 
 ### Option A: Opt-in Hierarchy (Recommended)
-Separate type `TreeStopper` with explicit `.child()` method.
+Separate type `ChildStopper` with explicit `.child()` method.
 
 ```rust
-let parent = TreeStopper::new();
+let parent = ChildStopper::new();
 let child = parent.child();  // Explicit
 
 parent.cancel();  // Cancels child too
@@ -319,7 +319,7 @@ pub trait Stop: Send + Sync {
 |---------|-------|--------|
 | `CancellationToken` | `Stop` | `Stopper` |
 | `SynchronizedCancellationToken` | `SyncStop` | `SyncStopper` |
-| `HierarchicalCancellationToken` | `TreeStop` | `TreeStopper` |
+| `HierarchicalCancellationToken` | `TreeStop` | `ChildStopper` |
 | `CancellationSource` | `Source` | `StopSource` |
 | `CancellationRef` | `Ref` | `StopRef` |
 
@@ -475,7 +475,7 @@ impl<T: Stop + Sized> StopExt for T {}
 |----------|--------|-----------|
 | Default type size | Tiny (8 bytes) | Performance is king for hot loops |
 | Memory ordering | Relaxed default, Acquire/Release opt-in | Most uses don't need sync guarantees |
-| Hierarchy | Opt-in via `TreeStopper` | Don't pay for what you don't use |
+| Hierarchy | Opt-in via `ChildStopper` | Don't pay for what you don't use |
 | Source/Token | Unified for Arc, split for zero-alloc | Best of both worlds |
 | Error type | Enum with 2 variants | Useful distinction, minimal cost |
 | Trait design | Minimal required, rich provided | Easy to implement, powerful to use |
@@ -500,7 +500,7 @@ Stop (trait)
  │   └── .check() = 1 atomic load with Acquire
  │   └── .cancel() = atomic store with Release
  │
- ├── TreeStopper              // Hierarchical (opt-in)
+ ├── ChildStopper              // Hierarchical (opt-in)
  │   └── .child() for hierarchy
  │   └── .check() walks parent chain
  │
@@ -516,7 +516,7 @@ Stop (trait)
 | `Never` | 0 | 0 (optimized away) | N/A | No |
 | `Stopper` | 8 bytes | ~1-2ns | Relaxed | No |
 | `SyncStopper` | 8 bytes | ~2-5ns | Acquire | No |
-| `TreeStopper` | 8 bytes | ~5-20ns (chain walk) | Relaxed | Yes |
+| `ChildStopper` | 8 bytes | ~5-20ns (chain walk) | Relaxed | Yes |
 | `StopRef<'a>` | 8 bytes | ~1ns | Relaxed | No |
 
 ---
@@ -531,7 +531,7 @@ These renames simplify the API by merging source/token for Arc types:
 | `SyncStop` + `SyncToken` | `SyncStopper` | Release/Acquire ordering variant |
 | `AtomicStop` | `StopSource` | Clearer: it's the source of the signal |
 | `AtomicToken` | `StopRef` | Clearer: it's a reference/view |
-| `ChildSource` + `ChildToken` | `TreeStopper` | Opt-in hierarchy, unified clone |
+| `ChildSource` + `ChildToken` | `ChildStopper` | Opt-in hierarchy, unified clone |
 | `BoxStop` | `BoxedStop` | Consistent with Rust naming (`Boxed...`) |
 
 ### API Changes
@@ -540,7 +540,7 @@ These renames simplify the API by merging source/token for Arc types:
 |-----|-----|
 | `ArcStop::new()` | `Stopper::new()` |
 | `source.token()` | `stop.clone()` |
-| `ChildSource::new(parent.token())` | `TreeStopper::new()` or `parent.child()` |
+| `ChildSource::new(parent.token())` | `ChildStopper::new()` or `parent.child()` |
 | `AtomicStop::new()` | `StopSource::new()` |
 | `source.token()` (AtomicToken) | `source.as_ref()` (StopRef) |
 
@@ -584,7 +584,7 @@ fn inner_work(stop: BoxedStop) {
 use almost_enough::{Stopper, Stop, StopExt};
 
 let parent = Stopper::new();
-let child = parent.child();  // TreeStopper
+let child = parent.child();  // ChildStopper
 
 parent.cancel();
 assert!(child.should_stop());
@@ -618,7 +618,7 @@ fn work(source: &Stopper) -> Result<(), Error> {
 - `Cancellable::stop()` - aligns with `Stop` trait, avoids conflict with `cancel()`
 
 **Features:**
-- Works with `Stopper` and `TreeStopper`
+- Works with `Stopper` and `ChildStopper`
 - `Cancellable` trait for extensibility
 - `guard.is_armed()` to check state
 - `guard.source()` to access underlying source
@@ -637,7 +637,7 @@ fn work(source: &Stopper) -> Result<(), Error> {
 - **`enough`** - Core trait and all implementations
   - `Stop` trait with `check()` and `should_stop()` only
   - `StopReason` enum
-  - `Never`, `StopSource`, `StopRef`, `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop`, `FnStop`, `OrStop`
+  - `Never`, `StopSource`, `StopRef`, `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop`, `FnStop`, `OrStop`
   - `TimeoutExt`, `WithTimeout`
   - Blanket impls for `&T`, `&mut T`, `Box<T>`, `Arc<T>`
 

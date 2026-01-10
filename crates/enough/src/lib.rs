@@ -101,7 +101,7 @@
 //! ## Feature Flags
 //!
 //! - **None (default)** - Core trait, `Never`, `StopSource`, `StopRef`, `FnStop`, `OrStop`
-//! - **`alloc`** - Adds `Stopper`, `SyncStopper`, `TreeStopper`, `BoxedStop`,
+//! - **`alloc`** - Adds `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop`,
 //!   and blanket impls for `Box<T>`, `Arc<T>`
 //! - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`) and
 //!   `std::error::Error` impl for `StopReason`
@@ -116,7 +116,7 @@
 //! | [`OrStop`] | core | Combine multiple stops |
 //! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
 //! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
-//! | [`TreeStopper`] | alloc | Hierarchical parent-child cancellation |
+//! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 
@@ -161,7 +161,7 @@ pub use stopper::Stopper;
 #[cfg(feature = "alloc")]
 pub use sync_stopper::SyncStopper;
 #[cfg(feature = "alloc")]
-pub use tree::TreeStopper;
+pub use tree::ChildStopper;
 
 // Re-exports: Std
 #[cfg(feature = "std")]
