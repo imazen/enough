@@ -1,4 +1,5 @@
 //! Tests for rayon parallel processing with cancellation.
+#![allow(unused_imports, dead_code)]
 
 use enough::{CancellationSource, Stop, StopReason};
 use rayon::prelude::*;

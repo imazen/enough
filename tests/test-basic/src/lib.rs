@@ -1,4 +1,5 @@
 //! Basic tests for the Stop trait and Never type.
+#![allow(unused_imports, dead_code)]
 
 use enough::{Never, Stop, StopReason};
 

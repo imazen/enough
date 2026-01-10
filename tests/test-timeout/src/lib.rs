@@ -1,4 +1,5 @@
 //! Tests for timeout behavior.
+#![allow(unused_imports, dead_code)]
 
 use enough::{CancellationSource, CancellationToken, Stop, StopReason};
 use std::time::{Duration, Instant};

@@ -1,4 +1,5 @@
 //! Tests for tokio integration.
+#![allow(unused_imports, dead_code)]
 
 use enough::Stop;
 use enough_tokio::{CancellationTokenExt, TokioStop};

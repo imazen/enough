@@ -1,4 +1,5 @@
 //! Tests for AtomicBool-based CancellationSource and CancellationToken.
+#![allow(unused_imports, dead_code)]
 
 use enough::{CancellationSource, CancellationToken, Stop};
 use std::sync::Arc;

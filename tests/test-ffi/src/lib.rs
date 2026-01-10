@@ -1,4 +1,5 @@
 //! Tests for FFI helpers.
+#![allow(unused_imports, dead_code)]
 
 use enough::Stop;
 use enough_ffi::{

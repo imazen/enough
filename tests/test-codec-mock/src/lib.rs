@@ -1,4 +1,5 @@
 //! Mock codec tests - simulates real codec usage patterns.
+#![allow(unused_imports, dead_code)]
 
 use enough::{CancellationSource, Never, Stop, StopReason};
 use std::sync::Arc;

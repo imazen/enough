@@ -1,4 +1,5 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
+#![allow(unused_imports, dead_code)]
 
 use enough::{CancellationSource, ChildCancellationSource, Stop};
 
