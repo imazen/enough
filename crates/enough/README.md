@@ -9,6 +9,8 @@ Minimal cooperative cancellation for Rust.
 
 A minimal, `no_std` trait for cooperative cancellation. Zero dependencies.
 
+`StopReason` is 1 byte and `check()` compiles to a single boolean read from the stack.
+
 ## For Library Authors
 
 Accept `impl Stop` in your functions:
@@ -86,6 +88,8 @@ let result = my_lib::decode(&data, Never);
 - [`almost-enough`](https://crates.io/crates/almost-enough) - Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, guards)
 - [`enough-ffi`](https://crates.io/crates/enough-ffi) - FFI helpers for C#, Python, Node.js
 - [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio CancellationToken bridge
+
+**Note:** Ergonomic extensions live in `almost-enough` until stabilized from use and feedback.
 
 ## License
 

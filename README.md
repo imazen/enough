@@ -29,6 +29,7 @@ pub trait Stop: Send + Sync {
 - **Zero dependencies** - Won't bloat your dependency tree
 - **Bring your own impl** - Works with tokio, custom systems, FFI
 - **Error propagation via `?`** - Integrates cleanly with Result chains
+- **1-byte error type** - `StopReason` compiles to a single boolean read from the stack
 
 ## Quick Start
 
@@ -194,6 +195,8 @@ tokio::task::spawn_blocking(move || {
 | `enough-ffi` | C FFI for cross-language use |
 | `enough-tokio` | Bridge to tokio's CancellationToken |
 | `almost-enough` | Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, `StopDropRoll`) |
+
+**Note:** Ergonomic extensions live in `almost-enough` until stabilized from use and feedback. Once proven, they may migrate to `enough`.
 
 ## Performance
 
