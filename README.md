@@ -58,6 +58,11 @@ impl From<StopReason> for MyError {
 
 ### For Application Developers
 
+```toml
+[dependencies]
+enough = { version = "0.1", features = ["std"] }
+```
+
 Choose the implementation that fits your needs:
 
 ```rust
