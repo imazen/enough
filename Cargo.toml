@@ -25,7 +25,7 @@ keywords = ["cancellation", "cooperative", "async", "ffi", "no_std"]
 categories = ["concurrency", "no-std", "rust-patterns"]
 
 [workspace.dependencies]
-enough = { path = "crates/enough", features = ["std"] }
-almost-enough = { path = "crates/almost-enough", features = ["std"] }
-enough-tokio = { path = "crates/enough-tokio" }
-enough-ffi = { path = "crates/enough-ffi" }
+enough = { version = "0.2.0", path = "crates/enough", features = ["std"] }
+almost-enough = { version = "0.2.0", path = "crates/almost-enough", features = ["std"] }
+enough-tokio = { version = "0.2.0", path = "crates/enough-tokio" }
+enough-ffi = { version = "0.2.0", path = "crates/enough-ffi" }
