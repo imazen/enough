@@ -107,6 +107,8 @@ assert!(child.should_stop());
 
 ### Use with `tokio::select!`
 
+For one-shot select (runs once):
+
 ```rust
 use enough_tokio::TokioStop;
 use tokio_util::sync::CancellationToken;
@@ -120,6 +122,46 @@ async fn do_work_with_cancellation(stop: TokioStop) -> Result<(), &'static str> 
 
 async fn async_work() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+}
+```
+
+**Important:** For select in a loop, pin the future to avoid recreating it each iteration:
+
+```rust
+use enough_tokio::TokioStop;
+use tokio::sync::mpsc;
+
+async fn process_messages(stop: TokioStop, mut rx: mpsc::Receiver<String>) {
+    // Pin the future OUTSIDE the loop
+    let cancelled = stop.cancelled();
+    tokio::pin!(cancelled);
+
+    loop {
+        tokio::select! {
+            // Use &mut to poll the pinned future without consuming it
+            _ = &mut cancelled => {
+                println!("Cancelled!");
+                break;
+            }
+            msg = rx.recv() => {
+                match msg {
+                    Some(m) => println!("Got: {}", m),
+                    None => break,
+                }
+            }
+        }
+    }
+}
+```
+
+**Wrong** (creates new future each iteration, inefficient):
+```rust
+// DON'T do this in a loop!
+loop {
+    tokio::select! {
+        _ = stop.cancelled() => break,  // New future each time!
+        msg = rx.recv() => { /* ... */ }
+    }
 }
 ```
 

@@ -18,4 +18,4 @@ enough = { version = "0.2", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["rt", "time", "macros", "rt-multi-thread"] }
+tokio = { version = "1.43", features = ["rt", "time", "macros", "rt-multi-thread", "sync"] }

@@ -452,4 +452,77 @@ mod tests {
             assert!(stop.should_stop());
         }
     }
+
+    #[tokio::test]
+    async fn select_loop_with_pinned_cancelled() {
+        use tokio::sync::mpsc;
+
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+        let (tx, mut rx) = mpsc::channel::<i32>(10);
+
+        // Send some messages
+        tx.send(1).await.unwrap();
+        tx.send(2).await.unwrap();
+        tx.send(3).await.unwrap();
+
+        // Spawn cancellation after messages
+        let token_clone = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            token_clone.cancel();
+        });
+
+        // Correct pattern: pin the future outside the loop
+        let cancelled = stop.cancelled();
+        tokio::pin!(cancelled);
+
+        let mut received = vec![];
+        let mut was_cancelled = false;
+
+        loop {
+            tokio::select! {
+                _ = &mut cancelled => {
+                    was_cancelled = true;
+                    break;
+                }
+                msg = rx.recv() => {
+                    match msg {
+                        Some(m) => received.push(m),
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        assert_eq!(received, vec![1, 2, 3]);
+        assert!(was_cancelled);
+    }
+
+    #[tokio::test]
+    async fn select_biased_cancellation_priority() {
+        use tokio::sync::mpsc;
+
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+        let (tx, mut rx) = mpsc::channel::<i32>(10);
+
+        // Pre-cancel before loop
+        token.cancel();
+
+        // Send a message (channel should still have it)
+        tx.send(42).await.unwrap();
+
+        let cancelled = stop.cancelled();
+        tokio::pin!(cancelled);
+
+        // With biased, cancellation should win since it's first
+        let result = tokio::select! {
+            biased;
+            _ = &mut cancelled => "cancelled",
+            _ = rx.recv() => "received",
+        };
+
+        assert_eq!(result, "cancelled");
+    }
 }
