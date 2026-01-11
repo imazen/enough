@@ -46,7 +46,7 @@ catch (OperationCanceledException)
 
 1. **Create**: `enough_cancellation_create()` allocates a Rust cancellation source
 2. **Bridge**: `CancellationToken.Register()` forwards .NET cancellation to Rust
-3. **Check**: Rust code periodically calls `stop.check()` or `stop.is_stopped()`
+3. **Check**: Rust code periodically calls `stop.check()` or `stop.should_stop()`
 4. **Cleanup**: `enough_cancellation_destroy()` frees the Rust source
 
 ## Building

@@ -71,7 +71,7 @@ try {
 1. **Create Source**: `enough_cancellation_create()` allocates a Rust cancellation source
 2. **Create Token**: `enough_token_create(source)` creates a token from the source
 3. **Bridge**: `AbortSignal.addEventListener('abort', ...)` forwards JS abort to Rust via `enough_cancellation_cancel(source)`
-4. **Check**: Rust code receives the token pointer and calls `stop.is_stopped()` or `stop.check()`
+4. **Check**: Rust code receives the token pointer and calls `stop.should_stop()` or `stop.check()`
 5. **Cleanup**: `enough_token_destroy(token)` then `enough_cancellation_destroy(source)` frees resources
 
 The source and token separation allows safe destruction order - tokens hold Arc references to shared state.

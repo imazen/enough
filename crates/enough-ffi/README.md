@@ -54,7 +54,7 @@ pub extern "C" fn my_operation(
 
     // Use with any library that accepts impl Stop
     for i in 0..len {
-        if i % 100 == 0 && stop.is_stopped() {
+        if i % 100 == 0 && stop.should_stop() {
             return -1; // Cancelled
         }
         // do work...
