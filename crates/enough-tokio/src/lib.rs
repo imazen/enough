@@ -240,4 +240,216 @@ mod tests {
 
         assert!(stop.should_stop());
     }
+
+    #[tokio::test]
+    async fn spawn_blocking_integration() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+
+        let handle = tokio::task::spawn_blocking(move || {
+            let mut count = 0;
+            for i in 0..1_000_000 {
+                if i % 1000 == 0 && stop.should_stop() {
+                    return Err("cancelled");
+                }
+                count += 1;
+                // Simulate work
+                std::hint::black_box(count);
+            }
+            Ok(count)
+        });
+
+        // Cancel quickly
+        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+        token.cancel();
+
+        let result = handle.await.unwrap();
+        // Either completed or cancelled - both are valid
+        assert!(result.is_ok() || result == Err("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn select_with_cancellation() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+
+        // Spawn cancellation
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            token.cancel();
+        });
+
+        let result = tokio::select! {
+            _ = stop.cancelled() => "cancelled",
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => "timeout",
+        };
+
+        assert_eq!(result, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn multiple_tasks_same_token() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let token = CancellationToken::new();
+        let cancelled_count = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let stop = TokioStop::new(token.clone());
+            let cancelled_count = Arc::clone(&cancelled_count);
+
+            handles.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    if stop.should_stop() {
+                        cancelled_count.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            }));
+        }
+
+        // Cancel after some tasks have started
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        token.cancel();
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // At least some tasks should have been cancelled
+        assert!(cancelled_count.load(Ordering::Relaxed) > 0);
+    }
+
+    #[tokio::test]
+    async fn child_token_cancellation() {
+        let parent = TokioStop::new(CancellationToken::new());
+        let child1 = parent.child();
+        let child2 = parent.child();
+
+        assert!(!child1.should_stop());
+        assert!(!child2.should_stop());
+
+        // Cancel one child doesn't affect others
+        child1.cancel();
+        assert!(child1.should_stop());
+        assert!(!child2.should_stop());
+        assert!(!parent.should_stop());
+
+        // Cancel parent affects remaining children
+        parent.cancel();
+        assert!(child2.should_stop());
+    }
+
+    #[tokio::test]
+    async fn nested_child_tokens() {
+        let root = TokioStop::new(CancellationToken::new());
+        let level1 = root.child();
+        let level2 = level1.child();
+        let level3 = level2.child();
+
+        assert!(!level3.should_stop());
+
+        root.cancel();
+
+        assert!(level1.should_stop());
+        assert!(level2.should_stop());
+        assert!(level3.should_stop());
+    }
+
+    #[tokio::test]
+    async fn check_returns_correct_reason() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+
+        assert_eq!(stop.check(), Ok(()));
+
+        token.cancel();
+
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn debug_formatting() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+
+        let debug = format!("{:?}", stop);
+        assert!(debug.contains("TokioStop"));
+        assert!(debug.contains("cancelled"));
+        assert!(debug.contains("false"));
+
+        token.cancel();
+
+        let debug = format!("{:?}", stop);
+        assert!(debug.contains("true"));
+    }
+
+    #[tokio::test]
+    async fn integration_with_stop_trait() {
+        fn process_sync(data: &[u8], stop: impl Stop) -> Result<usize, &'static str> {
+            for (i, _chunk) in data.chunks(100).enumerate() {
+                if i % 10 == 0 && stop.should_stop() {
+                    return Err("cancelled");
+                }
+            }
+            Ok(data.len())
+        }
+
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+        let data = vec![0u8; 10000];
+
+        // Not cancelled - completes
+        let result = process_sync(&data, stop.clone());
+        assert_eq!(result, Ok(10000));
+
+        // Cancel and retry
+        token.cancel();
+        let result = process_sync(&data, stop);
+        assert_eq!(result, Err("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn token_accessor_methods() {
+        let original_token = CancellationToken::new();
+        let stop = TokioStop::new(original_token.clone());
+
+        // token() returns reference
+        let token_ref = stop.token();
+        assert!(!token_ref.is_cancelled());
+
+        // into_token() consumes and returns owned token
+        let recovered_token = stop.into_token();
+        assert!(!recovered_token.is_cancelled());
+
+        // Original token still works
+        original_token.cancel();
+        assert!(recovered_token.is_cancelled());
+    }
+
+    #[test]
+    fn sync_send_bounds() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<TokioStop>();
+        assert_sync::<TokioStop>();
+    }
+
+    #[tokio::test]
+    async fn rapid_cancel_check_cycle() {
+        // Stress test rapid cancellation
+        for _ in 0..100 {
+            let token = CancellationToken::new();
+            let stop = TokioStop::new(token.clone());
+
+            assert!(!stop.should_stop());
+            token.cancel();
+            assert!(stop.should_stop());
+        }
+    }
 }

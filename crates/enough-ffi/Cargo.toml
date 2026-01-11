@@ -1,19 +1,19 @@
 [package]
 name = "enough-ffi"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-keywords.workspace = true
-categories = ["concurrency", "external-ffi-bindings"]
-description = "FFI helpers for the enough cancellation trait"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.56"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/imazen/enough"
+keywords = ["cancellation", "ffi", "c", "interop", "no_std"]
+categories = ["concurrency", "external-ffi-bindings", "api-bindings"]
+description = "C FFI helpers for the enough cooperative cancellation trait"
 readme = "README.md"
 
 [features]
 default = []
 
 [dependencies]
-enough = { workspace = true }
+enough = { version = "0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]

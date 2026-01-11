@@ -1,17 +1,21 @@
 [package]
 name = "enough-tokio"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Tokio integration for the enough cancellation trait"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.63"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/imazen/enough"
+keywords = ["cancellation", "tokio", "async", "cooperative"]
+categories = ["concurrency", "asynchronous"]
+description = "Tokio integration for the enough cooperative cancellation trait"
+readme = "README.md"
 
 [features]
 default = []
 
 [dependencies]
-enough = { workspace = true }
-tokio-util = { version = "0.7" }
+enough = { version = "0.2", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["rt", "time", "macros"] }
+tokio = { version = "1.43", features = ["rt", "time", "macros", "rt-multi-thread"] }

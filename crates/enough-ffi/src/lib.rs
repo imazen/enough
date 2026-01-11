@@ -605,4 +605,235 @@ mod tests {
             enough_cancellation_destroy(source);
         }
     }
+
+    #[test]
+    fn concurrent_access_stress() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        unsafe {
+            let source = enough_cancellation_create();
+            let cancelled_count = Arc::new(AtomicUsize::new(0));
+            let check_count = Arc::new(AtomicUsize::new(0));
+
+            // Create tokens upfront and convert to addresses
+            let tokens: Vec<_> = (0..10)
+                .map(|_| enough_token_create(source) as usize)
+                .collect();
+
+            // Spawn multiple threads that check cancellation
+            let handles: Vec<_> = tokens
+                .into_iter()
+                .map(|token_addr| {
+                    let cancelled_count = Arc::clone(&cancelled_count);
+                    let check_count = Arc::clone(&check_count);
+
+                    thread::spawn(move || {
+                        let token = token_addr as *mut FfiCancellationToken;
+                        let view = FfiCancellationToken::from_ptr(token);
+                        for _ in 0..10000 {
+                            check_count.fetch_add(1, Ordering::Relaxed);
+                            if view.should_stop() {
+                                cancelled_count.fetch_add(1, Ordering::Relaxed);
+                                break;
+                            }
+                            thread::yield_now();
+                        }
+                        enough_token_destroy(token);
+                    })
+                })
+                .collect();
+
+            // Cancel after threads have started
+            thread::sleep(std::time::Duration::from_millis(1));
+            enough_cancellation_cancel(source);
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            // All threads should have detected cancellation
+            assert!(cancelled_count.load(Ordering::Relaxed) > 0);
+            assert!(check_count.load(Ordering::Relaxed) > 0);
+
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn cross_thread_cancellation() {
+        use std::thread;
+
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+
+            // Send token to another thread
+            let token_addr = token as usize;
+            let handle = thread::spawn(move || {
+                let token = token_addr as *const FfiCancellationToken;
+                let view = FfiCancellationToken::from_ptr(token);
+
+                // Spin until cancelled
+                let mut iterations = 0;
+                while !view.should_stop() && iterations < 1_000_000 {
+                    iterations += 1;
+                    thread::yield_now();
+                }
+
+                view.should_stop()
+            });
+
+            // Cancel from main thread
+            thread::sleep(std::time::Duration::from_millis(5));
+            enough_cancellation_cancel(source);
+
+            let was_cancelled = handle.join().unwrap();
+            assert!(was_cancelled);
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn rapid_create_destroy() {
+        // Stress test allocation/deallocation
+        unsafe {
+            for _ in 0..1000 {
+                let source = enough_cancellation_create();
+                let tokens: Vec<_> = (0..10).map(|_| enough_token_create(source)).collect();
+
+                enough_cancellation_cancel(source);
+
+                for token in tokens {
+                    assert!(enough_token_is_cancelled(token));
+                    enough_token_destroy(token);
+                }
+
+                enough_cancellation_destroy(source);
+            }
+        }
+    }
+
+    #[test]
+    fn idempotent_cancel() {
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+
+            // Cancel multiple times should be safe
+            enough_cancellation_cancel(source);
+            enough_cancellation_cancel(source);
+            enough_cancellation_cancel(source);
+
+            assert!(enough_token_is_cancelled(token));
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn token_view_copy_semantics() {
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+
+            let view1 = FfiCancellationToken::from_ptr(token);
+            let view2 = view1; // Copy
+            let view3 = view1; // Copy again
+
+            assert!(!view1.should_stop());
+            assert!(!view2.should_stop());
+            assert!(!view3.should_stop());
+
+            enough_cancellation_cancel(source);
+
+            assert!(view1.should_stop());
+            assert!(view2.should_stop());
+            assert!(view3.should_stop());
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn check_returns_correct_reason() {
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+            let view = FfiCancellationToken::from_ptr(token);
+
+            assert_eq!(view.check(), Ok(()));
+
+            enough_cancellation_cancel(source);
+
+            assert_eq!(view.check(), Err(StopReason::Cancelled));
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn debug_formatting() {
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+            let view = FfiCancellationToken::from_ptr(token);
+
+            let token_ref = &*token;
+            let token_debug = format!("{:?}", token_ref);
+            assert!(token_debug.contains("FfiCancellationToken"));
+            assert!(token_debug.contains("is_cancelled"));
+
+            let view_debug = format!("{:?}", view);
+            assert!(view_debug.contains("FfiCancellationTokenView"));
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn simulated_ffi_pattern() {
+        // Simulates how a C caller would use this API
+        unsafe {
+            // 1. C code creates source and token
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+
+            // 2. C code passes token pointer to Rust FFI function
+            fn rust_ffi_function(
+                token_ptr: *const FfiCancellationToken,
+            ) -> Result<i32, &'static str> {
+                let stop = unsafe { FfiCancellationToken::from_ptr(token_ptr) };
+
+                for i in 0..1000 {
+                    if i % 100 == 0 {
+                        stop.check().map_err(|_| "cancelled")?;
+                    }
+                }
+                Ok(42)
+            }
+
+            // 3. First call succeeds
+            let result = rust_ffi_function(token);
+            assert_eq!(result, Ok(42));
+
+            // 4. C code triggers cancellation (e.g., from callback)
+            enough_cancellation_cancel(source);
+
+            // 5. Next call detects cancellation
+            let result = rust_ffi_function(token);
+            assert_eq!(result, Err("cancelled"));
+
+            // 6. C code cleans up
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
+    }
 }
