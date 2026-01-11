@@ -581,17 +581,28 @@ mod tests {
 
     #[test]
     fn interop_with_enough() {
-        use enough::Stopper;
-
-        let stop = Stopper::new();
-
         // Both implement Stop
         fn use_stop(stop: impl Stop) -> bool {
             stop.should_stop()
         }
 
-        assert!(!use_stop(stop));
+        // Test FfiCancellationToken with Stop trait
         assert!(!use_stop(FfiCancellationToken::never()));
         assert!(!use_stop(FfiCancellationTokenView::never()));
+
+        // Test with a real source
+        unsafe {
+            let source = enough_cancellation_create();
+            let token = enough_token_create(source);
+            let view = FfiCancellationToken::from_ptr(token);
+
+            assert!(!use_stop(view));
+
+            enough_cancellation_cancel(source);
+            assert!(use_stop(view));
+
+            enough_token_destroy(token);
+            enough_cancellation_destroy(source);
+        }
     }
 }

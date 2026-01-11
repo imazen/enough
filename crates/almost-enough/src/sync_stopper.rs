@@ -9,7 +9,7 @@
 //! are visible to readers after they see `should_stop() == true`.
 //!
 //! ```rust
-//! use enough::{SyncStopper, Stop};
+//! use almost_enough::{SyncStopper, Stop};
 //! use std::sync::atomic::{AtomicUsize, Ordering};
 //!
 //! static SHARED_DATA: AtomicUsize = AtomicUsize::new(0);
@@ -57,7 +57,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{SyncStopper, Stop};
+/// use almost_enough::{SyncStopper, Stop};
 ///
 /// let stop = SyncStopper::new();
 /// let stop2 = stop.clone();

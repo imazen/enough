@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{StopSource, OrStop, Stop};
+//! use almost_enough::{StopSource, OrStop, Stop};
 //!
 //! let source_a = StopSource::new();
 //! let source_b = StopSource::new();
@@ -29,7 +29,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{StopSource, OrStop, Stop};
+/// use almost_enough::{StopSource, OrStop, Stop};
 ///
 /// let timeout_source = StopSource::new();
 /// let cancel_source = StopSource::new();
@@ -91,7 +91,7 @@ impl<A: Stop, B: Stop> Stop for OrStop<A, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{StopSource, Never};
+    use crate::{Never, StopSource};
 
     #[test]
     fn or_stop_neither() {

@@ -31,11 +31,20 @@ pub trait Stop: Send + Sync {
 - **Error propagation via `?`** - Integrates cleanly with Result chains
 - **1-byte error type** - `StopReason` compiles to a single boolean read from the stack
 
+## Crate Structure
+
+| Crate | Purpose |
+|-------|---------|
+| `enough` | Core trait only: `Stop`, `StopReason`, `Never` |
+| `almost-enough` | **All implementations**: `Stopper`, `StopSource`, timeouts, combinators |
+| `enough-ffi` | C FFI for cross-language use |
+| `enough-tokio` | Bridge to tokio's CancellationToken |
+
 ## Quick Start
 
 ### For Library Authors
 
-Accept `impl Stop` - that's it:
+Depend on `enough` (minimal) and accept `impl Stop`:
 
 ```rust
 use enough::{Stop, StopReason};
@@ -60,13 +69,13 @@ impl From<StopReason> for MyError {
 
 ```toml
 [dependencies]
-enough = { version = "0.1", features = ["std"] }
+almost-enough = "0.1"  # Includes all implementations
 ```
 
 Choose the implementation that fits your needs:
 
 ```rust
-use enough::{Stopper, Stop};
+use almost_enough::{Stopper, Stop};
 
 // Create a cancellation source - clone to share
 let stop = Stopper::new();
@@ -84,7 +93,7 @@ stop.cancel();
 ### Zero-Cost When Not Needed
 
 ```rust
-use enough::Never;
+use almost_enough::Never;  // or enough::Never
 
 // Compiles to nothing - zero runtime cost
 let result = my_codec::process(&data, Never);
@@ -92,25 +101,33 @@ let result = my_codec::process(&data, Never);
 
 ## Type Overview
 
-| Type | Feature | Use Case |
-|------|---------|----------|
-| `Never` | core | Zero-cost "never stop" |
-| `StopSource` / `StopRef` | core | Stack-based, borrowed, Relaxed ordering |
-| `FnStop` | core | Wrap any closure |
-| `OrStop` | core | Combine multiple stop sources |
-| `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
-| `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
-| `ChildStopper` | alloc | Hierarchical parent-child cancellation |
-| `BoxedStop` | alloc | Type-erased dynamic dispatch |
-| `WithTimeout` | std | Add deadline to any Stop |
+| Type | Crate | Feature | Use Case |
+|------|-------|---------|----------|
+| `Stop` | enough | core | The trait |
+| `StopReason` | enough | core | Cancellation reason enum |
+| `Never` | enough | core | Zero-cost "never stop" |
+| `StopSource` / `StopRef` | almost-enough | core | Stack-based, borrowed, Relaxed ordering |
+| `FnStop` | almost-enough | core | Wrap any closure |
+| `OrStop` | almost-enough | core | Combine multiple stop sources |
+| `Stopper` | almost-enough | alloc | **Default choice** - Arc-based, clone to share |
+| `SyncStopper` | almost-enough | alloc | Like Stopper with Acquire/Release ordering |
+| `ChildStopper` | almost-enough | alloc | Hierarchical parent-child cancellation |
+| `BoxedStop` | almost-enough | alloc | Type-erased dynamic dispatch |
+| `WithTimeout` | almost-enough | std | Add deadline to any Stop |
 
 ## Feature Flags
 
+**`enough`** (for library authors):
 ```toml
-[dependencies]
 enough = "0.1"                    # no_std core only
-enough = { version = "0.1", features = ["alloc"] }  # + Arc types
-enough = { version = "0.1", features = ["std"] }    # + timeouts (implies alloc)
+enough = { version = "0.1", features = ["alloc"] }  # + Box/Arc impls
+enough = { version = "0.1", features = ["std"] }    # + Error impl
+```
+
+**`almost-enough`** (for applications):
+```toml
+almost-enough = "0.1"                    # std (default) - all features
+almost-enough = { version = "0.1", default-features = false, features = ["alloc"] }  # no_std + alloc
 ```
 
 ## Memory Ordering
@@ -118,7 +135,7 @@ enough = { version = "0.1", features = ["std"] }    # + timeouts (implies alloc)
 Two variants for different needs:
 
 ```rust
-use enough::{Stopper, SyncStopper};
+use almost_enough::{Stopper, SyncStopper};
 
 // Stopper: Relaxed ordering (faster on ARM)
 // Use when you just need to signal "stop"
@@ -144,7 +161,7 @@ if stop.should_stop() {  // Acquire: syncs with Release
 ### Timeouts
 
 ```rust
-use enough::{Stopper, TimeoutExt};
+use almost_enough::{Stopper, TimeoutExt};
 use std::time::Duration;
 
 let stop = Stopper::new();
@@ -156,7 +173,7 @@ let timed = stop.clone().with_timeout(Duration::from_secs(30));
 ### Hierarchical Cancellation
 
 ```rust
-use enough::ChildStopper;
+use almost_enough::ChildStopper;
 
 let parent = ChildStopper::new();
 let child_a = parent.child();
@@ -169,13 +186,13 @@ parent.cancel();   // Both children stop
 ### Combining Sources
 
 ```rust
-use enough::{Stopper, OrStop};
+use almost_enough::{Stopper, StopExt};
 
 let app_cancel = Stopper::new();
 let timeout = Stopper::new();
 
 // Stop if either triggers
-let combined = OrStop::new(app_cancel.clone(), timeout.clone());
+let combined = app_cancel.clone().or(timeout.clone());
 ```
 
 ### With Tokio
@@ -191,17 +208,6 @@ tokio::task::spawn_blocking(move || {
     my_codec::process(&data, stop)
 });
 ```
-
-## Related Crates
-
-| Crate | Purpose |
-|-------|---------|
-| `enough` | Core trait + implementations |
-| `enough-ffi` | C FFI for cross-language use |
-| `enough-tokio` | Bridge to tokio's CancellationToken |
-| `almost-enough` | Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, `StopDropRoll`) |
-
-**Note:** Ergonomic extensions live in `almost-enough` until stabilized from use and feedback. Once proven, they may migrate to `enough`.
 
 ## Performance
 

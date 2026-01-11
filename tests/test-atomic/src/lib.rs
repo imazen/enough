@@ -1,7 +1,7 @@
 //! Tests for Stopper.
 #![allow(unused_imports, dead_code)]
 
-use enough::{Stopper, Stop};
+use almost_enough::{Stop, Stopper};
 use std::sync::Arc;
 use std::thread;
 
@@ -94,7 +94,7 @@ fn concurrent_check_and_cancel() {
 
 #[test]
 fn never_stops() {
-    use enough::Never;
+    use almost_enough::Never;
     let stop = Never;
     assert!(!stop.should_stop());
 

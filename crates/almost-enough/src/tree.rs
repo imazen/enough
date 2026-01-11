@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{ChildStopper, Stop};
+//! use almost_enough::{ChildStopper, Stop};
 //!
 //! let parent = ChildStopper::new();
 //! let child_a = parent.child();
@@ -34,7 +34,7 @@
 //! Children can have their own children, creating a cancellation tree:
 //!
 //! ```rust
-//! use enough::{ChildStopper, Stop};
+//! use almost_enough::{ChildStopper, Stop};
 //!
 //! let grandparent = ChildStopper::new();
 //! let parent = grandparent.child();
@@ -51,7 +51,7 @@
 //! You can create a `ChildStopper` as a child of any `Stop` implementation:
 //!
 //! ```rust
-//! use enough::{Stopper, ChildStopper, Stop};
+//! use almost_enough::{Stopper, ChildStopper, Stop};
 //!
 //! let root = Stopper::new();
 //! let child = ChildStopper::with_parent(root.clone());
@@ -91,7 +91,7 @@ impl std::fmt::Debug for TreeInner {
 /// # Example
 ///
 /// ```rust
-/// use enough::{ChildStopper, Stop};
+/// use almost_enough::{ChildStopper, Stop};
 ///
 /// let parent = ChildStopper::new();
 /// let child = parent.child();
@@ -125,7 +125,7 @@ impl ChildStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{ChildStopper, Stop};
+    /// use almost_enough::{ChildStopper, Stop};
     ///
     /// let root = ChildStopper::new();
     /// let child = root.child();
@@ -152,7 +152,7 @@ impl ChildStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{Stopper, ChildStopper, Stop};
+    /// use almost_enough::{Stopper, ChildStopper, Stop};
     ///
     /// let root = Stopper::new();
     /// let child = ChildStopper::with_parent(root.clone());
@@ -178,7 +178,7 @@ impl ChildStopper {
     /// # Example
     ///
     /// ```rust
-    /// use enough::{ChildStopper, Stop};
+    /// use almost_enough::{ChildStopper, Stop};
     ///
     /// let parent = ChildStopper::new();
     /// let child = parent.child();

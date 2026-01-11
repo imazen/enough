@@ -1,7 +1,7 @@
 //! Tests for tokio integration.
 #![allow(unused_imports, dead_code)]
 
-use enough::Stop;
+use almost_enough::Stop;
 use enough_tokio::{CancellationTokenExt, TokioStop};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -113,7 +113,7 @@ async fn tokio_with_enough() {
     let tokio_token = CancellationToken::new();
     let tokio_stop = TokioStop::new(tokio_token.clone());
 
-    let std_stop = enough::Stopper::new();
+    let std_stop = almost_enough::Stopper::new();
 
     fn use_stop(stop: impl Stop) -> bool {
         stop.should_stop()

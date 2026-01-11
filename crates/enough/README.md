@@ -1,6 +1,6 @@
 # enough
 
-Minimal cooperative cancellation for Rust.
+Minimal cooperative cancellation trait for Rust.
 
 [![Crates.io](https://img.shields.io/crates/v/enough.svg)](https://crates.io/crates/enough)
 [![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
@@ -33,27 +33,6 @@ impl From<StopReason> for MyError {
 }
 ```
 
-## For Application Developers
-
-```toml
-[dependencies]
-enough = { version = "0.1", features = ["std"] }
-```
-
-```rust
-use enough::{Stopper, Stop, TimeoutExt};
-use std::time::Duration;
-
-let stop = Stopper::new();
-let timed = stop.clone().with_timeout(Duration::from_secs(30));
-
-// Pass to library
-let result = my_lib::decode(&data, timed);
-
-// Or cancel manually
-stop.cancel();
-```
-
 ## Zero-Cost Default
 
 ```rust
@@ -63,33 +42,27 @@ use enough::Never;
 let result = my_lib::decode(&data, Never);
 ```
 
+## What's in This Crate
+
+This crate provides only the **core trait and types**:
+
+- `Stop` - The cooperative cancellation trait
+- `StopReason` - Why an operation stopped (Cancelled or TimedOut)
+- `Never` - Zero-cost "never stop" implementation
+
+For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, etc.), see [`almost-enough`](https://crates.io/crates/almost-enough).
+
 ## Features
 
-- **None (default)** - `no_std` core: `Stop` trait, `Never`, `StopSource`, `FnStop`, `OrStop`
-- **`alloc`** - Adds `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop` + `Box<T>`/`Arc<T>` impls
-- **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`)
-
-## Type Overview
-
-| Type | Feature | Use Case |
-|------|---------|----------|
-| `Never` | core | Zero-cost "never stop" |
-| `StopSource` / `StopRef` | core | Stack-based, borrowed, Relaxed ordering |
-| `FnStop` | core | Wrap any closure |
-| `OrStop` | core | Combine multiple stop sources |
-| `Stopper` | alloc | **Default choice** - Arc-based, clone to share |
-| `SyncStopper` | alloc | Like Stopper with Acquire/Release ordering |
-| `ChildStopper` | alloc | Hierarchical parent-child cancellation |
-| `BoxedStop` | alloc | Type-erased dynamic dispatch |
-| `WithTimeout` | std | Add deadline to any Stop |
+- **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Never`
+- **`alloc`** - Adds `Box<T>` and `Arc<T>` blanket impls for `Stop`
+- **`std`** - Implies `alloc`. Adds `std::error::Error` impl for `StopReason`
 
 ## See Also
 
-- [`almost-enough`](https://crates.io/crates/almost-enough) - Ergonomic extensions (`.or()`, `.into_boxed()`, `.child()`, guards)
+- [`almost-enough`](https://crates.io/crates/almost-enough) - **All implementations**: `Stopper`, `StopSource`, `ChildStopper`, timeouts, combinators, guards
 - [`enough-ffi`](https://crates.io/crates/enough-ffi) - FFI helpers for C#, Python, Node.js
 - [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio CancellationToken bridge
-
-**Note:** Ergonomic extensions live in `almost-enough` until stabilized from use and feedback.
 
 ## License
 

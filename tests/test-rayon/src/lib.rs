@@ -1,7 +1,7 @@
 //! Tests for rayon parallel processing with cancellation.
 #![allow(unused_imports, dead_code)]
 
-use enough::{Stopper, Stop, StopReason};
+use almost_enough::{Stop, StopReason, Stopper};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

@@ -2,8 +2,38 @@
 //!
 //! Batteries-included ergonomic extensions for the [`enough`] cooperative cancellation crate.
 //!
-//! This crate provides extension traits and helpers that make working with stop tokens
-//! more ergonomic. It re-exports everything from `enough` for convenience.
+//! This crate provides all the concrete implementations and helpers for working with
+//! stop tokens. It re-exports everything from `enough` for convenience.
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use almost_enough::{Stopper, Stop};
+//!
+//! let stop = Stopper::new();
+//! let stop2 = stop.clone();  // Clone to share
+//!
+//! // Pass to operations
+//! assert!(!stop2.should_stop());
+//!
+//! // Any clone can cancel
+//! stop.cancel();
+//! assert!(stop2.should_stop());
+//! ```
+//!
+//! ## Type Overview
+//!
+//! | Type | Feature | Use Case |
+//! |------|---------|----------|
+//! | [`Never`] | core | Zero-cost "never stop" |
+//! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
+//! | [`FnStop`] | core | Wrap any closure |
+//! | [`OrStop`] | core | Combine multiple stops |
+//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
+//! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
+//! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
+//! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
+//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 //!
 //! ## StopExt Extension Trait
 //!
@@ -109,8 +139,6 @@
 //!
 //! ## Feature Flags
 //!
-//! This crate mirrors `enough`'s feature flags:
-//!
 //! - **`std`** (default) - Full functionality including timeouts
 //! - **`alloc`** - Arc-based types, `into_boxed()`, `child()`, `StopDropRoll`
 //! - **None** - Core trait and stack-based types only
@@ -123,13 +151,47 @@
 extern crate alloc;
 
 // Re-export everything from enough
-pub use enough::*;
+pub use enough::{Never, Stop, StopReason};
+
+// Core modules (no_std, no alloc)
+mod func;
+mod or;
+mod source;
+
+pub use func::FnStop;
+pub use or::OrStop;
+pub use source::{StopRef, StopSource};
+
+// Alloc-dependent modules
+#[cfg(feature = "alloc")]
+mod boxed;
+#[cfg(feature = "alloc")]
+mod stopper;
+#[cfg(feature = "alloc")]
+mod sync_stopper;
+#[cfg(feature = "alloc")]
+mod tree;
+
+#[cfg(feature = "alloc")]
+pub use boxed::BoxedStop;
+#[cfg(feature = "alloc")]
+pub use stopper::Stopper;
+#[cfg(feature = "alloc")]
+pub use sync_stopper::SyncStopper;
+#[cfg(feature = "alloc")]
+pub use tree::ChildStopper;
+
+// Std-dependent modules
+#[cfg(feature = "std")]
+pub mod time;
+#[cfg(feature = "std")]
+pub use time::{TimeoutExt, WithTimeout};
 
 // Cancel guard module
 #[cfg(feature = "alloc")]
 mod guard;
 #[cfg(feature = "alloc")]
-pub use guard::{Cancellable, CancelGuard, StopDropRoll};
+pub use guard::{CancelGuard, Cancellable, StopDropRoll};
 
 /// Extension trait providing ergonomic combinators for [`Stop`] implementations.
 ///

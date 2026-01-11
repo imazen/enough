@@ -11,8 +11,8 @@ description = "Batteries-included ergonomic extensions for the `enough` cooperat
 
 [features]
 default = ["std"]
-alloc = ["enough/alloc"]
-std = ["alloc", "enough/std"]
+alloc = []
+std = ["alloc"]
 
 [dependencies]
 enough = { path = "../enough", default-features = false }

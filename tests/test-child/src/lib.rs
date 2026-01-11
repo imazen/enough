@@ -1,7 +1,7 @@
 //! Tests for child cancellation (hierarchical cancellation trees).
 #![allow(unused_imports, dead_code)]
 
-use enough::{Stop, Stopper, TimeoutExt, ChildStopper};
+use almost_enough::{ChildStopper, Stop, Stopper, TimeoutExt};
 
 #[test]
 fn child_inherits_parent() {

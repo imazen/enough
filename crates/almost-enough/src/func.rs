@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{FnStop, Stop};
+//! use almost_enough::{FnStop, Stop};
 //! use core::sync::atomic::{AtomicBool, Ordering};
 //!
 //! static CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -24,7 +24,7 @@
 //! `FnStop` is useful for bridging to external cancellation mechanisms:
 //!
 //! ```rust,ignore
-//! use enough::{FnStop, Stop};
+//! use almost_enough::{FnStop, Stop};
 //!
 //! // Bridge to tokio CancellationToken
 //! let tokio_token = tokio_util::sync::CancellationToken::new();
@@ -47,7 +47,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{FnStop, Stop};
+/// use almost_enough::{FnStop, Stop};
 /// use core::sync::atomic::{AtomicBool, Ordering};
 ///
 /// let flag = AtomicBool::new(false);

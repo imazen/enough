@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{Stopper, Stop};
+//! use almost_enough::{Stopper, Stop};
 //!
 //! let stop = Stopper::new();
 //! let stop2 = stop.clone();  // Both share the same flag
@@ -46,7 +46,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{Stopper, Stop};
+/// use almost_enough::{Stopper, Stop};
 ///
 /// let stop = Stopper::new();
 ///

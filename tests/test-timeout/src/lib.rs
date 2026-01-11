@@ -1,7 +1,7 @@
 //! Tests for timeout behavior.
 #![allow(unused_imports, dead_code)]
 
-use enough::{Stopper, Never, Stop, TimeoutExt, StopReason};
+use almost_enough::{Never, Stop, StopReason, Stopper, TimeoutExt};
 use std::time::{Duration, Instant};
 
 #[test]

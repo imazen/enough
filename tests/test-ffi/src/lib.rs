@@ -1,7 +1,7 @@
 //! Tests for FFI helpers.
 #![allow(unused_imports, dead_code)]
 
-use enough::Stop;
+use almost_enough::Stop;
 use enough_ffi::{
     enough_cancellation_cancel, enough_cancellation_create, enough_cancellation_destroy,
     enough_cancellation_is_cancelled, enough_token_create, enough_token_create_never,
@@ -251,7 +251,7 @@ fn ffi_simulated_csharp_pattern() {
 #[test]
 fn ffi_interop_with_enough() {
     // Test that FFI tokens and enough tokens work together
-    use enough::Stopper;
+    use almost_enough::Stopper;
 
     let std_stop = Stopper::new();
 

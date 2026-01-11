@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{StopSource, Stop};
+//! use almost_enough::{StopSource, Stop};
 //!
 //! let source = StopSource::new();
 //! let stop = source.as_ref();
@@ -45,7 +45,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{StopSource, Stop};
+/// use almost_enough::{StopSource, Stop};
 ///
 /// let source = StopSource::new();
 /// let stop = source.as_ref();
@@ -63,7 +63,7 @@ use crate::{Stop, StopReason};
 /// `StopSource` can be created in const context:
 ///
 /// ```rust
-/// use enough::StopSource;
+/// use almost_enough::StopSource;
 ///
 /// static GLOBAL_STOP: StopSource = StopSource::new();
 /// ```
@@ -154,7 +154,7 @@ impl Stop for StopSource {
 /// # Example
 ///
 /// ```rust
-/// use enough::{StopSource, Stop};
+/// use almost_enough::{StopSource, Stop};
 ///
 /// fn process(data: &[u8], stop: impl Stop) {
 ///     for (i, chunk) in data.chunks(100).enumerate() {
@@ -174,7 +174,7 @@ impl Stop for StopSource {
 /// `StopRef` is `Copy`, so you can freely copy it without cloning:
 ///
 /// ```rust
-/// use enough::{StopSource, Stop};
+/// use almost_enough::{StopSource, Stop};
 ///
 /// let source = StopSource::new();
 /// let r1 = source.as_ref();

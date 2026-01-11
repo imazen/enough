@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust
-//! use enough::{StopSource, Stop, TimeoutExt};
+//! use almost_enough::{StopSource, Stop, TimeoutExt};
 //! use std::time::Duration;
 //!
 //! let source = StopSource::new();
@@ -26,7 +26,7 @@
 //! Timeouts can only get stricter, never looser. This is safe for composition:
 //!
 //! ```rust
-//! use enough::{StopSource, TimeoutExt};
+//! use almost_enough::{StopSource, TimeoutExt};
 //! use std::time::Duration;
 //!
 //! let source = StopSource::new();
@@ -49,8 +49,8 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{StopSource, Stop};
-/// use enough::time::WithTimeout;
+/// use almost_enough::{StopSource, Stop};
+/// use almost_enough::time::WithTimeout;
 /// use std::time::Duration;
 ///
 /// let source = StopSource::new();
@@ -138,7 +138,7 @@ impl<T: Stop> Stop for WithTimeout<T> {
 /// # Example
 ///
 /// ```rust
-/// use enough::{StopSource, Stop, TimeoutExt};
+/// use almost_enough::{StopSource, Stop, TimeoutExt};
 /// use std::time::Duration;
 ///
 /// let source = StopSource::new();
@@ -157,7 +157,7 @@ pub trait TimeoutExt: Stop + Sized {
     /// If called multiple times, the earliest deadline wins:
     ///
     /// ```rust
-    /// use enough::{StopSource, TimeoutExt};
+    /// use almost_enough::{StopSource, TimeoutExt};
     /// use std::time::Duration;
     ///
     /// let source = StopSource::new();

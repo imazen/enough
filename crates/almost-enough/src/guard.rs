@@ -30,7 +30,7 @@
 //! assert!(!source.is_cancelled()); // Not cancelled because we disarmed
 //! ```
 
-use crate::{Stopper, ChildStopper};
+use crate::{ChildStopper, Stopper};
 
 /// Trait for types that can be stopped/cancelled.
 ///

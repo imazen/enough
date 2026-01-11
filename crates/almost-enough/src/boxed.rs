@@ -10,7 +10,7 @@
 //! single concrete type for dynamic dispatch:
 //!
 //! ```rust
-//! use enough::{BoxedStop, Stop};
+//! use almost_enough::{BoxedStop, Stop};
 //!
 //! // Monomorphized for each Stop type - increases binary size
 //! fn process_generic(stop: impl Stop) {
@@ -28,7 +28,7 @@
 //! For borrowed dynamic dispatch with zero allocation, use `&dyn Stop`:
 //!
 //! ```rust
-//! use enough::{StopSource, Stop};
+//! use almost_enough::{StopSource, Stop};
 //!
 //! fn process(stop: &dyn Stop) {
 //!     if stop.should_stop() {
@@ -53,7 +53,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use enough::{BoxedStop, StopSource, Stopper, Never, Stop};
+/// use almost_enough::{BoxedStop, StopSource, Stopper, Never, Stop};
 ///
 /// fn process(stop: BoxedStop) {
 ///     for i in 0..1000 {

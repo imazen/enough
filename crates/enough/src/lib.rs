@@ -2,9 +2,8 @@
 //!
 //! Minimal cooperative cancellation trait for long-running operations.
 //!
-//! This crate provides a shared [`Stop`] trait that codec authors and library
-//! writers can use to support cancellation. It is `no_std` by default with
-//! zero dependencies.
+//! This crate provides the core [`Stop`] trait that codec authors and library
+//! writers can use to support cancellation. It is `no_std` with zero dependencies.
 //!
 //! ## For Library Authors
 //!
@@ -37,88 +36,27 @@
 //! }
 //! ```
 //!
-//! ## For Application Developers
+//! ## Zero-Cost When Not Needed
 //!
-//! ### The Default: Stopper
-//!
-//! [`Stopper`] is the recommended type for most use cases:
+//! Use [`Never`] when you don't need cancellation:
 //!
 //! ```rust
-//! # #[cfg(feature = "alloc")]
-//! # fn main() {
-//! use enough::{Stopper, Stop};
+//! use enough::Never;
 //!
-//! let stop = Stopper::new();
-//! let stop2 = stop.clone();  // Clone to share
-//!
-//! // Pass to operations
-//! assert!(!stop2.should_stop());
-//!
-//! // Any clone can cancel
-//! stop.cancel();
-//! assert!(stop2.should_stop());
-//! # }
-//! # #[cfg(not(feature = "alloc"))]
-//! # fn main() {}
+//! // Compiles to nothing - zero runtime cost
+//! // let result = my_codec::decode(&data, Never);
 //! ```
 //!
-//! ### Zero-Allocation (no_std)
+//! ## Implementations
 //!
-//! Use [`StopSource`]/[`StopRef`] for stack-based cancellation:
-//!
-//! ```rust
-//! use enough::{StopSource, Stop};
-//!
-//! let source = StopSource::new();
-//! let stop = source.as_ref();  // Borrowed reference
-//!
-//! assert!(!stop.should_stop());
-//!
-//! source.cancel();
-//! assert!(stop.should_stop());
-//! ```
-//!
-//! ### Timeouts (std)
-//!
-//! Enable the `std` feature for timeout support:
-//!
-//! ```rust
-//! # #[cfg(feature = "std")]
-//! # fn main() {
-//! use enough::{Stopper, Stop, TimeoutExt};
-//! use std::time::Duration;
-//!
-//! let stop = Stopper::new();
-//! let timed = stop.clone().with_timeout(Duration::from_secs(30));
-//!
-//! // Stops if cancelled OR if 30 seconds pass
-//! assert!(!timed.should_stop());
-//! # }
-//! # #[cfg(not(feature = "std"))]
-//! # fn main() {}
-//! ```
+//! This crate provides only the trait and a zero-cost `Never` implementation.
+//! For concrete cancellation primitives (`Stopper`, `StopSource`, timeouts, etc.),
+//! see the [`almost-enough`](https://docs.rs/almost-enough) crate.
 //!
 //! ## Feature Flags
 //!
-//! - **None (default)** - Core trait, `Never`, `StopSource`, `StopRef`, `FnStop`, `OrStop`
-//! - **`alloc`** - Adds `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop`,
-//!   and blanket impls for `Box<T>`, `Arc<T>`
-//! - **`std`** - Implies `alloc`. Adds timeouts (`TimeoutExt`, `WithTimeout`) and
-//!   `std::error::Error` impl for `StopReason`
-//!
-//! ## Type Overview
-//!
-//! | Type | Feature | Use Case |
-//! |------|---------|----------|
-//! | [`Never`] | core | Zero-cost "never stop" |
-//! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
-//! | [`FnStop`] | core | Wrap any closure |
-//! | [`OrStop`] | core | Combine multiple stops |
-//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
-//! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
-//! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
-//! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
-//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
+//! - **None (default)** - Core trait only, `no_std` compatible
+//! - **`std`** - Adds `std::error::Error` impl for `StopReason`
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
@@ -127,45 +65,9 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-// Core modules (no_std, no alloc)
-mod func;
-mod or;
 mod reason;
-mod source;
 
-// Alloc-dependent modules
-#[cfg(feature = "alloc")]
-mod boxed;
-#[cfg(feature = "alloc")]
-mod stopper;
-#[cfg(feature = "alloc")]
-mod sync_stopper;
-#[cfg(feature = "alloc")]
-mod tree;
-
-// Std-dependent modules
-#[cfg(feature = "std")]
-pub mod time;
-
-// Re-exports: Core
-pub use func::FnStop;
-pub use or::OrStop;
 pub use reason::StopReason;
-pub use source::{StopRef, StopSource};
-
-// Re-exports: Alloc
-#[cfg(feature = "alloc")]
-pub use boxed::BoxedStop;
-#[cfg(feature = "alloc")]
-pub use stopper::Stopper;
-#[cfg(feature = "alloc")]
-pub use sync_stopper::SyncStopper;
-#[cfg(feature = "alloc")]
-pub use tree::ChildStopper;
-
-// Re-exports: Std
-#[cfg(feature = "std")]
-pub use time::{TimeoutExt, WithTimeout};
 
 /// Cooperative cancellation check.
 ///
@@ -360,11 +262,5 @@ mod tests {
 
         let never = Never;
         assert!(!process(&never));
-
-        let source = StopSource::new();
-        assert!(!process(&source));
-
-        source.cancel();
-        assert!(process(&source));
     }
 }
