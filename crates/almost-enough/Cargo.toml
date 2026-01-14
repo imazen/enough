@@ -15,4 +15,4 @@ alloc = []
 std = ["alloc"]
 
 [dependencies]
-enough = { version = "0.2.0", path = "../enough", default-features = false }
+enough = { version = "0.3.0", path = "../enough", default-features = false }
