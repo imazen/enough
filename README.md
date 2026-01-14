@@ -35,7 +35,7 @@ pub trait Stop: Send + Sync {
 
 | Crate | Purpose |
 |-------|---------|
-| `enough` | Core trait only: `Stop`, `StopReason`, `Never` |
+| `enough` | Core trait only: `Stop`, `StopReason`, `Unstoppable` |
 | `almost-enough` | **All implementations**: `Stopper`, `StopSource`, timeouts, combinators |
 | `enough-ffi` | C FFI for cross-language use |
 | `enough-tokio` | Bridge to tokio's CancellationToken |
@@ -47,7 +47,7 @@ pub trait Stop: Send + Sync {
 Depend on `enough` (minimal) and accept `impl Stop`:
 
 ```rust
-use enough::{Stop, StopReason};
+use enough::{Stop, StopReason, Unstoppable};
 
 pub fn process(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
     let mut output = Vec::new();
@@ -63,7 +63,36 @@ pub fn process(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
 impl From<StopReason> for MyError {
     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 }
+
+// Re-export for caller convenience
+pub use enough::Unstoppable;
 ```
+
+**Naming conventions:**
+
+For **new libraries**, accept `impl Stop` (generic, not `dyn`) as the final parameter with no suffix. Re-export `Unstoppable` so callers can easily opt out of cancellation:
+
+```rust
+// Caller uses your re-export
+use my_codec::{process, Unstoppable};
+let result = process(&data, Unstoppable);
+```
+
+For **existing libraries** adding cancellation support, create a `_stoppable` variant and delegate:
+
+```rust
+// Original function - unchanged API
+pub fn decode(data: &[u8]) -> Result<Image, Error> {
+    decode_stoppable(data, Unstoppable)
+}
+
+// New stoppable variant
+pub fn decode_stoppable(data: &[u8], stop: impl Stop) -> Result<Image, Error> {
+    // ... implementation with stop.check() calls
+}
+```
+
+This preserves backwards compatibility while making cancellation available.
 
 ### For Application Developers
 
@@ -93,10 +122,10 @@ stop.cancel();
 ### Zero-Cost When Not Needed
 
 ```rust
-use almost_enough::Never;  // or enough::Never
+use almost_enough::Unstoppable;  // or enough::Unstoppable
 
 // Compiles to nothing - zero runtime cost
-let result = my_codec::process(&data, Never);
+let result = my_codec::process(&data, Unstoppable);
 ```
 
 ## Type Overview
@@ -105,7 +134,7 @@ let result = my_codec::process(&data, Never);
 |------|-------|---------|----------|
 | `Stop` | enough | core | The trait |
 | `StopReason` | enough | core | Cancellation reason enum |
-| `Never` | enough | core | Zero-cost "never stop" |
+| `Unstoppable` | enough | core | Zero-cost "never stop" |
 | `StopSource` / `StopRef` | almost-enough | core | Stack-based, borrowed, Relaxed ordering |
 | `FnStop` | almost-enough | core | Wrap any closure |
 | `OrStop` | almost-enough | core | Combine multiple stop sources |
@@ -213,7 +242,7 @@ tokio::task::spawn_blocking(move || {
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| `Never.check()` | 0ns | Optimized away |
+| `Unstoppable.check()` | 0ns | Optimized away |
 | `Stopper.check()` | ~1-2ns | Single atomic load |
 | `WithTimeout.check()` | ~20-30ns | Includes `Instant::now()` |
 
@@ -223,7 +252,7 @@ Check every 16-100 iterations for negligible overhead.
 
 The trait-based design means you can:
 
-1. **Start simple** - Use `Never` during development
+1. **Start simple** - Use `Unstoppable` during development
 2. **Add cancellation** - Switch to `Stopper` when needed
 3. **Add timeouts** - Wrap with `.with_timeout()`
 4. **Go hierarchical** - Use `ChildStopper` for complex flows
@@ -231,6 +260,43 @@ The trait-based design means you can:
 6. **Call from FFI** - Use `enough-ffi`
 
 Libraries accepting `impl Stop` work with all of these without changes.
+
+## Zero-Cost Proof
+
+`impl Stop` is generic, not `dyn` - each type is monomorphized. When you pass `Unstoppable`, the compiler eliminates all cancellation checks entirely.
+
+```rust
+#[inline(never)]
+pub fn process<S: Stop>(data: &[u8], stop: S) -> usize {
+    let mut sum = 0usize;
+    for (i, &byte) in data.iter().enumerate() {
+        if i % 16 == 0 && stop.should_stop() {  // <-- eliminated for Unstoppable
+            return sum;
+        }
+        sum = sum.wrapping_add(byte as usize);
+    }
+    sum
+}
+```
+
+Verify with `cargo asm`:
+
+```x86asm
+asm_demo::process_with_stop:            # Monomorphized for Unstoppable
+        mov     ecx, 4
+        xor     eax, eax
+.LBB4_1:
+        movzx   edx, byte ptr [rdi + rcx - 4]
+        add     rdx, rax
+        movzx   eax, byte ptr [rdi + rcx - 3]
+        ; ... unrolled loop, NO cancellation check
+        add     rcx, 5
+        cmp     rcx, 104
+        jne     .LBB4_1
+        ret
+```
+
+No atomic loads, no branches for cancellation - just the loop. The `if stop.should_stop()` branch is dead-code eliminated because `Unstoppable::should_stop()` is `#[inline(always)]` and returns `false`.
 
 ## License
 

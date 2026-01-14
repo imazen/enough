@@ -25,7 +25,7 @@
 //!
 //! | Type | Feature | Use Case |
 //! |------|---------|----------|
-//! | [`Never`] | core | Zero-cost "never stop" |
+//! | [`Unstoppable`] | core | Zero-cost "never stop" |
 //! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
 //! | [`FnStop`] | core | Wrap any closure |
 //! | [`OrStop`] | core | Combine multiple stops |
@@ -151,7 +151,8 @@
 extern crate alloc;
 
 // Re-export everything from enough
-pub use enough::{Never, Stop, StopReason};
+#[allow(deprecated)]
+pub use enough::{Never, Stop, StopReason, Unstoppable};
 
 // Core modules (no_std, no alloc)
 mod func;
@@ -371,9 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn or_with_never() {
+    fn or_with_unstoppable() {
         let source = StopSource::new();
-        let combined = Never.or(source.as_ref());
+        let combined = Unstoppable.or(source.as_ref());
 
         assert!(!combined.should_stop());
 
@@ -385,7 +386,7 @@ mod tests {
     fn reexports_work() {
         // Verify that re-exports from enough work
         let _: StopReason = StopReason::Cancelled;
-        let _ = Never;
+        let _ = Unstoppable;
         let source = StopSource::new();
         let _ = source.as_ref();
     }
@@ -395,7 +396,7 @@ mod tests {
     fn alloc_reexports_work() {
         let stop = Stopper::new();
         let _ = stop.clone();
-        let _ = BoxedStop::new(Never);
+        let _ = BoxedStop::new(Unstoppable);
     }
 
     #[cfg(feature = "alloc")]
@@ -412,8 +413,8 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
-    fn into_boxed_with_never() {
-        let boxed: BoxedStop = Never.into_boxed();
+    fn into_boxed_with_unstoppable() {
+        let boxed: BoxedStop = Unstoppable.into_boxed();
         assert!(!boxed.should_stop());
     }
 
@@ -431,7 +432,7 @@ mod tests {
 
         let stop = Stopper::new();
         outer(stop);
-        outer(Never);
+        outer(Unstoppable);
     }
 
     #[cfg(feature = "alloc")]

@@ -4,8 +4,8 @@
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `no_std` core | ✅ | Zero deps, `Stop` trait + `Never` work everywhere |
-| Zero-cost `Never` | ✅ | `#[inline(always)]`, optimizes away |
+| `no_std` core | ✅ | Zero deps, `Stop` trait + `Unstoppable` work everywhere |
+| Zero-cost `Unstoppable` | ✅ | `#[inline(always)]`, optimizes away |
 | Borrowed tokens | ✅ | `AtomicStop`/`AtomicToken` - no allocation |
 | Owned tokens | ✅ | `ArcStop`/`ArcToken` - heap allocated |
 | Hierarchical | ✅ | `ChildSource`/`ChildToken` with parent propagation |

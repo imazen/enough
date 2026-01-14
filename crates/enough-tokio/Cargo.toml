@@ -14,7 +14,7 @@ readme = "README.md"
 default = []
 
 [dependencies]
-enough = { version = "0.2", default-features = false }
+enough = { version = "0.2", path = "../enough", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 
 [dev-dependencies]

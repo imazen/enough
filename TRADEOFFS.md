@@ -491,7 +491,7 @@ impl<T: Stop + Sized> StopExt for T {}
 ```
 Stop (trait)
  │
- ├── Never                    // Zero-cost "never stop"
+ ├── Unstoppable                    // Zero-cost "never stop"
  │
  ├── Stopper                  // DEFAULT: tiny, just Arc<AtomicBool>
  │   └── .check() = 1 atomic load, ~3 instructions
@@ -513,7 +513,7 @@ Stop (trait)
 
 | Type | Size | check() cost | Ordering | Hierarchy |
 |------|------|--------------|----------|-----------|
-| `Never` | 0 | 0 (optimized away) | N/A | No |
+| `Unstoppable` | 0 | 0 (optimized away) | N/A | No |
 | `Stopper` | 8 bytes | ~1-2ns | Relaxed | No |
 | `SyncStopper` | 8 bytes | ~2-5ns | Acquire | No |
 | `ChildStopper` | 8 bytes | ~5-20ns (chain walk) | Relaxed | Yes |
@@ -637,7 +637,7 @@ fn work(source: &Stopper) -> Result<(), Error> {
 - **`enough`** - Core trait and all implementations
   - `Stop` trait with `check()` and `should_stop()` only
   - `StopReason` enum
-  - `Never`, `StopSource`, `StopRef`, `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop`, `FnStop`, `OrStop`
+  - `Unstoppable`, `StopSource`, `StopRef`, `Stopper`, `SyncStopper`, `ChildStopper`, `BoxedStop`, `FnStop`, `OrStop`
   - `TimeoutExt`, `WithTimeout`
   - Blanket impls for `&T`, `&mut T`, `Box<T>`, `Arc<T>`
 

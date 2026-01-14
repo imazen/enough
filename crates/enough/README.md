@@ -36,10 +36,10 @@ impl From<StopReason> for MyError {
 ## Zero-Cost Default
 
 ```rust
-use enough::Never;
+use enough::Unstoppable;
 
 // Compiles away completely - zero runtime cost
-let result = my_lib::decode(&data, Never);
+let result = my_lib::decode(&data, Unstoppable);
 ```
 
 ## What's in This Crate
@@ -48,13 +48,13 @@ This crate provides only the **core trait and types**:
 
 - `Stop` - The cooperative cancellation trait
 - `StopReason` - Why an operation stopped (Cancelled or TimedOut)
-- `Never` - Zero-cost "never stop" implementation
+- `Unstoppable` - Zero-cost "never stop" implementation
 
 For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, etc.), see [`almost-enough`](https://crates.io/crates/almost-enough).
 
 ## Features
 
-- **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Never`
+- **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Unstoppable`
 - **`alloc`** - Adds `Box<T>` and `Arc<T>` blanket impls for `Stop`
 - **`std`** - Implies `alloc`. Adds `std::error::Error` impl for `StopReason`
 

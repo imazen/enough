@@ -37,7 +37,7 @@ Enable codec authors and library writers to support cancellation with minimal ef
    }
    ```
 
-3. **As a codec author**, I want a `Never` type for callers who don't need cancellation, with zero overhead.
+3. **As a codec author**, I want a `Unstoppable` type for callers who don't need cancellation, with zero overhead.
 
 4. **As a codec author**, I want my library to be `no_std` compatible while still supporting cancellation.
 
@@ -197,7 +197,7 @@ enough/
 │   ├── enough/             # Core crate (no_std, zero deps)
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs      # Stop trait, StopReason, Never
+│   │       ├── lib.rs      # Stop trait, StopReason, Unstoppable
 │   │       └── reason.rs   # StopReason enum
 │   │
 │   ├── enough-std/         # std implementations (CancellationSource, etc.)
@@ -280,9 +280,9 @@ pub trait Stop: Send + Sync {
 
 /// A Stop implementation that never stops (zero-cost)
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Never;
+pub struct Unstoppable;
 
-impl Stop for Never {
+impl Stop for Unstoppable {
     #[inline(always)]
     fn check(&self) -> Result<(), StopReason> {
         Ok(())
@@ -344,14 +344,14 @@ pub struct ChildCancellationSource {
 
 ### Unit Tests (in each crate)
 - Stop trait basics
-- Never type optimization
+- Unstoppable type optimization
 - StopReason equality/hash/display
 
 ### Integration Tests (test-* crates)
 
 | Test Crate | What It Tests |
 |------------|---------------|
-| `test-basic` | Trait usage, Never, basic impl |
+| `test-basic` | Trait usage, Unstoppable, basic impl |
 | `test-atomic` | AtomicBool-based Source/Token |
 | `test-timeout` | Deadline behavior, tightening |
 | `test-child` | Parent/child cancellation trees |
@@ -370,7 +370,7 @@ pub struct ChildCancellationSource {
 ## Implementation Phases
 
 ### Phase 1: Core Trait
-- [ ] `enough` crate with `Stop`, `StopReason`, `Never`
+- [ ] `enough` crate with `Stop`, `StopReason`, `Unstoppable`
 - [ ] `no_std` support
 - [ ] Blanket impls for references
 - [ ] Basic tests

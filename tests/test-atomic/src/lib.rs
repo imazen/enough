@@ -93,9 +93,9 @@ fn concurrent_check_and_cancel() {
 }
 
 #[test]
-fn never_stops() {
-    use almost_enough::Never;
-    let stop = Never;
+fn unstoppable_never_stops() {
+    use almost_enough::Unstoppable;
+    let stop = Unstoppable;
     assert!(!stop.should_stop());
 
     // Even with many checks, never stops

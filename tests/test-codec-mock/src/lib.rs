@@ -1,7 +1,7 @@
 //! Mock codec tests - simulates real codec usage patterns.
 #![allow(unused_imports, dead_code)]
 
-use almost_enough::{Never, Stop, StopReason, Stopper, TimeoutExt};
+use almost_enough::{Stop, StopReason, Stopper, TimeoutExt, Unstoppable};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -146,7 +146,7 @@ fn decoder_completes_without_cancellation() {
     let decoder = MockDecoder::new();
     let data = vec![0u8; 10000];
 
-    let result = decoder.decode(&data, Never);
+    let result = decoder.decode(&data, Unstoppable);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 10000);
@@ -192,7 +192,7 @@ fn encoder_completes_without_cancellation() {
     let encoder = MockEncoder::new(80);
     let data = vec![100u8; 1000];
 
-    let result = encoder.encode(&data, Never);
+    let result = encoder.encode(&data, Unstoppable);
 
     assert!(result.is_ok());
 }
@@ -301,8 +301,8 @@ fn different_stop_impls_work() {
     let decoder = MockDecoder::new();
     let data = vec![0u8; 100];
 
-    // Never
-    assert!(decoder.decode(&data, Never).is_ok());
+    // Unstoppable
+    assert!(decoder.decode(&data, Unstoppable).is_ok());
 
     // Stopper
     let stop = Stopper::new();

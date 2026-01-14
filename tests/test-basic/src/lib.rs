@@ -1,7 +1,7 @@
-//! Basic tests for the Stop trait and Never type.
+//! Basic tests for the Stop trait and Unstoppable type.
 #![allow(unused_imports, dead_code)]
 
-use enough::{Never, Stop, StopReason};
+use enough::{Stop, StopReason, Unstoppable};
 
 /// Mock codec function that accepts impl Stop
 fn mock_decode(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MockError> {
@@ -30,7 +30,7 @@ impl From<StopReason> for MockError {
 #[test]
 fn never_allows_completion() {
     let data = vec![0u8; 1000];
-    let result = mock_decode(&data, Never);
+    let result = mock_decode(&data, Unstoppable);
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1000);
 }
@@ -38,7 +38,7 @@ fn never_allows_completion() {
 #[test]
 fn never_is_zero_cost() {
     // This should compile to essentially nothing
-    let stop = Never;
+    let stop = Unstoppable;
     for _ in 0..1000000 {
         assert!(stop.check().is_ok());
     }
@@ -46,15 +46,15 @@ fn never_is_zero_cost() {
 
 #[test]
 fn stop_trait_object_works() {
-    let stop: &dyn Stop = &Never;
+    let stop: &dyn Stop = &Unstoppable;
     assert!(!stop.should_stop());
     assert!(stop.check().is_ok());
 }
 
 #[test]
 fn reference_impl_works() {
-    let never = Never;
-    let reference: &Never = &never;
+    let never = Unstoppable;
+    let reference: &Unstoppable = &never;
 
     fn takes_stop(s: impl Stop) -> bool {
         s.should_stop()
@@ -90,7 +90,7 @@ fn box_impl_works() {
     extern crate alloc;
     use alloc::boxed::Box;
 
-    let boxed: Box<dyn Stop> = Box::new(Never);
+    let boxed: Box<dyn Stop> = Box::new(Unstoppable);
     assert!(!boxed.should_stop());
 }
 
@@ -100,6 +100,6 @@ fn arc_impl_works() {
     extern crate alloc;
     use alloc::sync::Arc;
 
-    let arc: Arc<dyn Stop> = Arc::new(Never);
+    let arc: Arc<dyn Stop> = Arc::new(Unstoppable);
     assert!(!arc.should_stop());
 }

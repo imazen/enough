@@ -53,7 +53,7 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use almost_enough::{BoxedStop, StopSource, Stopper, Never, Stop};
+/// use almost_enough::{BoxedStop, StopSource, Stopper, Unstoppable, Stop};
 ///
 /// fn process(stop: BoxedStop) {
 ///     for i in 0..1000 {
@@ -65,7 +65,7 @@ use crate::{Stop, StopReason};
 /// }
 ///
 /// // Works with any Stop implementation
-/// process(BoxedStop::new(Never));
+/// process(BoxedStop::new(Unstoppable));
 /// process(BoxedStop::new(StopSource::new()));
 /// process(BoxedStop::new(Stopper::new()));
 /// ```
@@ -100,11 +100,11 @@ impl core::fmt::Debug for BoxedStop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Never, StopSource, Stopper};
+    use crate::{StopSource, Stopper, Unstoppable};
 
     #[test]
-    fn boxed_stop_from_never() {
-        let stop = BoxedStop::new(Never);
+    fn boxed_stop_from_unstoppable() {
+        let stop = BoxedStop::new(Unstoppable);
         assert!(!stop.should_stop());
         assert!(stop.check().is_ok());
     }
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn boxed_stop_debug() {
-        let stop = BoxedStop::new(Never);
+        let stop = BoxedStop::new(Unstoppable);
         let debug = alloc::format!("{:?}", stop);
         assert!(debug.contains("BoxedStop"));
     }
@@ -143,7 +143,7 @@ mod tests {
         }
 
         // All these use the same process function
-        assert!(!process(BoxedStop::new(Never)));
+        assert!(!process(BoxedStop::new(Unstoppable)));
         assert!(!process(BoxedStop::new(StopSource::new())));
         assert!(!process(BoxedStop::new(Stopper::new())));
     }

@@ -38,18 +38,18 @@
 //!
 //! ## Zero-Cost When Not Needed
 //!
-//! Use [`Never`] when you don't need cancellation:
+//! Use [`Unstoppable`] when you don't need cancellation:
 //!
 //! ```rust
-//! use enough::Never;
+//! use enough::Unstoppable;
 //!
 //! // Compiles to nothing - zero runtime cost
-//! // let result = my_codec::decode(&data, Never);
+//! // let result = my_codec::decode(&data, Unstoppable);
 //! ```
 //!
 //! ## Implementations
 //!
-//! This crate provides only the trait and a zero-cost `Never` implementation.
+//! This crate provides only the trait and a zero-cost `Unstoppable` implementation.
 //! For concrete cancellation primitives (`Stopper`, `StopSource`, timeouts, etc.),
 //! see the [`almost-enough`](https://docs.rs/almost-enough) crate.
 //!
@@ -114,15 +114,18 @@ pub trait Stop: Send + Sync {
     }
 }
 
-/// A [`Stop`] implementation that never stops.
+/// A [`Stop`] implementation that never stops (no cooperative cancellation).
 ///
 /// This is a zero-cost type for callers who don't need cancellation support.
 /// All methods are inlined and optimized away.
 ///
+/// The name `Unstoppable` clearly communicates that this operation cannot be
+/// cooperatively cancelled - there is no cancellation token to check.
+///
 /// # Example
 ///
 /// ```rust
-/// use enough::{Stop, Never};
+/// use enough::{Stop, Unstoppable};
 ///
 /// fn process(data: &[u8], stop: impl Stop) -> Vec<u8> {
 ///     // ...
@@ -131,12 +134,19 @@ pub trait Stop: Send + Sync {
 ///
 /// // Caller doesn't need cancellation
 /// let data = [1u8, 2, 3];
-/// let result = process(&data, Never);
+/// let result = process(&data, Unstoppable);
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct Never;
+pub struct Unstoppable;
 
-impl Stop for Never {
+/// Type alias for backwards compatibility.
+///
+/// New code should use [`Unstoppable`] instead, which more clearly
+/// communicates that cooperative cancellation is not possible.
+#[deprecated(since = "0.3.0", note = "Use `Unstoppable` instead for clarity")]
+pub type Never = Unstoppable;
+
+impl Stop for Unstoppable {
     #[inline(always)]
     fn check(&self) -> Result<(), StopReason> {
         Ok(())
@@ -205,29 +215,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn never_does_not_stop() {
-        assert!(!Never.should_stop());
-        assert!(Never.check().is_ok());
+    fn unstoppable_does_not_stop() {
+        assert!(!Unstoppable.should_stop());
+        assert!(Unstoppable.check().is_ok());
     }
 
     #[test]
-    fn never_is_copy() {
-        let a = Never;
+    fn unstoppable_is_copy() {
+        let a = Unstoppable;
         let b = a; // Copy
         let _ = a; // Still valid
         let _ = b;
     }
 
     #[test]
-    fn never_is_default() {
-        let _: Never = Default::default();
+    fn unstoppable_is_default() {
+        let _: Unstoppable = Default::default();
     }
 
     #[test]
     fn reference_impl_works() {
-        let never = Never;
-        let reference: &dyn Stop = &never;
+        let unstoppable = Unstoppable;
+        let reference: &dyn Stop = &unstoppable;
         assert!(!reference.should_stop());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn never_alias_works() {
+        // Backwards compatibility
+        let stop: Never = Unstoppable;
+        assert!(!stop.should_stop());
     }
 
     #[test]
@@ -251,7 +269,7 @@ mod tests {
             Ok(())
         }
 
-        assert!(might_stop(Never).is_ok());
+        assert!(might_stop(Unstoppable).is_ok());
     }
 
     #[test]
@@ -260,7 +278,7 @@ mod tests {
             stop.should_stop()
         }
 
-        let never = Never;
-        assert!(!process(&never));
+        let unstoppable = Unstoppable;
+        assert!(!process(&unstoppable));
     }
 }

@@ -91,7 +91,7 @@ impl<A: Stop, B: Stop> Stop for OrStop<A, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Never, StopSource};
+    use crate::{StopSource, Unstoppable};
 
     #[test]
     fn or_stop_neither() {
@@ -154,9 +154,9 @@ mod tests {
     }
 
     #[test]
-    fn or_stop_with_never() {
+    fn or_stop_with_unstoppable() {
         let source = StopSource::new();
-        let combined = OrStop::new(Never, source.as_ref());
+        let combined = OrStop::new(Unstoppable, source.as_ref());
 
         assert!(!combined.should_stop());
 

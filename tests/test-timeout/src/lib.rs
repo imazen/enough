@@ -1,7 +1,7 @@
 //! Tests for timeout behavior.
 #![allow(unused_imports, dead_code)]
 
-use almost_enough::{Never, Stop, StopReason, Stopper, TimeoutExt};
+use almost_enough::{Stop, StopReason, Stopper, TimeoutExt, Unstoppable};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -95,8 +95,8 @@ fn remaining_decreases() {
 }
 
 #[test]
-fn never_no_timeout() {
-    let stop = Never.with_timeout(Duration::from_secs(60));
+fn unstoppable_with_timeout() {
+    let stop = Unstoppable.with_timeout(Duration::from_secs(60));
     assert!(stop.remaining() < Duration::from_secs(61));
     assert!(!stop.should_stop());
 }
