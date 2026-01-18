@@ -7,7 +7,7 @@ Minimal cooperative cancellation for Rust.
 [![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
 [![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.64-blue.svg)](https://blog.rust-lang.org/2022/09/22/Rust-1.64.0.html)
+[![MSRV](https://img.shields.io/badge/MSRV-1.71-blue.svg)](https://blog.rust-lang.org/2023/07/13/Rust-1.71.0.html)
 
 ## Why "enough"?
 

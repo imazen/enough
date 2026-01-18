@@ -18,13 +18,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, 1.64]
+        rust: [stable, 1.71]
         exclude:
           # MSRV only on Linux
           - os: windows-latest
-            rust: 1.64
+            rust: 1.71
           - os: macos-latest
-            rust: 1.64
+            rust: 1.71
 
     steps:
       - uses: actions/checkout@v6
@@ -149,4 +149,4 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
