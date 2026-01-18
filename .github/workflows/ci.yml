@@ -18,13 +18,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, 1.56]
+        rust: [stable, 1.64]
         exclude:
           # MSRV only on Linux
           - os: windows-latest
-            rust: 1.56
+            rust: 1.64
           - os: macos-latest
-            rust: 1.56
+            rust: 1.64
 
     steps:
       - uses: actions/checkout@v6

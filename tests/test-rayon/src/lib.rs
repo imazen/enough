@@ -34,7 +34,8 @@ fn parallel_iter_cancelled() {
     let stop = Stopper::new();
     let processed = Arc::new(AtomicUsize::new(0));
 
-    let items: Vec<usize> = (0..10000).collect();
+    // Use more items to ensure cancellation has time to propagate
+    let items: Vec<usize> = (0..100000).collect();
 
     // Cancel after processing starts
     let stop_clone = stop.clone();
@@ -52,6 +53,8 @@ fn parallel_iter_cancelled() {
         .par_iter()
         .map(|&item| {
             processed.fetch_add(1, Ordering::Relaxed);
+            // Add a tiny bit of work to slow down processing enough for cancellation to propagate
+            std::hint::black_box(item);
             process_item(item, &stop_for_map)
         })
         .collect();
@@ -62,11 +65,14 @@ fn parallel_iter_cancelled() {
         .filter(|r| matches!(r, Err(StopReason::Cancelled)))
         .count();
 
-    assert!(cancelled_count > 0, "Some items should have been cancelled");
+    // With 100k items and cancellation after 100, most items should be cancelled
+    // But due to rayon's work-stealing, some may have been queued before cancellation
+    assert!(cancelled_count > 0, "Some items should have been cancelled (got {} cancelled out of {})",
+            cancelled_count, results.len());
 
     // But not all (some completed before cancellation)
     let success_count = results.iter().filter(|r| r.is_ok()).count();
-    assert!(success_count > 0, "Some items should have succeeded");
+    assert!(success_count > 0, "Some items should have succeeded (got {} successes)", success_count);
 }
 
 #[test]

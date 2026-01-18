@@ -7,7 +7,7 @@ Batteries-included ergonomic extensions for the [`enough`](https://crates.io/cra
 [![Documentation](https://docs.rs/almost-enough/badge.svg)](https://docs.rs/almost-enough)
 [![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/almost-enough.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.56-blue.svg)](https://blog.rust-lang.org/2021/10/21/Rust-1.56.0.html)
+[![MSRV](https://img.shields.io/badge/MSRV-1.64-blue.svg)](https://blog.rust-lang.org/2022/09/22/Rust-1.64.0.html)
 
 While [`enough`](https://crates.io/crates/enough) provides only the minimal `Stop` trait, this crate provides all concrete implementations, combinators, and helpers. It re-exports everything from `enough` for convenience.
 
