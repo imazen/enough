@@ -2,8 +2,10 @@
 
 Minimal cooperative cancellation trait for Rust.
 
+[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/enough.svg)](https://crates.io/crates/enough)
 [![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
+[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.56-blue.svg)](https://blog.rust-lang.org/2021/10/21/Rust-1.56.0.html)
 

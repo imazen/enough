@@ -2,8 +2,10 @@
 
 Minimal cooperative cancellation for Rust.
 
+[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/enough.svg)](https://crates.io/crates/enough)
 [![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
+[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.56-blue.svg)](https://blog.rust-lang.org/2021/10/21/Rust-1.56.0.html)
 
@@ -98,7 +100,7 @@ This preserves backwards compatibility while making cancellation available.
 
 ```toml
 [dependencies]
-almost-enough = "0.1"  # Includes all implementations
+almost-enough = "0.3"  # Includes all implementations
 ```
 
 Choose the implementation that fits your needs:
@@ -148,15 +150,15 @@ let result = my_codec::process(&data, Unstoppable);
 
 **`enough`** (for library authors):
 ```toml
-enough = "0.1"                    # no_std core only
-enough = { version = "0.1", features = ["alloc"] }  # + Box/Arc impls
-enough = { version = "0.1", features = ["std"] }    # + Error impl
+enough = "0.3"                    # no_std core only
+enough = { version = "0.3", features = ["alloc"] }  # + Box/Arc impls
+enough = { version = "0.3", features = ["std"] }    # + Error impl
 ```
 
 **`almost-enough`** (for applications):
 ```toml
-almost-enough = "0.1"                    # std (default) - all features
-almost-enough = { version = "0.1", default-features = false, features = ["alloc"] }  # no_std + alloc
+almost-enough = "0.3"                    # std (default) - all features
+almost-enough = { version = "0.3", default-features = false, features = ["alloc"] }  # no_std + alloc
 ```
 
 ## Memory Ordering
