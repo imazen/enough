@@ -2,8 +2,10 @@
 
 FFI helpers for the [`enough`](https://crates.io/crates/enough) cooperative cancellation trait.
 
+[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/enough-ffi.svg)](https://crates.io/crates/enough-ffi)
 [![Documentation](https://docs.rs/enough-ffi/badge.svg)](https://docs.rs/enough-ffi)
+[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/enough-ffi.svg)](LICENSE-MIT)
 
 This crate provides C-compatible functions and types for bridging cancellation across language boundaries. Use it to integrate Rust libraries with C#/.NET, Python, Node.js, and other languages that can call C APIs.

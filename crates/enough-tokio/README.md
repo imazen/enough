@@ -2,8 +2,10 @@
 
 Tokio integration for the [`enough`](https://crates.io/crates/enough) cooperative cancellation trait.
 
+[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/enough-tokio.svg)](https://crates.io/crates/enough-tokio)
 [![Documentation](https://docs.rs/enough-tokio/badge.svg)](https://docs.rs/enough-tokio)
+[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/enough-tokio.svg)](LICENSE-MIT)
 
 This crate bridges tokio's `CancellationToken` with the `Stop` trait, allowing you to use tokio's cancellation system with any library that accepts `impl Stop`.
