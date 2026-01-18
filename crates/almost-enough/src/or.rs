@@ -188,14 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn or_stop_is_clone() {
+    fn or_stop_ref_is_copy() {
+        // OrStop<StopRef, StopRef> is Copy since StopRef is Copy
         let a = StopSource::new();
         let b = StopSource::new();
         let combined = OrStop::new(a.as_ref(), b.as_ref());
-        let combined2 = combined.clone();
+        let combined2 = combined; // Copy
 
         a.cancel();
-        assert!(combined.should_stop());
+        assert!(combined.should_stop()); // Original still usable
         assert!(combined2.should_stop());
     }
 

@@ -162,10 +162,11 @@ mod tests {
     }
 
     #[test]
-    fn fn_stop_clone() {
-        // Note: closures that borrow aren't Clone, but fn pointers are
+    fn fn_stop_copy() {
+        // Note: closures that borrow aren't Copy, but fn pointers are
         let stop: FnStop<fn() -> bool> = FnStop::new(|| false);
-        let stop2 = stop.clone();
+        let stop2 = stop; // Copy, not Clone
+        assert!(!stop.should_stop()); // Original still usable
         assert!(!stop2.should_stop());
     }
 }
