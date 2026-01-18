@@ -148,12 +148,15 @@ impl std::fmt::Debug for TokioStop {
 }
 
 /// Extension trait for CancellationToken to easily convert to Stop.
-pub trait CancellationTokenExt {
+///
+/// Named `CancellationTokenStopExt` to avoid potential conflicts if
+/// `tokio_util` ever adds a `CancellationTokenExt` trait.
+pub trait CancellationTokenStopExt {
     /// Convert to a TokioStop for use with `impl Stop` APIs.
     fn as_stop(&self) -> TokioStop;
 }
 
-impl CancellationTokenExt for CancellationToken {
+impl CancellationTokenStopExt for CancellationToken {
     fn as_stop(&self) -> TokioStop {
         TokioStop::new(self.clone())
     }

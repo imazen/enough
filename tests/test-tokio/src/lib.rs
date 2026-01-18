@@ -2,7 +2,7 @@
 #![allow(unused_imports, dead_code)]
 
 use almost_enough::Stop;
-use enough_tokio::{CancellationTokenExt, TokioStop};
+use enough_tokio::{CancellationTokenStopExt, TokioStop};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

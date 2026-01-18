@@ -73,7 +73,7 @@ assert!(stop.should_stop());
 ### Extension Trait
 
 ```rust
-use enough_tokio::CancellationTokenExt;
+use enough_tokio::CancellationTokenStopExt;
 use tokio_util::sync::CancellationToken;
 
 let token = CancellationToken::new();
@@ -225,9 +225,9 @@ async fn main() {
 | `should_stop()` | Check if cancelled (from `Stop` trait) |
 | `check()` | Check with `Result` return (from `Stop` trait) |
 
-### `CancellationTokenExt`
+### `CancellationTokenStopExt`
 
-Extension trait for `CancellationToken`:
+Extension trait for `CancellationToken` (named to avoid conflicts with potential future tokio_util traits):
 
 | Method | Description |
 |--------|-------------|
