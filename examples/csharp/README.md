@@ -77,16 +77,20 @@ public static extern int process_image(
 Your Rust function would look like:
 
 ```rust
+use enough_ffi::FfiCancellationToken;
+use enough::Stop;
+
 #[no_mangle]
 pub extern "C" fn process_image(
     data: *const u8,
     len: usize,
-    cancel: *const FfiCancellationSource,
+    token: *const FfiCancellationToken,
 ) -> i32 {
-    let token = unsafe { FfiCancellationToken::from_ptr(cancel) };
+    // Create a non-owning view from the token pointer
+    let stop = unsafe { FfiCancellationToken::from_ptr(token) };
 
-    // Use token with any library that accepts impl Stop
-    match my_codec::decode(data, len, token) {
+    // Use stop with any library that accepts impl Stop
+    match my_codec::decode(data, len, stop) {
         Ok(_) => 0,
         Err(e) if e.is_cancelled() => -1,
         Err(_) => -2,
