@@ -73,8 +73,8 @@ struct TreeInner {
     parent: Option<BoxedStop>,
 }
 
-impl std::fmt::Debug for TreeInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for TreeInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("TreeInner")
             .field("self_cancelled", &self.self_cancelled)
             .field("parent", &self.parent.as_ref().map(|_| "<BoxedStop>"))

@@ -1,6 +1,6 @@
 //! # almost-enough
 //!
-//! Batteries-included ergonomic extensions for the [`enough`] cooperative cancellation crate.
+//! Batteries-included ergonomic extensions for the [`enough`](https://crates.io/crates/enough) cooperative cancellation crate.
 //!
 //! This crate provides all the concrete implementations and helpers for working with
 //! stop tokens. It re-exports everything from `enough` for convenience.
@@ -8,6 +8,8 @@
 //! ## Quick Start
 //!
 //! ```rust
+//! # #[cfg(feature = "alloc")]
+//! # fn main() {
 //! use almost_enough::{Stopper, Stop};
 //!
 //! let stop = Stopper::new();
@@ -19,6 +21,9 @@
 //! // Any clone can cancel
 //! stop.cancel();
 //! assert!(stop2.should_stop());
+//! # }
+//! # #[cfg(not(feature = "alloc"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Type Overview
