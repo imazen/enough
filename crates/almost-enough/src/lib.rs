@@ -1,29 +1,61 @@
 //! # almost-enough
 //!
-//! Batteries-included ergonomic extensions for the [`enough`](https://crates.io/crates/enough) cooperative cancellation crate.
+//! Cooperative cancellation for Rust. Cancel long-running operations from another thread.
 //!
-//! This crate provides all the concrete implementations and helpers for working with
-//! stop tokens. It re-exports everything from `enough` for convenience.
+//! ## Which Crate?
 //!
-//! ## Quick Start
+//! - **Application code**: Use `almost-enough` (this crate) - has all implementations
+//! - **Library code**: Depend on [`enough`](https://docs.rs/enough) (minimal) and accept `impl Stop`
+//!
+//! ## Complete Example
 //!
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
 //! use almost_enough::{Stopper, Stop};
+//! use std::thread;
+//! use std::time::Duration;
 //!
+//! // 1. Create a stopper
 //! let stop = Stopper::new();
-//! let stop2 = stop.clone();  // Clone to share
 //!
-//! // Pass to operations
-//! assert!(!stop2.should_stop());
+//! // 2. Clone and pass to worker thread
+//! let worker_stop = stop.clone();
+//! let handle = thread::spawn(move || {
+//!     for i in 0..1000 {
+//!         // 3. Check periodically - exit early if cancelled
+//!         if worker_stop.should_stop() {
+//!             return Err("cancelled");
+//!         }
+//!         // ... do work ...
+//!         # std::hint::black_box(i);
+//!     }
+//!     Ok("completed")
+//! });
 //!
-//! // Any clone can cancel
+//! // 4. Cancel from main thread (or signal handler, timeout, etc.)
+//! thread::sleep(Duration::from_millis(1));
 //! stop.cancel();
-//! assert!(stop2.should_stop());
+//!
+//! // Worker exits early
+//! let result = handle.join().unwrap();
+//! // result is either Ok("completed") or Err("cancelled")
 //! # }
 //! # #[cfg(not(feature = "alloc"))]
 //! # fn main() {}
+//! ```
+//!
+//! ## Quick Reference
+//!
+//! ```rust,no_run
+//! # use almost_enough::{Stopper, Stop, StopReason};
+//! # fn example() -> Result<(), StopReason> {
+//! let stop = Stopper::new();
+//! stop.cancel();              // Trigger cancellation
+//! stop.should_stop();         // Returns true if cancelled
+//! stop.check()?;              // Returns Err(StopReason) if cancelled
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Type Overview

@@ -1,13 +1,15 @@
 //! # enough
 //!
-//! Minimal cooperative cancellation trait for long-running operations.
+//! Minimal cooperative cancellation trait. Zero dependencies, `no_std` compatible.
 //!
-//! This crate provides the core [`Stop`] trait that codec authors and library
-//! writers can use to support cancellation. It is `no_std` with zero dependencies.
+//! ## Which Crate?
+//!
+//! - **Library authors**: Use this crate (`enough`) - minimal, zero deps
+//! - **Application code**: Use [`almost-enough`](https://docs.rs/almost-enough) for concrete types
 //!
 //! ## For Library Authors
 //!
-//! Accept `impl Stop` in your long-running functions:
+//! Accept `impl Stop` as the last parameter. Re-export `Unstoppable` for callers who don't need cancellation:
 //!
 //! ```rust
 //! use enough::{Stop, StopReason};

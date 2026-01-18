@@ -1,42 +1,58 @@
 //! # enough-tokio
 //!
-//! Tokio integration for the [`enough`] cancellation trait.
+//! Bridge tokio's `CancellationToken` to the [`Stop`] trait.
 //!
-//! This crate provides adapters between tokio's cancellation primitives
-//! and the [`Stop`] trait.
+//! ## When to Use
 //!
-//! ## Wrapping Tokio's CancellationToken
+//! Use this crate when you have:
+//! - Tokio async code that needs to cancel CPU-intensive sync work in `spawn_blocking`
+//! - Libraries that accept `impl Stop` and you want to use tokio's cancellation
 //!
-//! ```rust,ignore
+//! ## Complete Example
+//!
+//! ```rust,no_run
 //! use enough_tokio::TokioStop;
 //! use enough::Stop;
 //! use tokio_util::sync::CancellationToken;
 //!
+//! #[tokio::main]
+//! async fn main() {
+//!     let token = CancellationToken::new();
+//!     let stop = TokioStop::new(token.clone());
+//!
+//!     // Spawn CPU-intensive work
+//!     let handle = tokio::task::spawn_blocking(move || {
+//!         for i in 0..1_000_000 {
+//!             if i % 1000 == 0 && stop.should_stop() {
+//!                 return Err("cancelled");
+//!             }
+//!             // ... do work ...
+//!         }
+//!         Ok("done")
+//!     });
+//!
+//!     // Cancel after timeout
+//!     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+//!     token.cancel();
+//!
+//!     let result = handle.await.unwrap();
+//!     println!("{:?}", result);
+//! }
+//! ```
+//!
+//! ## Quick Reference
+//!
+//! ```rust,no_run
+//! # use enough_tokio::TokioStop;
+//! # use enough::Stop;
+//! # use tokio_util::sync::CancellationToken;
 //! let token = CancellationToken::new();
 //! let stop = TokioStop::new(token.clone());
 //!
-//! // Use in blocking context
-//! tokio::task::spawn_blocking(move || {
-//!     for i in 0..1000 {
-//!         stop.check()?;
-//!         // do work...
-//!     }
-//!     Ok(())
-//! });
-//!
-//! // Cancel from async context
-//! token.cancel();
-//! ```
-//!
-//! ## Async Waiting
-//!
-//! ```rust,ignore
-//! use enough_tokio::TokioStop;
-//!
-//! let stop = TokioStop::new(token);
-//!
-//! // Wait for cancellation in async code
-//! stop.cancelled().await;
+//! stop.should_stop();         // Check if cancelled (sync)
+//! stop.cancel();              // Trigger cancellation
+//! // stop.cancelled().await;  // Wait for cancellation (async)
+//! let child = stop.child();   // Create child token
 //! ```
 
 #![warn(missing_docs)]
