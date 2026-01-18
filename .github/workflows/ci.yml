@@ -38,6 +38,23 @@ jobs:
 
       - name: Test (default features)
         run: cargo test --workspace
+        if: matrix.rust == 'stable'
+
+      # MSRV: test core crates only (test-rayon requires rayon-core 1.13 which needs Rust 1.80)
+      - name: Test MSRV (core crates)
+        run: |
+          cargo test -p enough
+          cargo test -p almost-enough
+          cargo test -p enough-ffi
+          cargo test -p enough-tokio
+          cargo test -p test-basic
+          cargo test -p test-atomic
+          cargo test -p test-timeout
+          cargo test -p test-child
+          cargo test -p test-tokio
+          cargo test -p test-ffi
+          cargo test -p test-codec-mock
+        if: matrix.rust != 'stable'
 
       - name: Test (no default features)
         run: |

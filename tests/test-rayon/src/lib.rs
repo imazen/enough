@@ -30,8 +30,7 @@ fn parallel_iter_with_token() {
 }
 
 /// This test verifies that cancellation propagates during parallel iteration.
-/// It's inherently racy and may not always observe cancellation depending on
-/// timing, so we use a barrier to ensure cancellation happens mid-iteration.
+/// Uses synchronization barriers and artificial delays to make behavior deterministic.
 #[test]
 fn parallel_iter_cancelled() {
     use std::sync::Barrier;
@@ -41,7 +40,8 @@ fn parallel_iter_cancelled() {
     // Barrier ensures cancellation thread waits until processing has started
     let barrier = Arc::new(Barrier::new(2));
 
-    let items: Vec<usize> = (0..100000).collect();
+    // Use enough items that some will definitely be pending when cancellation occurs
+    let items: Vec<usize> = (0..10000).collect();
 
     // Cancel after first item signals it's processing
     let stop_clone = stop.clone();
@@ -49,8 +49,6 @@ fn parallel_iter_cancelled() {
     std::thread::spawn(move || {
         // Wait for processing to signal it has started
         barrier_clone.wait();
-        // Give rayon a moment to queue up more work
-        std::thread::sleep(std::time::Duration::from_micros(100));
         stop_clone.cancel();
     });
 
@@ -65,8 +63,15 @@ fn parallel_iter_cancelled() {
             // Signal barrier on first item only
             if !first_signal_ref.swap(true, Ordering::Relaxed) {
                 barrier_for_map.wait();
+                // Small delay after barrier to let cancellation propagate
+                std::thread::sleep(std::time::Duration::from_micros(50));
             }
             processed.fetch_add(1, Ordering::Relaxed);
+            // Small delay per item to ensure cancellation has time to be observed
+            std::hint::black_box(item);
+            for _ in 0..100 {
+                std::hint::black_box(item);
+            }
             process_item(item, &stop_for_map)
         })
         .collect();
@@ -79,17 +84,31 @@ fn parallel_iter_cancelled() {
 
     let success_count = results.iter().filter(|r| r.is_ok()).count();
 
-    // At minimum, the processing should have completed (all items accounted for)
+    // All items must be accounted for
     assert_eq!(
         cancelled_count + success_count,
         results.len(),
         "All items should be either cancelled or successful"
     );
 
-    // We expect SOME cancellation, but due to rayon's work-stealing and scheduling,
-    // all items might complete before cancellation propagates. This is acceptable
-    // behavior - the test verifies the mechanism works, not guaranteed timing.
-    // The important thing is no panics and proper accounting.
+    // CRITICAL: Verify cancellation actually propagated
+    // With barrier synchronization and delays, cancellation MUST be observed
+    assert!(
+        cancelled_count > 0,
+        "Cancellation should have been observed. Got {} cancelled, {} successful out of {}. \
+         This indicates the Stop trait may not be working correctly.",
+        cancelled_count,
+        success_count,
+        results.len()
+    );
+
+    // Also verify some items completed before cancellation
+    assert!(
+        success_count > 0,
+        "Some items should have succeeded before cancellation. Got {} cancelled, {} successful.",
+        cancelled_count,
+        success_count
+    );
 }
 
 #[test]
