@@ -46,12 +46,12 @@ pub trait Stop: Send + Sync {
 
 ### For Library Authors
 
-Depend on `enough` (minimal) and accept `impl Stop`:
+Depend on `enough` (minimal) and accept `&dyn Stop`:
 
 ```rust
 use enough::{Stop, StopReason, Unstoppable};
 
-pub fn process(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
+pub fn process(data: &[u8], stop: &dyn Stop) -> Result<Vec<u8>, MyError> {
     let mut output = Vec::new();
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
@@ -65,19 +65,22 @@ pub fn process(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
 impl From<StopReason> for MyError {
     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 }
-
-// Re-export for caller convenience
-pub use enough::Unstoppable;
 ```
+
+**`&dyn Stop` vs `impl Stop`:**
+
+Prefer `&dyn Stop` by default. It keeps your binary smaller (no monomorphization), reduces compile times, and makes the API simpler for callers. The overhead of a virtual call on `check()` is negligible when you're checking every 16-100 iterations of a chunked loop.
+
+Use `impl Stop` (generic) only when the stop check is in a tight inner loop and you need the compiler to inline and eliminate it entirely — for example, checking on every pixel or every byte. In that case, the monomorphized `Unstoppable` path compiles down to zero overhead.
 
 **Naming conventions:**
 
-For **new libraries**, accept `impl Stop` (generic, not `dyn`) as the final parameter with no suffix. Re-export `Unstoppable` so callers can easily opt out of cancellation:
+For **new libraries**, accept `&dyn Stop` as the final parameter with no suffix:
 
 ```rust
-// Caller uses your re-export
-use my_codec::{process, Unstoppable};
-let result = process(&data, Unstoppable);
+use my_codec::process;
+use enough::Unstoppable;
+let result = process(&data, &Unstoppable);
 ```
 
 For **existing libraries** adding cancellation support, create a `_stoppable` variant and delegate:
@@ -85,11 +88,11 @@ For **existing libraries** adding cancellation support, create a `_stoppable` va
 ```rust
 // Original function - unchanged API
 pub fn decode(data: &[u8]) -> Result<Image, Error> {
-    decode_stoppable(data, Unstoppable)
+    decode_stoppable(data, &Unstoppable)
 }
 
 // New stoppable variant
-pub fn decode_stoppable(data: &[u8], stop: impl Stop) -> Result<Image, Error> {
+pub fn decode_stoppable(data: &[u8], stop: &dyn Stop) -> Result<Image, Error> {
     // ... implementation with stop.check() calls
 }
 ```
@@ -114,7 +117,7 @@ let stop2 = stop.clone();
 
 // Pass to libraries
 let handle = std::thread::spawn(move || {
-    my_codec::process(&data, stop2)
+    my_codec::process(&data, &stop2)
 });
 
 // Any clone can cancel
@@ -126,8 +129,11 @@ stop.cancel();
 ```rust
 use almost_enough::Unstoppable;  // or enough::Unstoppable
 
-// Compiles to nothing - zero runtime cost
-let result = my_codec::process(&data, Unstoppable);
+// With &dyn Stop APIs: trivially cheap (Unstoppable::check always returns Ok)
+let result = my_codec::process(&data, &Unstoppable);
+
+// With impl Stop APIs: fully optimized away at compile time
+let result = my_codec::process_hot(&data, Unstoppable);
 ```
 
 ## Type Overview
@@ -236,7 +242,7 @@ let token = CancellationToken::new();
 let stop = TokioStop::new(token.clone());
 
 tokio::task::spawn_blocking(move || {
-    my_codec::process(&data, stop)
+    my_codec::process(&data, &stop)
 });
 ```
 
@@ -244,11 +250,18 @@ tokio::task::spawn_blocking(move || {
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| `Unstoppable.check()` | 0ns | Optimized away |
-| `Stopper.check()` | ~1-2ns | Single atomic load |
-| `WithTimeout.check()` | ~20-30ns | Includes `Instant::now()` |
+| `Unstoppable.check()` | <0.5ns | Compiled to a constant; eliminated entirely with `impl Stop` |
+| `StopSource.check()` | <0.5ns | Stack `AtomicBool`, Relaxed load |
+| `Stopper.check()` | ~0.5ns | Arc `AtomicBool`, Relaxed load |
+| `SyncStopper.check()` | ~0.5ns | Arc `AtomicBool`, Acquire load |
+| `FnStop.check()` | <0.5ns | Closure call returning `false` |
+| `BoxedStop.check()` | ~1ns | Dynamic dispatch overhead |
+| `ChildStopper.check()` | ~0.6–3ns | Walks parent chain; ~0.6ns root, ~1.4ns depth-1, ~2.7ns depth-3 |
+| `OrStop.check()` | ~0.7ns | Two Relaxed loads |
+| `WithTimeout.check()` | ~17ns | Inner check + `Instant::now()` |
+| `&dyn Stop` vs generic | ~0.2ns | Virtual call adds ~0.2ns over monomorphized dispatch |
 
-Check every 16-100 iterations for negligible overhead.
+Measured with Criterion on x86-64 (`cargo bench -p almost-enough`). Check every 16–100 iterations for negligible overhead.
 
 ## Adaptability
 
@@ -261,11 +274,11 @@ The trait-based design means you can:
 5. **Integrate with async** - Use `enough-tokio`
 6. **Call from FFI** - Use `enough-ffi`
 
-Libraries accepting `impl Stop` work with all of these without changes.
+Libraries accepting `&dyn Stop` or `impl Stop` work with all of these without changes.
 
-## Zero-Cost Proof
+## Zero-Cost Proof (impl Stop)
 
-`impl Stop` is generic, not `dyn` - each type is monomorphized. When you pass `Unstoppable`, the compiler eliminates all cancellation checks entirely.
+When an API uses `impl Stop`, each type is monomorphized. Pass `Unstoppable` and the compiler eliminates all cancellation checks entirely. This matters for tight inner loops; for coarser check intervals, `&dyn Stop` is the better default (see [For Library Authors](#for-library-authors)).
 
 ```rust
 #[inline(never)]

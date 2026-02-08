@@ -16,3 +16,10 @@ std = ["alloc"]
 
 [dependencies]
 enough = { version = "0.3.1", path = "../enough", default-features = false }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "stop_check"
+harness = false
