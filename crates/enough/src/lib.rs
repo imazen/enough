@@ -58,7 +58,7 @@
 //! ## Feature Flags
 //!
 //! - **None (default)** - Core trait only, `no_std` compatible
-//! - **`std`** - Adds `std::error::Error` impl for `StopReason`
+//! - **`std`** - Implies `alloc` (kept for downstream compatibility)
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]

@@ -58,7 +58,7 @@ For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, et
 
 - **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Unstoppable`
 - **`alloc`** - Adds `Box<T>` and `Arc<T>` blanket impls for `Stop`
-- **`std`** - Implies `alloc`. Adds `std::error::Error` impl for `StopReason`
+- **`std`** - Implies `alloc` (kept for downstream compatibility)
 
 ## See Also
 

@@ -1,6 +1,6 @@
 [package]
 name = "enough-tokio"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.63"
 license = "MIT OR Apache-2.0"
@@ -14,7 +14,7 @@ readme = "README.md"
 default = []
 
 [dependencies]
-enough = { version = "0.3", path = "../enough", default-features = false }
+enough = { version = "0.4", path = "../enough", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 
 [dev-dependencies]

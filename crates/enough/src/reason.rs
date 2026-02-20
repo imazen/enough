@@ -74,9 +74,6 @@ impl fmt::Display for StopReason {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for StopReason {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

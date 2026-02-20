@@ -234,7 +234,8 @@ enough/
 
 ### `enough` (core)
 - `default = []` - Pure `no_std`, zero dependencies
-- `std` - Enables `std::error::Error` impl for `StopReason`
+- `alloc` - Adds `Box<T>` and `Arc<T>` blanket impls
+- `std` - Implies `alloc` (kept for downstream compatibility)
 
 ### `enough-std`
 - `default = ["std"]`
