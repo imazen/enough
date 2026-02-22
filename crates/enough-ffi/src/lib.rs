@@ -62,7 +62,7 @@
 //! use enough_ffi::{enough_token_create, enough_token_destroy, FfiCancellationToken};
 //! use enough::Stop;
 //!
-//! #[no_mangle]
+//! #[unsafe(no_mangle)]
 //! pub extern "C" fn decode(
 //!     data: *const u8,
 //!     len: usize,
@@ -301,7 +301,7 @@ impl std::fmt::Debug for FfiCancellationTokenView {
 /// [`enough_cancellation_destroy`].
 ///
 /// Returns null if allocation fails.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
     Box::into_raw(Box::new(FfiCancellationSource::new()))
 }
@@ -315,7 +315,7 @@ pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
 ///
 /// `ptr` must be a valid pointer returned by [`enough_cancellation_create`],
 /// or null (which is a no-op).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationSource) {
     if let Some(source) = ptr.as_ref() {
         source.cancel();
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationS
 ///
 /// `ptr` must be a valid pointer returned by [`enough_cancellation_create`],
 /// or null (which returns false).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_cancellation_is_cancelled(
     ptr: *const FfiCancellationSource,
 ) -> bool {
@@ -345,7 +345,7 @@ pub unsafe extern "C" fn enough_cancellation_is_cancelled(
 /// - `ptr` must be a valid pointer returned by [`enough_cancellation_create`],
 ///   or null (which is a no-op)
 /// - The pointer must not be used after this call
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_cancellation_destroy(ptr: *mut FfiCancellationSource) {
     if !ptr.is_null() {
         drop(Box::from_raw(ptr));
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn enough_cancellation_destroy(ptr: *mut FfiCancellationSo
 ///
 /// `source` must be a valid pointer returned by [`enough_cancellation_create`],
 /// or null (which creates a "never cancelled" token).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_create(
     source: *const FfiCancellationSource,
 ) -> *mut FfiCancellationToken {
@@ -382,7 +382,7 @@ pub unsafe extern "C" fn enough_token_create(
 ///
 /// This token will never report as cancelled. Must be destroyed with
 /// [`enough_token_destroy`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
     Box::into_raw(Box::new(FfiCancellationToken::never()))
 }
@@ -393,7 +393,7 @@ pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
 ///
 /// `token` must be a valid pointer returned by [`enough_token_create`],
 /// or null (which returns false).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellationToken) -> bool {
     token.as_ref().map(|t| t.should_stop()).unwrap_or(false)
 }
@@ -405,7 +405,7 @@ pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellation
 /// - `token` must be a valid pointer returned by [`enough_token_create`],
 ///   or null (which is a no-op)
 /// - The pointer must not be used after this call
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_destroy(token: *mut FfiCancellationToken) {
     if !token.is_null() {
         drop(Box::from_raw(token));
