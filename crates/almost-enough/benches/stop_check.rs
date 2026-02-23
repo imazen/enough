@@ -5,7 +5,7 @@ use almost_enough::{
     ChildStopper, FnStop, OrStop, Stop, StopExt, StopSource, Stopper, SyncStopper, TimeoutExt,
     Unstoppable, WithTimeout,
 };
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 // ── Group: check (hot path, not cancelled) ──────────────────────────
 

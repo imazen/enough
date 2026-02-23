@@ -308,8 +308,8 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_tasks_same_token() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let token = CancellationToken::new();
         let cancelled_count = Arc::new(AtomicUsize::new(0));

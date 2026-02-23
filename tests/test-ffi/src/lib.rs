@@ -3,10 +3,10 @@
 
 use almost_enough::Stop;
 use enough_ffi::{
+    FfiCancellationSource, FfiCancellationToken, FfiCancellationTokenView,
     enough_cancellation_cancel, enough_cancellation_create, enough_cancellation_destroy,
     enough_cancellation_is_cancelled, enough_token_create, enough_token_create_never,
-    enough_token_destroy, enough_token_is_cancelled, FfiCancellationSource, FfiCancellationToken,
-    FfiCancellationTokenView,
+    enough_token_destroy, enough_token_is_cancelled,
 };
 use std::thread;
 

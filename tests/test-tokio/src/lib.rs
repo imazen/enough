@@ -3,8 +3,8 @@
 
 use almost_enough::Stop;
 use enough_tokio::{CancellationTokenStopExt, TokioStop};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 

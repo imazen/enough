@@ -82,8 +82,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use enough::{Stop, StopReason};
 
@@ -332,7 +332,9 @@ pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationS
 pub unsafe extern "C" fn enough_cancellation_is_cancelled(
     ptr: *const FfiCancellationSource,
 ) -> bool {
-    unsafe { ptr.as_ref() }.map(|s| s.is_cancelled()).unwrap_or(false)
+    unsafe { ptr.as_ref() }
+        .map(|s| s.is_cancelled())
+        .unwrap_or(false)
 }
 
 /// Destroy a cancellation source.
@@ -395,7 +397,9 @@ pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
 /// or null (which returns false).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellationToken) -> bool {
-    unsafe { token.as_ref() }.map(|t| t.should_stop()).unwrap_or(false)
+    unsafe { token.as_ref() }
+        .map(|t| t.should_stop())
+        .unwrap_or(false)
 }
 
 /// Destroy a token.
@@ -608,8 +612,8 @@ mod tests {
 
     #[test]
     fn concurrent_access_stress() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         unsafe {

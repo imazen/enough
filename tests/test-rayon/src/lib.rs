@@ -3,8 +3,8 @@
 
 use almost_enough::{Stop, StopReason, Stopper};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Simulated work that respects cancellation
 fn process_item(item: usize, stop: &impl Stop) -> Result<usize, StopReason> {
