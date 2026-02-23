@@ -317,7 +317,7 @@ pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
 /// or null (which is a no-op).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationSource) {
-    if let Some(source) = ptr.as_ref() {
+    if let Some(source) = unsafe { ptr.as_ref() } {
         source.cancel();
     }
 }
@@ -332,7 +332,7 @@ pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationS
 pub unsafe extern "C" fn enough_cancellation_is_cancelled(
     ptr: *const FfiCancellationSource,
 ) -> bool {
-    ptr.as_ref().map(|s| s.is_cancelled()).unwrap_or(false)
+    unsafe { ptr.as_ref() }.map(|s| s.is_cancelled()).unwrap_or(false)
 }
 
 /// Destroy a cancellation source.
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn enough_cancellation_is_cancelled(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_cancellation_destroy(ptr: *mut FfiCancellationSource) {
     if !ptr.is_null() {
-        drop(Box::from_raw(ptr));
+        drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
@@ -371,7 +371,7 @@ pub unsafe extern "C" fn enough_cancellation_destroy(ptr: *mut FfiCancellationSo
 pub unsafe extern "C" fn enough_token_create(
     source: *const FfiCancellationSource,
 ) -> *mut FfiCancellationToken {
-    let token = match source.as_ref() {
+    let token = match unsafe { source.as_ref() } {
         Some(s) => s.create_token(),
         None => FfiCancellationToken::never(),
     };
@@ -395,7 +395,7 @@ pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
 /// or null (which returns false).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellationToken) -> bool {
-    token.as_ref().map(|t| t.should_stop()).unwrap_or(false)
+    unsafe { token.as_ref() }.map(|t| t.should_stop()).unwrap_or(false)
 }
 
 /// Destroy a token.
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn enough_token_is_cancelled(token: *const FfiCancellation
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn enough_token_destroy(token: *mut FfiCancellationToken) {
     if !token.is_null() {
-        drop(Box::from_raw(token));
+        drop(unsafe { Box::from_raw(token) });
     }
 }
 
