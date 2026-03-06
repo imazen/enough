@@ -48,6 +48,8 @@
 //! ## Quick Reference
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "alloc")]
+//! # fn main() {
 //! # use almost_enough::{Stopper, Stop, StopReason};
 //! # fn example() -> Result<(), StopReason> {
 //! let stop = Stopper::new();
@@ -56,6 +58,9 @@
 //! stop.check()?;              // Returns Err(StopReason) if cancelled
 //! # Ok(())
 //! # }
+//! # }
+//! # #[cfg(not(feature = "alloc"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Type Overview
