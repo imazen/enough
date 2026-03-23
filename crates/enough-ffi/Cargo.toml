@@ -14,6 +14,6 @@ readme = "README.md"
 default = []
 
 [dependencies]
-enough = { version = "0.4", path = "../enough", default-features = false, features = ["std"] }
+enough = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

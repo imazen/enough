@@ -74,7 +74,8 @@
 //! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
 //! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
-//! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
+//! | [`DynStop`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
+//! | [`BoxedStop`] | alloc | Type-erased (prefer `DynStop`) |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 //!
 //! ## StopExt Extension Trait
@@ -95,21 +96,23 @@
 //! assert!(combined.should_stop());
 //! ```
 //!
-//! ## Type Erasure with `into_boxed()`
+//! ## Type Erasure with `into_dyn()`
 //!
-//! Prevent monomorphization explosion at API boundaries:
+//! Prevent monomorphization explosion at API boundaries. [`DynStop`] is
+//! `Clone` (cheap Arc increment) and can be sent across threads:
 //!
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
-//! use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
+//! use almost_enough::{Stopper, DynStop, Stop, StopExt};
 //!
 //! fn outer(stop: impl Stop + 'static) {
-//!     // Erase the concrete type to avoid monomorphizing inner()
-//!     inner(stop.into_boxed());
+//!     // Erase the concrete type — DynStop is Clone
+//!     inner(stop.into_dyn());
 //! }
 //!
-//! fn inner(stop: BoxedStop) {
+//! fn inner(stop: DynStop) {
+//!     let stop2 = stop.clone(); // cheap Arc increment
 //!     // Only one version of this function exists
 //!     while !stop.should_stop() {
 //!         break;
@@ -217,6 +220,10 @@ mod tree;
 
 #[cfg(feature = "alloc")]
 pub use boxed::BoxedStop;
+#[cfg(feature = "alloc")]
+mod dyn_stop;
+#[cfg(feature = "alloc")]
+pub use dyn_stop::DynStop;
 #[cfg(feature = "alloc")]
 pub use stopper::Stopper;
 #[cfg(feature = "alloc")]
@@ -330,6 +337,10 @@ pub trait StopExt: Stop + Sized {
     /// # #[cfg(not(feature = "alloc"))]
     /// # fn main() {}
     /// ```
+    /// Convert this stop into a boxed trait object.
+    ///
+    /// **Prefer [`into_dyn()`](StopExt::into_dyn)** which returns a [`DynStop`]
+    /// that is `Clone` and supports indirection collapsing.
     #[cfg(feature = "alloc")]
     #[inline]
     fn into_boxed(self) -> BoxedStop
@@ -337,6 +348,36 @@ pub trait StopExt: Stop + Sized {
         Self: 'static,
     {
         BoxedStop::new(self)
+    }
+
+    /// Convert this stop into a shared, cloneable [`DynStop`].
+    ///
+    /// The result is `Clone` (via `Arc` increment) and can be sent across
+    /// threads. Use this when you need owned, cloneable type erasure.
+    ///
+    /// If `self` is already a `DynStop`, this is a no-op (no double-wrapping).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "alloc")]
+    /// # fn main() {
+    /// use almost_enough::{Stopper, DynStop, Stop, StopExt};
+    ///
+    /// let stop = Stopper::new();
+    /// let dyn_stop: DynStop = stop.into_dyn();
+    /// let clone = dyn_stop.clone(); // cheap Arc increment
+    /// # }
+    /// # #[cfg(not(feature = "alloc"))]
+    /// # fn main() {}
+    /// ```
+    #[cfg(feature = "alloc")]
+    #[inline]
+    fn into_dyn(self) -> DynStop
+    where
+        Self: 'static,
+    {
+        DynStop::new(self)
     }
 
     /// Create a child stop that inherits cancellation from this stop.

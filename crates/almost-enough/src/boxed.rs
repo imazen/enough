@@ -47,6 +47,10 @@ use crate::{Stop, StopReason};
 
 /// A heap-allocated [`Stop`] implementation.
 ///
+/// **Prefer [`DynStop`](crate::DynStop)** which is `Clone` (via `Arc`) and
+/// supports indirection collapsing. `BoxedStop` is retained for cases where
+/// unique ownership is required.
+///
 /// This type provides dynamic dispatch for `Stop`, avoiding monomorphization
 /// bloat when you don't need the performance of generics.
 ///
