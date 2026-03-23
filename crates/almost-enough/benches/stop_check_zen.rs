@@ -50,7 +50,7 @@ fn main() {
         suite.compare("per_call_cost", |group| {
             group
                 .config()
-                .rounds(200)
+                .max_rounds(200)
                 .cache_firewall(false)
                 .sort_by_speed(true);
             group.throughput(zenbench::Throughput::Elements(100));
@@ -219,7 +219,7 @@ fn main() {
         suite.compare("hot_loop_unstoppable", |group| {
             group
                 .config()
-                .rounds(100)
+                .max_rounds(100)
                 .cache_firewall(false)
                 .sort_by_speed(true);
             group.baseline("generic");
@@ -261,7 +261,7 @@ fn main() {
         suite.compare("hot_loop_stopper", |group| {
             group
                 .config()
-                .rounds(100)
+                .max_rounds(100)
                 .cache_firewall(false)
                 .sort_by_speed(true);
             group.baseline("generic");
@@ -305,7 +305,7 @@ fn main() {
         // ═══════════════════════════════════════════════════════════
 
         suite.compare("check_cancelled", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().max_rounds(200).cache_firewall(false);
 
             group.bench("Stopper", |b| {
                 let stop = Stopper::cancelled();
@@ -321,7 +321,7 @@ fn main() {
         suite.compare("cold_cache_stopper", |group| {
             group
                 .config()
-                .rounds(100)
+                .max_rounds(100)
                 .cache_firewall(true)
                 .sort_by_speed(true);
             group.baseline("&dyn Stop");
