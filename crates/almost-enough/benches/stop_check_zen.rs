@@ -52,69 +52,22 @@ fn check_dynstop_active(stop: &DynStop) -> Result<(), almost_enough::StopReason>
     stop.check()
 }
 
-// ── Helpers: hot loop variants ──────────────────────────────────────
+// ── Hot loop macro ──────────────────────────────────────────────────
+// Inlined into each benchmark closure so the compiler sees the full
+// picture — exactly like real code. No #[inline(never)] boundary.
 
-#[inline(never)]
-fn hot_loop_generic(stop: &impl Stop) -> usize {
-    let mut acc = 0usize;
-    for i in 0..HOT_LOOP_ITERS {
-        if i % CHECK_INTERVAL == 0 {
-            let _ = stop.check();
+macro_rules! hot_loop {
+    ($stop:expr) => {{
+        let stop = $stop;
+        let mut acc = 0usize;
+        for i in 0..HOT_LOOP_ITERS {
+            if i % CHECK_INTERVAL == 0 {
+                let _ = stop.check();
+            }
+            acc = acc.wrapping_add(trivial_work(i));
         }
-        acc = acc.wrapping_add(trivial_work(i));
-    }
-    acc
-}
-
-#[inline(never)]
-fn hot_loop_dyn(stop: &dyn Stop) -> usize {
-    let mut acc = 0usize;
-    for i in 0..HOT_LOOP_ITERS {
-        if i % CHECK_INTERVAL == 0 {
-            let _ = stop.check();
-        }
-        acc = acc.wrapping_add(trivial_work(i));
-    }
-    acc
-}
-
-#[inline(never)]
-fn hot_loop_dyn_may_stop(stop: &dyn Stop) -> usize {
-    let stop = stop.may_stop().then_some(stop);
-    let mut acc = 0usize;
-    for i in 0..HOT_LOOP_ITERS {
-        if i % CHECK_INTERVAL == 0 {
-            let _ = stop.check();
-        }
-        acc = acc.wrapping_add(trivial_work(i));
-    }
-    acc
-}
-
-#[inline(never)]
-fn hot_loop_boxed_active(stop: &BoxedStop) -> usize {
-    let stop = stop.active_stop();
-    let mut acc = 0usize;
-    for i in 0..HOT_LOOP_ITERS {
-        if i % CHECK_INTERVAL == 0 {
-            let _ = stop.check();
-        }
-        acc = acc.wrapping_add(trivial_work(i));
-    }
-    acc
-}
-
-#[inline(never)]
-fn hot_loop_dynstop_active(stop: &DynStop) -> usize {
-    let stop = stop.active_stop();
-    let mut acc = 0usize;
-    for i in 0..HOT_LOOP_ITERS {
-        if i % CHECK_INTERVAL == 0 {
-            let _ = stop.check();
-        }
-        acc = acc.wrapping_add(trivial_work(i));
-    }
-    acc
+        zenbench::black_box(acc)
+    }};
 }
 
 /// Run check() 100 times to lift measurement above timer resolution.
@@ -526,26 +479,34 @@ fn main() {
             group.config().rounds(100).cache_firewall(false).sort_by_speed(true);
             group.baseline("generic");
 
-            group.bench("generic", |b| b.iter(|| hot_loop_generic(&Unstoppable)));
-
-            group.bench("dyn", |b| {
+            group.bench("generic", |b| {
                 let stop = Unstoppable;
-                b.iter(|| hot_loop_dyn(&stop))
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("dyn_may_stop", |b| {
+            group.bench("&dyn Stop", |b| {
                 let stop = Unstoppable;
-                b.iter(|| hot_loop_dyn_may_stop(&stop))
+                let stop: &dyn Stop = &stop;
+                b.iter(|| hot_loop!(zenbench::black_box(stop)))
             });
 
-            group.bench("boxed_active", |b| {
+            group.bench("&dyn Stop + may_stop", |b| {
+                let stop = Unstoppable;
+                let stop: &dyn Stop = &stop;
+                let stop = stop.may_stop().then_some(stop);
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
+            });
+
+            group.bench("BoxedStop.active_stop", |b| {
                 let stop = Unstoppable.into_boxed();
-                b.iter(|| hot_loop_boxed_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("dynstop_active", |b| {
+            group.bench("DynStop.active_stop", |b| {
                 let stop = Unstoppable.into_dyn();
-                b.iter(|| hot_loop_dynstop_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
         });
 
@@ -555,27 +516,32 @@ fn main() {
 
             group.bench("generic", |b| {
                 let stop = Stopper::new();
-                b.iter(|| hot_loop_generic(&stop))
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("dyn", |b| {
+            group.bench("&dyn Stop", |b| {
                 let stop = Stopper::new();
-                b.iter(|| hot_loop_dyn(&stop))
+                let stop: &dyn Stop = &stop;
+                b.iter(|| hot_loop!(zenbench::black_box(stop)))
             });
 
-            group.bench("dyn_may_stop", |b| {
+            group.bench("&dyn Stop + may_stop", |b| {
                 let stop = Stopper::new();
-                b.iter(|| hot_loop_dyn_may_stop(&stop))
+                let stop: &dyn Stop = &stop;
+                let stop = stop.may_stop().then_some(stop);
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("boxed_active", |b| {
+            group.bench("BoxedStop.active_stop", |b| {
                 let stop = Stopper::new().into_boxed();
-                b.iter(|| hot_loop_boxed_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("dynstop_active", |b| {
+            group.bench("DynStop.active_stop", |b| {
                 let stop = Stopper::new().into_dyn();
-                b.iter(|| hot_loop_dynstop_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
         });
 
@@ -601,21 +567,24 @@ fn main() {
 
         suite.compare("cold_cache_stopper", |group| {
             group.config().rounds(100).cache_firewall(true).sort_by_speed(true);
-            group.baseline("dyn");
+            group.baseline("&dyn Stop");
 
-            group.bench("dyn", |b| {
+            group.bench("&dyn Stop", |b| {
                 let stop = Stopper::new();
-                b.iter(|| hot_loop_dyn(&stop))
+                let stop: &dyn Stop = &stop;
+                b.iter(|| hot_loop!(zenbench::black_box(stop)))
             });
 
-            group.bench("boxed_active", |b| {
+            group.bench("BoxedStop.active_stop", |b| {
                 let stop = Stopper::new().into_boxed();
-                b.iter(|| hot_loop_boxed_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
 
-            group.bench("dynstop_active", |b| {
+            group.bench("DynStop.active_stop", |b| {
                 let stop = Stopper::new().into_dyn();
-                b.iter(|| hot_loop_dynstop_active(&stop))
+                let stop = stop.active_stop();
+                b.iter(|| hot_loop!(zenbench::black_box(&stop)))
             });
         });
     });
