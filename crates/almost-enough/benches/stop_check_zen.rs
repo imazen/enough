@@ -130,10 +130,11 @@ fn main() {
     let result = zenbench::run(|suite| {
         // ── Batched check (100x inner loop) ─────────────────────────
         // Lifts sub-ns operations above timer resolution for validation.
-        // Divide reported times by 100 for per-call cost.
+        // Reported times are for 100 calls. Divide by 100 for per-call cost.
 
         suite.compare("check_100x", |group| {
             group.config().rounds(200).cache_firewall(false);
+            group.throughput(zenbench::Throughput::Elements(100));
 
             group.bench("unstoppable_generic", |b| {
                 let stop = Unstoppable;
