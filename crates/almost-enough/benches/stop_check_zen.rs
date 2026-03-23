@@ -184,6 +184,44 @@ fn main() {
                 b.iter(|| check_100(&stop as &dyn Stop))
             });
 
+            group.bench("dynstop_ref_unstoppable", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("dynstop_ref_stopper", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("dynstop_owned_unstoppable", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| {
+                    let stop = zenbench::black_box(&stop).clone();
+                    for _ in 0..100 {
+                        let _ = stop.check();
+                    }
+                })
+            });
+
+            group.bench("dynstop_owned_stopper", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| {
+                    let stop = zenbench::black_box(&stop).clone();
+                    for _ in 0..100 {
+                        let _ = stop.check();
+                    }
+                })
+            });
+
             group.bench("option_none", |b| {
                 let stop: Option<&dyn Stop> = None;
                 b.iter(|| {
