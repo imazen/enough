@@ -114,6 +114,39 @@ pub trait Stop: Send + Sync {
     fn should_stop(&self) -> bool {
         self.check().is_err()
     }
+
+    /// Returns `true` if this stop can ever signal a stop.
+    ///
+    /// [`Unstoppable`] returns `false`. Wrapper types delegate to their
+    /// inner stop. The default is `true` (conservative — always check).
+    ///
+    /// Use this with `impl Stop for Option<T>` to skip checks in hot loops
+    /// behind `dyn Stop`:
+    ///
+    /// ```rust
+    /// use enough::{Stop, StopReason, Unstoppable};
+    ///
+    /// fn process(stop: &dyn Stop) -> Result<(), StopReason> {
+    ///     let stop = stop.may_stop().then_some(stop);
+    ///     // stop is Option<&dyn Stop>, which impl Stop:
+    ///     // None → check() always returns Ok(()), Some → delegates
+    ///     for i in 0..100 {
+    ///         stop.check()?;
+    ///     }
+    ///     Ok(())
+    /// }
+    ///
+    /// // Unstoppable: may_stop() returns false, so stop is None
+    /// assert!(process(&Unstoppable).is_ok());
+    /// ```
+    ///
+    /// In generic code (`impl Stop`), this is unnecessary — the compiler
+    /// already optimizes `Unstoppable::check()` to nothing via inlining.
+    /// Use `may_stop()` only when accepting `&dyn Stop`.
+    #[inline]
+    fn may_stop(&self) -> bool {
+        true
+    }
 }
 
 /// A [`Stop`] implementation that never stops (no cooperative cancellation).
@@ -158,6 +191,11 @@ impl Stop for Unstoppable {
     fn should_stop(&self) -> bool {
         false
     }
+
+    #[inline(always)]
+    fn may_stop(&self) -> bool {
+        false
+    }
 }
 
 // Blanket impl: &T where T: Stop
@@ -170,6 +208,11 @@ impl<T: Stop + ?Sized> Stop for &T {
     #[inline]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
+    }
+
+    #[inline]
+    fn may_stop(&self) -> bool {
+        (**self).may_stop()
     }
 }
 
@@ -184,6 +227,11 @@ impl<T: Stop + ?Sized> Stop for &mut T {
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
+
+    #[inline]
+    fn may_stop(&self) -> bool {
+        (**self).may_stop()
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -197,6 +245,11 @@ impl<T: Stop + ?Sized> Stop for alloc::boxed::Box<T> {
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
+
+    #[inline]
+    fn may_stop(&self) -> bool {
+        (**self).may_stop()
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -209,6 +262,55 @@ impl<T: Stop + ?Sized> Stop for alloc::sync::Arc<T> {
     #[inline]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
+    }
+
+    #[inline]
+    fn may_stop(&self) -> bool {
+        (**self).may_stop()
+    }
+}
+
+/// `Option<T>` implements `Stop`: `None` is a no-op (always `Ok(())`),
+/// `Some(inner)` delegates to the inner stop.
+///
+/// This enables the [`may_stop()`](Stop::may_stop) pattern for hot loops:
+///
+/// ```rust
+/// use enough::{Stop, StopReason, Unstoppable};
+///
+/// fn hot_loop(stop: &dyn Stop) -> Result<(), StopReason> {
+///     let stop = stop.may_stop().then_some(stop);
+///     for i in 0..1000 {
+///         stop.check()?; // None → Ok(()), Some → delegates
+///     }
+///     Ok(())
+/// }
+///
+/// assert!(hot_loop(&Unstoppable).is_ok());
+/// ```
+impl<T: Stop> Stop for Option<T> {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        match self {
+            Some(s) => s.check(),
+            None => Ok(()),
+        }
+    }
+
+    #[inline]
+    fn should_stop(&self) -> bool {
+        match self {
+            Some(s) => s.should_stop(),
+            None => false,
+        }
+    }
+
+    #[inline]
+    fn may_stop(&self) -> bool {
+        match self {
+            Some(s) => s.may_stop(),
+            None => false,
+        }
     }
 }
 
@@ -282,5 +384,71 @@ mod tests {
 
         let unstoppable = Unstoppable;
         assert!(!process(&unstoppable));
+    }
+
+    #[test]
+    fn unstoppable_may_not_stop() {
+        assert!(!Unstoppable.may_stop());
+    }
+
+    #[test]
+    fn dyn_unstoppable_may_not_stop() {
+        let stop: &dyn Stop = &Unstoppable;
+        assert!(!stop.may_stop());
+    }
+
+    #[test]
+    fn may_stop_via_reference() {
+        let stop = &Unstoppable;
+        assert!(!stop.may_stop());
+    }
+
+    #[test]
+    fn option_none_is_noop() {
+        let stop: Option<&dyn Stop> = None;
+        assert!(stop.check().is_ok());
+        assert!(!stop.should_stop());
+        assert!(!stop.may_stop());
+    }
+
+    #[test]
+    fn option_some_delegates() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+
+        struct TestStop(AtomicBool);
+        unsafe impl Send for TestStop {}
+        unsafe impl Sync for TestStop {}
+        impl Stop for TestStop {
+            fn check(&self) -> Result<(), StopReason> {
+                if self.0.load(Ordering::Relaxed) {
+                    Err(StopReason::Cancelled)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let inner = TestStop(AtomicBool::new(false));
+        let stop: Option<&dyn Stop> = Some(&inner);
+        assert!(stop.check().is_ok());
+        assert!(!stop.should_stop());
+        assert!(stop.may_stop());
+
+        inner.0.store(true, Ordering::Relaxed);
+        assert!(stop.should_stop());
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn may_stop_hot_loop_pattern() {
+        fn process(stop: &dyn Stop) -> Result<(), StopReason> {
+            let stop = stop.may_stop().then_some(stop);
+            for _ in 0..100 {
+                stop.check()?;
+            }
+            Ok(())
+        }
+
+        assert!(process(&Unstoppable).is_ok());
     }
 }

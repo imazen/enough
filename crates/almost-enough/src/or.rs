@@ -86,6 +86,13 @@ impl<A: Stop, B: Stop> Stop for OrStop<A, B> {
     fn should_stop(&self) -> bool {
         self.a.should_stop() || self.b.should_stop()
     }
+
+    /// Returns `false` if neither half may stop (e.g., both are
+    /// `Unstoppable`).
+    #[inline]
+    fn may_stop(&self) -> bool {
+        self.a.may_stop() || self.b.may_stop()
+    }
 }
 
 #[cfg(test)]
@@ -209,5 +216,26 @@ mod tests {
         let _ = combined; // Still valid
 
         assert!(!combined2.should_stop());
+    }
+
+    #[test]
+    fn may_stop_both_unstoppable() {
+        let combined = OrStop::new(Unstoppable, Unstoppable);
+        assert!(!combined.may_stop());
+    }
+
+    #[test]
+    fn may_stop_one_side() {
+        let source = StopSource::new();
+        let combined = OrStop::new(Unstoppable, source.as_ref());
+        assert!(combined.may_stop());
+    }
+
+    #[test]
+    fn may_stop_both_sides() {
+        let a = StopSource::new();
+        let b = StopSource::new();
+        let combined = OrStop::new(a.as_ref(), b.as_ref());
+        assert!(combined.may_stop());
     }
 }
