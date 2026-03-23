@@ -117,8 +117,74 @@ fn hot_loop_dynstop_active(stop: &DynStop) -> usize {
     acc
 }
 
+/// Run check() 100 times to lift measurement above timer resolution.
+/// Per-call time = measured / 100.
+#[inline(never)]
+fn check_100(stop: &dyn Stop) {
+    for _ in 0..100 {
+        let _ = zenbench::black_box(stop).check();
+    }
+}
+
 fn main() {
     let result = zenbench::run(|suite| {
+        // ── Batched check (100x inner loop) ─────────────────────────
+        // Lifts sub-ns operations above timer resolution for validation.
+        // Divide reported times by 100 for per-call cost.
+
+        suite.compare("check_100x", |group| {
+            group.config().rounds(200).cache_firewall(false);
+
+            group.bench("unstoppable", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_100(&stop))
+            });
+
+            group.bench("stopper", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_100(&stop))
+            });
+
+            group.bench("boxed_unstoppable", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            group.bench("boxed_stopper", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            group.bench("dyn_unstoppable", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            group.bench("dyn_stopper", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            group.bench("option_none", |b| {
+                let stop: Option<&dyn Stop> = None;
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("option_some_stopper", |b| {
+                let stopper = Stopper::new();
+                let stop: Option<&dyn Stop> = Some(&stopper);
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+        });
+
         // ── Single check: all Stop types ────────────────────────────
 
         suite.compare("check_types", |group| {
