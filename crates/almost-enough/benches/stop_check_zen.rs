@@ -135,12 +135,30 @@ fn main() {
         suite.compare("check_100x", |group| {
             group.config().rounds(200).cache_firewall(false);
 
-            group.bench("unstoppable", |b| {
+            group.bench("unstoppable_generic", |b| {
+                let stop = Unstoppable;
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("stopper_generic", |b| {
+                let stop = Stopper::new();
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("unstoppable_dyn", |b| {
                 let stop = Unstoppable;
                 b.iter(|| check_100(&stop))
             });
 
-            group.bench("stopper", |b| {
+            group.bench("stopper_dyn", |b| {
                 let stop = Stopper::new();
                 b.iter(|| check_100(&stop))
             });
