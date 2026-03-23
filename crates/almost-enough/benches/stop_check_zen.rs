@@ -5,8 +5,7 @@
 use std::time::Duration;
 
 use almost_enough::{
-    BoxedStop, ChildStopper, DynStop, FnStop, OrStop, Stop, StopExt, StopSource, Stopper,
-    SyncStopper, TimeoutExt, Unstoppable,
+    ChildStopper, OrStop, Stop, StopExt, StopSource, Stopper, SyncStopper, TimeoutExt, Unstoppable,
 };
 
 const HOT_LOOP_ITERS: usize = 10_000;
@@ -49,7 +48,11 @@ fn main() {
         // ═══════════════════════════════════════════════════════════
 
         suite.compare("per_call_cost", |group| {
-            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
+            group
+                .config()
+                .rounds(200)
+                .cache_firewall(false)
+                .sort_by_speed(true);
             group.throughput(zenbench::Throughput::Elements(100));
             group.throughput_unit("checks");
             group.baseline("impl Stop (Unstoppable)");
@@ -214,7 +217,11 @@ fn main() {
         // ═══════════════════════════════════════════════════════════
 
         suite.compare("hot_loop_unstoppable", |group| {
-            group.config().rounds(100).cache_firewall(false).sort_by_speed(true);
+            group
+                .config()
+                .rounds(100)
+                .cache_firewall(false)
+                .sort_by_speed(true);
             group.baseline("generic");
 
             group.subgroup("Zero-cost paths");
@@ -252,7 +259,11 @@ fn main() {
         });
 
         suite.compare("hot_loop_stopper", |group| {
-            group.config().rounds(100).cache_firewall(false).sort_by_speed(true);
+            group
+                .config()
+                .rounds(100)
+                .cache_firewall(false)
+                .sort_by_speed(true);
             group.baseline("generic");
 
             group.subgroup("Direct");
@@ -308,7 +319,11 @@ fn main() {
         });
 
         suite.compare("cold_cache_stopper", |group| {
-            group.config().rounds(100).cache_firewall(true).sort_by_speed(true);
+            group
+                .config()
+                .rounds(100)
+                .cache_firewall(true)
+                .sort_by_speed(true);
             group.baseline("&dyn Stop");
 
             group.bench("&dyn Stop", |b| {
