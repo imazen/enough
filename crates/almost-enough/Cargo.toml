@@ -15,11 +15,11 @@ alloc = []
 std = ["alloc"]
 
 [dependencies]
-enough = { version = "0.4.2", path = "../enough", default-features = false }
+enough = { workspace = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
-zenbench = { git = "https://github.com/imazen/zenbench.git" }
+zenbench = { workspace = true }
 
 [[bench]]
 name = "stop_check"
