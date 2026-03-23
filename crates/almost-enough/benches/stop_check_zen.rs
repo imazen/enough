@@ -133,8 +133,10 @@ fn main() {
         // Reported times are for 100 calls. Divide by 100 for per-call cost.
 
         suite.compare("check_100x", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
             group.throughput(zenbench::Throughput::Elements(100));
+            group.throughput_unit("checks");
+            group.baseline("impl Stop (Unstoppable)");
 
             // -- Generic (compiler sees concrete type) --
 
@@ -281,7 +283,7 @@ fn main() {
         // ── Single check: all Stop types ────────────────────────────
 
         suite.compare("check_types", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
 
             group.bench("unstoppable", |b| {
                 let stop = Unstoppable;
@@ -370,7 +372,8 @@ fn main() {
         // ── Dispatch: Stopper through every fn signature ────────────
 
         suite.compare("dispatch_stopper", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
+            group.baseline("generic");
 
             group.bench("generic", |b| {
                 let stop = Stopper::new();
@@ -406,7 +409,8 @@ fn main() {
         // ── Dispatch: Unstoppable through every fn signature ────────
 
         suite.compare("dispatch_unstoppable", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
+            group.baseline("generic");
 
             group.bench("generic", |b| {
                 let stop = Unstoppable;
@@ -447,7 +451,8 @@ fn main() {
         // ── Optimization: raw vs may_stop vs active_stop ────────────
 
         suite.compare("optimize_unstoppable", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
+            group.baseline("dyn_raw");
 
             group.bench("dyn_raw", |b| {
                 let stop = Unstoppable;
@@ -481,7 +486,8 @@ fn main() {
         });
 
         suite.compare("optimize_stopper", |group| {
-            group.config().rounds(200).cache_firewall(false);
+            group.config().rounds(200).cache_firewall(false).sort_by_speed(true);
+            group.baseline("dyn_raw");
 
             group.bench("dyn_raw", |b| {
                 let stop = Stopper::new();
@@ -517,7 +523,8 @@ fn main() {
         // ── Hot loops: 10k iterations, check every 64 ───────────────
 
         suite.compare("hot_loop_unstoppable", |group| {
-            group.config().rounds(100).cache_firewall(false);
+            group.config().rounds(100).cache_firewall(false).sort_by_speed(true);
+            group.baseline("generic");
 
             group.bench("generic", |b| b.iter(|| hot_loop_generic(&Unstoppable)));
 
@@ -543,7 +550,8 @@ fn main() {
         });
 
         suite.compare("hot_loop_stopper", |group| {
-            group.config().rounds(100).cache_firewall(false);
+            group.config().rounds(100).cache_firewall(false).sort_by_speed(true);
+            group.baseline("generic");
 
             group.bench("generic", |b| {
                 let stop = Stopper::new();
@@ -592,7 +600,8 @@ fn main() {
         // e.g., after context switches or large working sets.
 
         suite.compare("cold_cache_stopper", |group| {
-            group.config().rounds(100).cache_firewall(true);
+            group.config().rounds(100).cache_firewall(true).sort_by_speed(true);
+            group.baseline("dyn");
 
             group.bench("dyn", |b| {
                 let stop = Stopper::new();
