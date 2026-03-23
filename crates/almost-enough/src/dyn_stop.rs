@@ -45,27 +45,19 @@ use crate::{Stop, StopReason};
 /// # Example
 ///
 /// ```rust
-/// use almost_enough::{DynStop, Stopper, Unstoppable, Stop, StopReason};
+/// use almost_enough::{DynStop, Stopper, Stop, StopReason};
 ///
-/// // Clone and send to another thread
 /// let stopper = Stopper::new();
 /// let stop = DynStop::new(stopper.clone());
-///
-/// let handle = std::thread::spawn({
-///     let stop = stop.clone(); // cheap Arc clone
-///     move || -> Result<(), StopReason> {
-///         for i in 0..1000 {
-///             stop.check()?;
-///         }
-///         Ok(())
-///     }
-/// });
+/// let stop2 = stop.clone(); // cheap Arc clone
 ///
 /// stopper.cancel();
-/// let result = handle.join().unwrap();
-/// assert!(result.is_err());
+/// assert!(stop.should_stop());
+/// assert!(stop2.should_stop()); // both see cancellation
 /// ```
-pub struct DynStop(Arc<dyn Stop + Send + Sync>);
+pub struct DynStop {
+    inner: Arc<dyn Stop + Send + Sync>,
+}
 
 impl DynStop {
     /// Create a new `DynStop` from any [`Stop`] implementation.
@@ -82,7 +74,9 @@ impl DynStop {
             drop(stop);
             return result;
         }
-        Self(Arc::new(stop))
+        Self {
+            inner: Arc::new(stop),
+        }
     }
 
     /// Create a `DynStop` from an existing `Arc<T>` without re-wrapping.
@@ -90,17 +84,33 @@ impl DynStop {
     /// This is zero-cost — just widens the pointer. Use this when you
     /// already have an `Arc`-wrapped stop type.
     ///
+    /// If `T` is `DynStop`, the inner Arc is extracted to avoid double
+    /// indirection (`Arc<Arc<dyn Stop>>`).
+    ///
     /// ```rust
     /// use almost_enough::{DynStop, Stopper, Stop};
+    /// # #[cfg(feature = "std")]
+    /// # fn main() {
     /// use std::sync::Arc;
     ///
     /// let stopper = Arc::new(Stopper::new());
     /// let stop = DynStop::from_arc(stopper); // pointer widening, no allocation
     /// assert!(!stop.should_stop());
+    /// # }
+    /// # #[cfg(not(feature = "std"))]
+    /// # fn main() {}
     /// ```
     #[inline]
     pub fn from_arc<T: Stop + 'static>(arc: Arc<T>) -> Self {
-        Self(arc as Arc<dyn Stop + Send + Sync>)
+        // Collapse Arc<DynStop> → reuse inner Arc
+        if TypeId::of::<T>() == TypeId::of::<DynStop>() {
+            let any_ref: &dyn Any = &*arc;
+            let inner = any_ref.downcast_ref::<DynStop>().unwrap();
+            return inner.clone();
+        }
+        Self {
+            inner: arc as Arc<dyn Stop + Send + Sync>,
+        }
     }
 
     /// Returns the effective inner stop if it may stop, collapsing indirection.
@@ -127,7 +137,7 @@ impl DynStop {
     /// ```
     #[inline]
     pub fn active_stop(&self) -> Option<&dyn Stop> {
-        let inner: &dyn Stop = &*self.0;
+        let inner: &dyn Stop = &*self.inner;
         if inner.may_stop() { Some(inner) } else { None }
     }
 }
@@ -135,24 +145,26 @@ impl DynStop {
 impl Clone for DynStop {
     #[inline]
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
     }
 }
 
 impl Stop for DynStop {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
-        self.0.check()
+        self.inner.check()
     }
 
     #[inline]
     fn should_stop(&self) -> bool {
-        self.0.should_stop()
+        self.inner.should_stop()
     }
 
     #[inline]
     fn may_stop(&self) -> bool {
-        self.0.may_stop()
+        self.inner.may_stop()
     }
 }
 
@@ -200,6 +212,7 @@ mod tests {
         assert!(stop2.should_stop());
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn clone_send_to_thread() {
         let stopper = Stopper::new();
