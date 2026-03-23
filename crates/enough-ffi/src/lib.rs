@@ -558,6 +558,26 @@ mod tests {
     }
 
     #[test]
+    fn ffi_token_view_may_stop() {
+        unsafe {
+            let source = enough_cancellation_create();
+            let ptr = enough_token_create(source);
+            let view = FfiCancellationToken::from_ptr(ptr);
+            assert!(view.may_stop());
+            enough_token_destroy(ptr);
+            enough_cancellation_destroy(source);
+        }
+    }
+
+    #[test]
+    fn ffi_token_view_never_may_stop() {
+        let view = FfiCancellationTokenView::never();
+        // never() uses default may_stop() = true, which is conservative.
+        // It never actually stops, but may_stop() reflects capability, not state.
+        assert!(view.may_stop());
+    }
+
+    #[test]
     fn multiple_tokens_same_source() {
         unsafe {
             let source = enough_cancellation_create();

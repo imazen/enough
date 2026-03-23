@@ -215,6 +215,13 @@ mod tests {
     }
 
     #[test]
+    fn tokio_stop_may_stop() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token);
+        assert!(stop.may_stop());
+    }
+
+    #[test]
     fn tokio_stop_clone() {
         let token = CancellationToken::new();
         let stop1 = TokioStop::new(token.clone());
