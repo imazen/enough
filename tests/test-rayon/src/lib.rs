@@ -70,9 +70,8 @@ fn parallel_iter_cancelled() {
                 // The first item succeeds unconditionally - it's our "before cancellation" reference
                 return Ok(item * 2);
             }
-            // Small delay per item to ensure cancellation has time to be observed
-            std::hint::black_box(item);
-            for _ in 0..100 {
+            // Delay to ensure cancellation (Relaxed store) is visible on ARM/aarch64
+            for _ in 0..10_000 {
                 std::hint::black_box(item);
             }
             process_item(item, &stop_for_map)
