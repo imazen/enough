@@ -136,7 +136,9 @@ fn main() {
             group.config().rounds(200).cache_firewall(false);
             group.throughput(zenbench::Throughput::Elements(100));
 
-            group.bench("unstoppable_generic", |b| {
+            // -- Generic (compiler sees concrete type) --
+
+            group.bench("impl Stop (Unstoppable)", |b| {
                 let stop = Unstoppable;
                 b.iter(|| {
                     for _ in 0..100 {
@@ -145,7 +147,7 @@ fn main() {
                 })
             });
 
-            group.bench("stopper_generic", |b| {
+            group.bench("impl Stop (Stopper)", |b| {
                 let stop = Stopper::new();
                 b.iter(|| {
                     for _ in 0..100 {
@@ -154,75 +156,109 @@ fn main() {
                 })
             });
 
-            group.bench("unstoppable_dyn", |b| {
+            // -- Single dyn dispatch --
+
+            group.bench("&dyn Stop (Unstoppable)", |b| {
                 let stop = Unstoppable;
                 b.iter(|| check_100(&stop))
             });
 
-            group.bench("stopper_dyn", |b| {
+            group.bench("&dyn Stop (Stopper)", |b| {
                 let stop = Stopper::new();
                 b.iter(|| check_100(&stop))
             });
 
-            group.bench("boxed_unstoppable", |b| {
+            // -- &DynStop (concrete type known, one inner dispatch) --
+
+            group.bench("&DynStop (Unstoppable)", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            group.bench("&DynStop (Stopper)", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| {
+                    for _ in 0..100 {
+                        let _ = zenbench::black_box(&stop).check();
+                    }
+                })
+            });
+
+            // -- DynStop owned (includes Arc::clone per sample) --
+
+            group.bench("DynStop owned (Unstoppable)", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| {
+                    let stop = zenbench::black_box(&stop).clone();
+                    for _ in 0..100 {
+                        let _ = stop.check();
+                    }
+                })
+            });
+
+            group.bench("DynStop owned (Stopper)", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| {
+                    let stop = zenbench::black_box(&stop).clone();
+                    for _ in 0..100 {
+                        let _ = stop.check();
+                    }
+                })
+            });
+
+            // -- DynStop behind &dyn Stop (double dispatch) --
+
+            group.bench("&dyn Stop <- DynStop (Unstoppable)", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            group.bench("&dyn Stop <- DynStop (Stopper)", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| check_100(&stop as &dyn Stop))
+            });
+
+            // -- BoxedStop behind &dyn Stop (double dispatch) --
+
+            group.bench("&dyn Stop <- BoxedStop (Unstoppable)", |b| {
                 let stop = Unstoppable.into_boxed();
                 b.iter(|| check_100(&stop as &dyn Stop))
             });
 
-            group.bench("boxed_stopper", |b| {
+            group.bench("&dyn Stop <- BoxedStop (Stopper)", |b| {
                 let stop = Stopper::new().into_boxed();
                 b.iter(|| check_100(&stop as &dyn Stop))
             });
 
-            group.bench("dyn_unstoppable", |b| {
-                let stop = Unstoppable.into_dyn();
-                b.iter(|| check_100(&stop as &dyn Stop))
-            });
+            // -- DynStop.active_stop() (collapses to inner) --
 
-            group.bench("dyn_stopper", |b| {
-                let stop = Stopper::new().into_dyn();
-                b.iter(|| check_100(&stop as &dyn Stop))
-            });
-
-            group.bench("dynstop_ref_unstoppable", |b| {
+            group.bench("DynStop.active_stop (Unstoppable)", |b| {
                 let stop = Unstoppable.into_dyn();
                 b.iter(|| {
+                    let active = stop.active_stop();
                     for _ in 0..100 {
-                        let _ = zenbench::black_box(&stop).check();
+                        let _ = zenbench::black_box(&active).check();
                     }
                 })
             });
 
-            group.bench("dynstop_ref_stopper", |b| {
+            group.bench("DynStop.active_stop (Stopper)", |b| {
                 let stop = Stopper::new().into_dyn();
                 b.iter(|| {
+                    let active = stop.active_stop();
                     for _ in 0..100 {
-                        let _ = zenbench::black_box(&stop).check();
+                        let _ = zenbench::black_box(&active).check();
                     }
                 })
             });
 
-            group.bench("dynstop_owned_unstoppable", |b| {
-                let stop = Unstoppable.into_dyn();
-                b.iter(|| {
-                    let stop = zenbench::black_box(&stop).clone();
-                    for _ in 0..100 {
-                        let _ = stop.check();
-                    }
-                })
-            });
+            // -- Option patterns (the may_stop() payoff) --
 
-            group.bench("dynstop_owned_stopper", |b| {
-                let stop = Stopper::new().into_dyn();
-                b.iter(|| {
-                    let stop = zenbench::black_box(&stop).clone();
-                    for _ in 0..100 {
-                        let _ = stop.check();
-                    }
-                })
-            });
-
-            group.bench("option_none", |b| {
+            group.bench("Option<&dyn Stop> = None", |b| {
                 let stop: Option<&dyn Stop> = None;
                 b.iter(|| {
                     for _ in 0..100 {
@@ -231,7 +267,7 @@ fn main() {
                 })
             });
 
-            group.bench("option_some_stopper", |b| {
+            group.bench("Option<&dyn Stop> = Some(Stopper)", |b| {
                 let stopper = Stopper::new();
                 let stop: Option<&dyn Stop> = Some(&stopper);
                 b.iter(|| {
