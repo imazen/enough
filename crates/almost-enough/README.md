@@ -3,11 +3,11 @@
 Batteries-included ergonomic extensions for the [`enough`](https://crates.io/crates/enough) cooperative cancellation crate.
 
 [![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/almost-enough.svg)](https://crates.io/crates/almost-enough)
-[![Documentation](https://docs.rs/almost-enough/badge.svg)](https://docs.rs/almost-enough)
+[![Crates.io](https://img.shields.io/crates/v/almost-enough.svg?style=for-the-badge)](https://crates.io/crates/almost-enough)
+[![Documentation](https://docs.rs/almost-enough/badge.svg?style=for-the-badge)](https://docs.rs/almost-enough)
 [![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/almost-enough.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.71-blue.svg)](https://blog.rust-lang.org/2023/07/13/Rust-1.71.0.html)
+[![License](https://img.shields.io/crates/l/almost-enough.svg?style=for-the-badge)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
 
 While [`enough`](https://crates.io/crates/enough) provides only the minimal `Stop` trait, this crate provides all concrete implementations, combinators, and helpers. It re-exports everything from `enough` for convenience.
 
@@ -132,6 +132,39 @@ fn inner(stop: BoxedStop) {
     while !stop.should_stop() {
         break;
     }
+}
+```
+
+## Optimizing Hot Loops with `dyn Stop`
+
+Use `may_stop()` to skip overhead for no-op stops behind `&dyn Stop`:
+
+```rust
+use almost_enough::{Stop, StopReason, Unstoppable};
+
+fn process(stop: &dyn Stop) -> Result<(), StopReason> {
+    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    for i in 0..1_000_000 {
+        stop.check()?; // None → Ok(()), Some → one vtable dispatch
+    }
+    Ok(())
+}
+
+// Unstoppable: may_stop() = false, so stop is None — zero overhead
+assert!(process(&Unstoppable).is_ok());
+```
+
+`BoxedStop` also provides `active_stop()` which collapses indirection — the returned `&dyn Stop` points directly at the concrete type inside the box, bypassing the wrapper:
+
+```rust
+use almost_enough::{BoxedStop, Stopper, Stop, StopReason};
+
+fn hot_loop(stop: &BoxedStop) -> Result<(), StopReason> {
+    let stop = stop.active_stop(); // Option<&dyn Stop>, collapsed
+    for i in 0..1_000_000 {
+        stop.check()?; // one vtable dispatch, not two
+    }
+    Ok(())
 }
 ```
 

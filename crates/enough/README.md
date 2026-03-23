@@ -3,11 +3,11 @@
 Minimal cooperative cancellation trait for Rust.
 
 [![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/enough.svg)](https://crates.io/crates/enough)
-[![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
+[![Crates.io](https://img.shields.io/crates/v/enough.svg?style=for-the-badge)](https://crates.io/crates/enough)
+[![Documentation](https://docs.rs/enough/badge.svg?style=for-the-badge)](https://docs.rs/enough)
 [![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.71-blue.svg)](https://blog.rust-lang.org/2023/07/13/Rust-1.71.0.html)
+[![License](https://img.shields.io/crates/l/enough.svg?style=for-the-badge)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
 
 A minimal, `no_std` trait for cooperative cancellation. Zero dependencies.
 
@@ -44,6 +44,24 @@ use enough::Unstoppable;
 let result = my_lib::decode(&data, Unstoppable);
 ```
 
+## Optimizing Hot Loops with `dyn Stop`
+
+Behind `&dyn Stop`, the compiler can't inline away `Unstoppable::check()`. Use `may_stop()` with `Option<T>` to eliminate that overhead:
+
+```rust
+use enough::{Stop, StopReason};
+
+fn process(stop: &dyn Stop) -> Result<(), StopReason> {
+    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    for i in 0..1_000_000 {
+        stop.check()?; // None → Ok(()), Some → one vtable dispatch
+    }
+    Ok(())
+}
+```
+
+`Option<T: Stop>` implements `Stop`: `None` is a no-op, `Some(inner)` delegates. The branch predictor handles the constant `None`/`Some` perfectly.
+
 ## What's in This Crate
 
 This crate provides only the **core trait and types**:
@@ -51,6 +69,7 @@ This crate provides only the **core trait and types**:
 - `Stop` - The cooperative cancellation trait
 - `StopReason` - Why an operation stopped (Cancelled or TimedOut)
 - `Unstoppable` - Zero-cost "never stop" implementation
+- `impl Stop for Option<T: Stop>` - No-op when `None`, delegates when `Some`
 
 For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, etc.), see [`almost-enough`](https://crates.io/crates/almost-enough).
 
