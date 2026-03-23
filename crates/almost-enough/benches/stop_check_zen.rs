@@ -1,0 +1,435 @@
+//! Interleaved microbenchmarks for Stop dispatch patterns using zenbench.
+//!
+//! Unlike criterion (which runs each benchmark sequentially), zenbench
+//! interleaves samples from all benchmarks in a comparison group, ensuring
+//! each variant is measured under identical system conditions.
+//!
+//! Run with: cargo bench --bench stop_check_zen
+
+use std::time::Duration;
+
+use almost_enough::{
+    BoxedStop, ChildStopper, DynStop, FnStop, OrStop, Stop, StopExt, StopSource, Stopper,
+    SyncStopper, TimeoutExt, Unstoppable,
+};
+
+const HOT_LOOP_ITERS: usize = 10_000;
+const CHECK_INTERVAL: usize = 64;
+
+/// Trivial work unit to prevent loop elimination
+#[inline(always)]
+fn trivial_work(i: usize) -> usize {
+    zenbench::black_box(i.wrapping_mul(2654435761))
+}
+
+// ── Helpers: various fn signatures ──────────────────────────────────
+
+#[inline(never)]
+fn check_generic(stop: &impl Stop) -> Result<(), almost_enough::StopReason> {
+    stop.check()
+}
+
+#[inline(never)]
+fn check_dyn(stop: &dyn Stop) -> Result<(), almost_enough::StopReason> {
+    stop.check()
+}
+
+#[inline(never)]
+fn check_dyn_may_stop(stop: &dyn Stop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.may_stop().then_some(stop);
+    stop.check()
+}
+
+#[inline(never)]
+fn check_boxed_active(stop: &BoxedStop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.active_stop();
+    stop.check()
+}
+
+#[inline(never)]
+fn check_dynstop_active(stop: &DynStop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.active_stop();
+    stop.check()
+}
+
+// ── Helpers: hot loop variants ──────────────────────────────────────
+
+#[inline(never)]
+fn hot_loop_generic(stop: &impl Stop) -> usize {
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dyn(stop: &dyn Stop) -> usize {
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dyn_may_stop(stop: &dyn Stop) -> usize {
+    let stop = stop.may_stop().then_some(stop);
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_boxed_active(stop: &BoxedStop) -> usize {
+    let stop = stop.active_stop();
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dynstop_active(stop: &DynStop) -> usize {
+    let stop = stop.active_stop();
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+fn main() {
+    let result = zenbench::run(|suite| {
+        // ── Single check: all Stop types ────────────────────────────
+
+        suite.compare("check_types", |group| {
+            group.config().rounds(200);
+
+            group.bench("unstoppable", |b| {
+                let stop = Unstoppable;
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("stop_source", |b| {
+                let stop = StopSource::new();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("stop_ref", |b| {
+                let source = StopSource::new();
+                let stop = source.as_ref();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("stopper", |b| {
+                let stop = Stopper::new();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("sync_stopper", |b| {
+                let stop = SyncStopper::new();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("fn_stop", |b| {
+                let stop = FnStop::new(|| false);
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("boxed_unstoppable", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("boxed_stopper", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dyn_unstoppable", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dyn_stopper", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("with_timeout", |b| {
+                let source = StopSource::new();
+                let stop = source.as_ref().with_timeout(Duration::from_secs(3600));
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("child_root", |b| {
+                let stop = ChildStopper::new();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("child_depth_1", |b| {
+                let parent = ChildStopper::new();
+                let stop = parent.child();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("child_depth_3", |b| {
+                let g0 = ChildStopper::new();
+                let g1 = g0.child();
+                let g2 = g1.child();
+                let stop = g2.child();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("or_stop", |b| {
+                let a = StopSource::new();
+                let b_src = StopSource::new();
+                let stop: OrStop<_, _> = a.as_ref().or(b_src.as_ref());
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+        });
+
+        // ── Dispatch: Stopper through every fn signature ────────────
+
+        suite.compare("dispatch_stopper", |group| {
+            group.config().rounds(200);
+
+            group.bench("generic", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_generic(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dyn", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_dyn(zenbench::black_box(&stop)))
+            });
+
+            group.bench("boxed", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dynstop", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dynstop_as_dyn", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| check_dyn(zenbench::black_box(&stop) as &dyn Stop))
+            });
+
+            group.bench("boxed_as_dyn", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| check_dyn(zenbench::black_box(&stop) as &dyn Stop))
+            });
+        });
+
+        // ── Dispatch: Unstoppable through every fn signature ────────
+
+        suite.compare("dispatch_unstoppable", |group| {
+            group.config().rounds(200);
+
+            group.bench("generic", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_generic(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dyn", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_dyn(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dyn_may_stop", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_dyn_may_stop(zenbench::black_box(&stop)))
+            });
+
+            group.bench("boxed", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| check_boxed_active(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dynstop", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| check_dynstop_active(zenbench::black_box(&stop)))
+            });
+        });
+
+        // ── Optimization: raw vs may_stop vs active_stop ────────────
+
+        suite.compare("optimize_unstoppable", |group| {
+            group.config().rounds(200);
+
+            group.bench("dyn_raw", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_dyn(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dyn_may_stop", |b| {
+                let stop = Unstoppable;
+                b.iter(|| check_dyn_may_stop(zenbench::black_box(&stop)))
+            });
+
+            group.bench("boxed_raw", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| check_boxed_active(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dynstop_raw", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| check_dynstop_active(zenbench::black_box(&stop)))
+            });
+        });
+
+        suite.compare("optimize_stopper", |group| {
+            group.config().rounds(200);
+
+            group.bench("dyn_raw", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_dyn(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dyn_may_stop", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_dyn_may_stop(zenbench::black_box(&stop)))
+            });
+
+            group.bench("boxed_raw", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| check_boxed_active(zenbench::black_box(&stop)))
+            });
+
+            group.bench("dynstop_raw", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| check_dynstop_active(zenbench::black_box(&stop)))
+            });
+        });
+
+        // ── Hot loops: 10k iterations, check every 64 ───────────────
+
+        suite.compare("hot_loop_unstoppable", |group| {
+            group.config().rounds(100);
+
+            group.bench("generic", |b| b.iter(|| hot_loop_generic(&Unstoppable)));
+
+            group.bench("dyn", |b| {
+                let stop = Unstoppable;
+                b.iter(|| hot_loop_dyn(&stop))
+            });
+
+            group.bench("dyn_may_stop", |b| {
+                let stop = Unstoppable;
+                b.iter(|| hot_loop_dyn_may_stop(&stop))
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Unstoppable.into_boxed();
+                b.iter(|| hot_loop_boxed_active(&stop))
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Unstoppable.into_dyn();
+                b.iter(|| hot_loop_dynstop_active(&stop))
+            });
+        });
+
+        suite.compare("hot_loop_stopper", |group| {
+            group.config().rounds(100);
+
+            group.bench("generic", |b| {
+                let stop = Stopper::new();
+                b.iter(|| hot_loop_generic(&stop))
+            });
+
+            group.bench("dyn", |b| {
+                let stop = Stopper::new();
+                b.iter(|| hot_loop_dyn(&stop))
+            });
+
+            group.bench("dyn_may_stop", |b| {
+                let stop = Stopper::new();
+                b.iter(|| hot_loop_dyn_may_stop(&stop))
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| hot_loop_boxed_active(&stop))
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| hot_loop_dynstop_active(&stop))
+            });
+        });
+
+        // ── Error path: cancelled ───────────────────────────────────
+
+        suite.compare("check_cancelled", |group| {
+            group.config().rounds(200);
+
+            group.bench("stopper", |b| {
+                let stop = Stopper::cancelled();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+
+            group.bench("sync_stopper", |b| {
+                let stop = SyncStopper::cancelled();
+                b.iter(|| zenbench::black_box(&stop).check())
+            });
+        });
+    });
+
+    if let Err(e) = result.save("stop_check_zen_results.json") {
+        eprintln!("Failed to save results: {e}");
+    }
+}

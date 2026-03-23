@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use almost_enough::{
-    ChildStopper, FnStop, OrStop, Stop, StopExt, StopSource, Stopper, SyncStopper, TimeoutExt,
-    Unstoppable, WithTimeout,
+    BoxedStop, ChildStopper, DynStop, FnStop, OrStop, Stop, StopExt, StopSource, Stopper,
+    SyncStopper, TimeoutExt, Unstoppable, WithTimeout,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -61,6 +61,18 @@ fn bench_check(c: &mut Criterion) {
         b.iter(|| black_box(&stop).check())
     });
 
+    // DynStop wrapping Unstoppable
+    g.bench_function("dyn_unstoppable", |b| {
+        let stop = Unstoppable.into_dyn();
+        b.iter(|| black_box(&stop).check())
+    });
+
+    // DynStop wrapping Stopper
+    g.bench_function("dyn_stopper", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| black_box(&stop).check())
+    });
+
     // WithTimeout<StopRef> (inner check + Instant::now())
     g.bench_function("with_timeout", |b| {
         let source = StopSource::new();
@@ -101,7 +113,7 @@ fn bench_check(c: &mut Criterion) {
     g.finish();
 }
 
-// ── Group: dispatch (generic vs dynamic) ────────────────────────────
+// ── Group: dispatch (generic vs dyn vs BoxedStop vs DynStop) ─────────
 
 #[inline(never)]
 fn check_generic(stop: &impl Stop) -> Result<(), almost_enough::StopReason> {
@@ -113,9 +125,20 @@ fn check_dyn(stop: &dyn Stop) -> Result<(), almost_enough::StopReason> {
     stop.check()
 }
 
+#[inline(never)]
+fn check_boxed(stop: &BoxedStop) -> Result<(), almost_enough::StopReason> {
+    stop.check()
+}
+
+#[inline(never)]
+fn check_dyn_stop(stop: &DynStop) -> Result<(), almost_enough::StopReason> {
+    stop.check()
+}
+
 fn bench_dispatch(c: &mut Criterion) {
     let mut g = c.benchmark_group("dispatch");
 
+    // Unstoppable through every path
     g.bench_function("unstoppable_generic", |b| {
         let stop = Unstoppable;
         b.iter(|| check_generic(black_box(&stop)))
@@ -126,6 +149,17 @@ fn bench_dispatch(c: &mut Criterion) {
         b.iter(|| check_dyn(black_box(&stop)))
     });
 
+    g.bench_function("unstoppable_boxed", |b| {
+        let stop = Unstoppable.into_boxed();
+        b.iter(|| check_boxed(black_box(&stop)))
+    });
+
+    g.bench_function("unstoppable_dynstop", |b| {
+        let stop = Unstoppable.into_dyn();
+        b.iter(|| check_dyn_stop(black_box(&stop)))
+    });
+
+    // Stopper through every path
     g.bench_function("stopper_generic", |b| {
         let stop = Stopper::new();
         b.iter(|| check_generic(black_box(&stop)))
@@ -134,6 +168,239 @@ fn bench_dispatch(c: &mut Criterion) {
     g.bench_function("stopper_dyn", |b| {
         let stop = Stopper::new();
         b.iter(|| check_dyn(black_box(&stop)))
+    });
+
+    g.bench_function("stopper_boxed", |b| {
+        let stop = Stopper::new().into_boxed();
+        b.iter(|| check_boxed(black_box(&stop)))
+    });
+
+    g.bench_function("stopper_dynstop", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| check_dyn_stop(black_box(&stop)))
+    });
+
+    // DynStop behind &dyn Stop (double dispatch)
+    g.bench_function("stopper_dynstop_as_dyn", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| check_dyn(black_box(&stop) as &dyn Stop))
+    });
+
+    // BoxedStop behind &dyn Stop (double dispatch)
+    g.bench_function("stopper_boxed_as_dyn", |b| {
+        let stop = Stopper::new().into_boxed();
+        b.iter(|| check_dyn(black_box(&stop) as &dyn Stop))
+    });
+
+    g.finish();
+}
+
+// ── Group: may_stop + active_stop optimization patterns ──────────────
+
+#[inline(never)]
+fn check_dyn_may_stop(stop: &dyn Stop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.may_stop().then_some(stop);
+    stop.check()
+}
+
+#[inline(never)]
+fn check_boxed_active(stop: &BoxedStop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.active_stop();
+    stop.check()
+}
+
+#[inline(never)]
+fn check_dynstop_active(stop: &DynStop) -> Result<(), almost_enough::StopReason> {
+    let stop = stop.active_stop();
+    stop.check()
+}
+
+fn bench_optimization(c: &mut Criterion) {
+    let mut g = c.benchmark_group("optimization");
+
+    // Unstoppable: may_stop pattern should eliminate check
+    g.bench_function("unstoppable_dyn_raw", |b| {
+        let stop = Unstoppable;
+        b.iter(|| check_dyn(black_box(&stop)))
+    });
+
+    g.bench_function("unstoppable_dyn_may_stop", |b| {
+        let stop = Unstoppable;
+        b.iter(|| check_dyn_may_stop(black_box(&stop)))
+    });
+
+    // BoxedStop(Unstoppable): active_stop should collapse to None
+    g.bench_function("boxed_unstoppable_raw", |b| {
+        let stop = Unstoppable.into_boxed();
+        b.iter(|| check_boxed(black_box(&stop)))
+    });
+
+    g.bench_function("boxed_unstoppable_active", |b| {
+        let stop = Unstoppable.into_boxed();
+        b.iter(|| check_boxed_active(black_box(&stop)))
+    });
+
+    // DynStop(Unstoppable): active_stop should collapse to None
+    g.bench_function("dyn_unstoppable_raw", |b| {
+        let stop = Unstoppable.into_dyn();
+        b.iter(|| check_dyn_stop(black_box(&stop)))
+    });
+
+    g.bench_function("dyn_unstoppable_active", |b| {
+        let stop = Unstoppable.into_dyn();
+        b.iter(|| check_dynstop_active(black_box(&stop)))
+    });
+
+    // Stopper: active_stop collapses one dispatch layer
+    g.bench_function("boxed_stopper_raw", |b| {
+        let stop = Stopper::new().into_boxed();
+        b.iter(|| check_boxed(black_box(&stop)))
+    });
+
+    g.bench_function("boxed_stopper_active", |b| {
+        let stop = Stopper::new().into_boxed();
+        b.iter(|| check_boxed_active(black_box(&stop)))
+    });
+
+    g.bench_function("dyn_stopper_raw", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| check_dyn_stop(black_box(&stop)))
+    });
+
+    g.bench_function("dyn_stopper_active", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| check_dynstop_active(black_box(&stop)))
+    });
+
+    g.finish();
+}
+
+// ── Group: hot loops (realistic workload with periodic checks) ───────
+
+const HOT_LOOP_ITERS: usize = 10_000;
+const CHECK_INTERVAL: usize = 64;
+
+/// Trivial work unit to prevent loop elimination
+#[inline(always)]
+fn trivial_work(i: usize) -> usize {
+    black_box(i.wrapping_mul(2654435761))
+}
+
+#[inline(never)]
+fn hot_loop_generic(stop: &impl Stop) -> usize {
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dyn(stop: &dyn Stop) -> usize {
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dyn_may_stop(stop: &dyn Stop) -> usize {
+    let stop = stop.may_stop().then_some(stop);
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_boxed_active(stop: &BoxedStop) -> usize {
+    let stop = stop.active_stop();
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+#[inline(never)]
+fn hot_loop_dynstop_active(stop: &DynStop) -> usize {
+    let stop = stop.active_stop();
+    let mut acc = 0usize;
+    for i in 0..HOT_LOOP_ITERS {
+        if i % CHECK_INTERVAL == 0 {
+            let _ = stop.check();
+        }
+        acc = acc.wrapping_add(trivial_work(i));
+    }
+    acc
+}
+
+fn bench_hot_loop(c: &mut Criterion) {
+    let mut g = c.benchmark_group("hot_loop");
+
+    // Unstoppable through various dispatch paths
+    g.bench_function("unstoppable_generic", |b| {
+        b.iter(|| hot_loop_generic(&Unstoppable))
+    });
+
+    g.bench_function("unstoppable_dyn", |b| {
+        let stop = Unstoppable;
+        b.iter(|| hot_loop_dyn(&stop))
+    });
+
+    g.bench_function("unstoppable_dyn_may_stop", |b| {
+        let stop = Unstoppable;
+        b.iter(|| hot_loop_dyn_may_stop(&stop))
+    });
+
+    g.bench_function("unstoppable_boxed_active", |b| {
+        let stop = Unstoppable.into_boxed();
+        b.iter(|| hot_loop_boxed_active(&stop))
+    });
+
+    g.bench_function("unstoppable_dynstop_active", |b| {
+        let stop = Unstoppable.into_dyn();
+        b.iter(|| hot_loop_dynstop_active(&stop))
+    });
+
+    // Stopper through various dispatch paths
+    g.bench_function("stopper_generic", |b| {
+        let stop = Stopper::new();
+        b.iter(|| hot_loop_generic(&stop))
+    });
+
+    g.bench_function("stopper_dyn", |b| {
+        let stop = Stopper::new();
+        b.iter(|| hot_loop_dyn(&stop))
+    });
+
+    g.bench_function("stopper_dyn_may_stop", |b| {
+        let stop = Stopper::new();
+        b.iter(|| hot_loop_dyn_may_stop(&stop))
+    });
+
+    g.bench_function("stopper_boxed", |b| {
+        let stop = Stopper::new().into_boxed();
+        b.iter(|| hot_loop_boxed_active(&stop))
+    });
+
+    g.bench_function("stopper_dynstop", |b| {
+        let stop = Stopper::new().into_dyn();
+        b.iter(|| hot_loop_dynstop_active(&stop))
     });
 
     g.finish();
@@ -157,5 +424,12 @@ fn bench_check_cancelled(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_check, bench_dispatch, bench_check_cancelled);
+criterion_group!(
+    benches,
+    bench_check,
+    bench_dispatch,
+    bench_optimization,
+    bench_hot_loop,
+    bench_check_cancelled
+);
 criterion_main!(benches);
