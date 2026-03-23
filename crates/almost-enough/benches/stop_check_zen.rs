@@ -122,7 +122,7 @@ fn main() {
         // ── Single check: all Stop types ────────────────────────────
 
         suite.compare("check_types", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("unstoppable", |b| {
                 let stop = Unstoppable;
@@ -211,7 +211,7 @@ fn main() {
         // ── Dispatch: Stopper through every fn signature ────────────
 
         suite.compare("dispatch_stopper", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("generic", |b| {
                 let stop = Stopper::new();
@@ -247,7 +247,7 @@ fn main() {
         // ── Dispatch: Unstoppable through every fn signature ────────
 
         suite.compare("dispatch_unstoppable", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("generic", |b| {
                 let stop = Unstoppable;
@@ -288,7 +288,7 @@ fn main() {
         // ── Optimization: raw vs may_stop vs active_stop ────────────
 
         suite.compare("optimize_unstoppable", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("dyn_raw", |b| {
                 let stop = Unstoppable;
@@ -322,7 +322,7 @@ fn main() {
         });
 
         suite.compare("optimize_stopper", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("dyn_raw", |b| {
                 let stop = Stopper::new();
@@ -358,7 +358,7 @@ fn main() {
         // ── Hot loops: 10k iterations, check every 64 ───────────────
 
         suite.compare("hot_loop_unstoppable", |group| {
-            group.config().rounds(100);
+            group.config().rounds(100).cache_firewall(false);
 
             group.bench("generic", |b| b.iter(|| hot_loop_generic(&Unstoppable)));
 
@@ -384,7 +384,7 @@ fn main() {
         });
 
         suite.compare("hot_loop_stopper", |group| {
-            group.config().rounds(100);
+            group.config().rounds(100).cache_firewall(false);
 
             group.bench("generic", |b| {
                 let stop = Stopper::new();
@@ -415,7 +415,7 @@ fn main() {
         // ── Error path: cancelled ───────────────────────────────────
 
         suite.compare("check_cancelled", |group| {
-            group.config().rounds(200);
+            group.config().rounds(200).cache_firewall(false);
 
             group.bench("stopper", |b| {
                 let stop = Stopper::cancelled();
@@ -425,6 +425,29 @@ fn main() {
             group.bench("sync_stopper", |b| {
                 let stop = SyncStopper::cancelled();
                 b.iter(|| zenbench::black_box(&stop).check())
+            });
+        });
+
+        // ── Cold cache: same hot loops WITH cache firewall ──────────
+        // Shows the cost when stop token data is evicted from L1/L2,
+        // e.g., after context switches or large working sets.
+
+        suite.compare("cold_cache_stopper", |group| {
+            group.config().rounds(100).cache_firewall(true);
+
+            group.bench("dyn", |b| {
+                let stop = Stopper::new();
+                b.iter(|| hot_loop_dyn(&stop))
+            });
+
+            group.bench("boxed_active", |b| {
+                let stop = Stopper::new().into_boxed();
+                b.iter(|| hot_loop_boxed_active(&stop))
+            });
+
+            group.bench("dynstop_active", |b| {
+                let stop = Stopper::new().into_dyn();
+                b.iter(|| hot_loop_dynstop_active(&stop))
             });
         });
     });
