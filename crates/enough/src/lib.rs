@@ -9,19 +9,18 @@
 //!
 //! ## For Library Authors
 //!
-//! Accept `impl Stop` as the last parameter. Re-export `Unstoppable` for callers who don't need cancellation:
+//! Accept `Option<&dyn Stop>` for most APIs. Callers pass `None` for no
+//! cancellation (zero overhead) or `Some(&stopper)` to enable it:
 //!
 //! ```rust
 //! use enough::{Stop, StopReason};
 //!
-//! pub fn decode(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, DecodeError> {
+//! pub fn decode(data: &[u8], stop: Option<&dyn Stop>) -> Result<Vec<u8>, DecodeError> {
 //!     let mut output = Vec::new();
 //!     for (i, chunk) in data.chunks(1024).enumerate() {
-//!         // Check periodically in hot loops
 //!         if i % 16 == 0 {
-//!             stop.check()?;
+//!             stop.check()?; // None → Ok(()), Some → checks
 //!         }
-//!         // process chunk...
 //!         output.extend_from_slice(chunk);
 //!     }
 //!     Ok(output)
@@ -37,6 +36,9 @@
 //!     fn from(r: StopReason) -> Self { DecodeError::Stopped(r) }
 //! }
 //! ```
+//!
+//! Use `impl Stop` instead when the function is small enough that
+//! monomorphization is acceptable, or when you need `Clone` for threads.
 //!
 //! ## Zero-Cost When Not Needed
 //!
@@ -148,6 +150,37 @@ pub trait Stop: Send + Sync {
         true
     }
 }
+
+/// Trait alias for stop tokens that can be cloned and sent across threads.
+///
+/// This is `Stop + Clone + 'static` — the minimum needed to clone a stop
+/// token for thread spawning. Since `Stop` already requires `Send + Sync`,
+/// `CloneStop` types are fully thread-safe.
+///
+/// Use `impl CloneStop` in function signatures when you need to clone the
+/// stop token for parallel work:
+///
+/// ```rust
+/// use enough::{CloneStop, Unstoppable};
+///
+/// fn parallel_work(stop: impl CloneStop) {
+///     let worker_stop = stop.clone();
+///     std::thread::spawn(move || {
+///         worker_stop.should_stop();
+///     });
+/// }
+///
+/// parallel_work(Unstoppable);
+/// ```
+///
+/// All common stop types implement `CloneStop`: `Unstoppable`, `Stopper`,
+/// `SyncStopper`, `ChildStopper`, and `DynStop`. Notable exceptions:
+/// `StopSource` (not `Clone`), `StopRef` (not `'static`), and `BoxedStop`
+/// (not `Clone`).
+pub trait CloneStop: Stop + Clone + 'static {}
+
+/// Blanket implementation: any `Stop + Clone + 'static` is `CloneStop`.
+impl<T: Stop + Clone + 'static> CloneStop for T {}
 
 /// A [`Stop`] implementation that never stops (no cooperative cancellation).
 ///
@@ -450,5 +483,25 @@ mod tests {
         }
 
         assert!(process(&Unstoppable).is_ok());
+    }
+
+    #[test]
+    fn clone_stop_unstoppable() {
+        fn needs_clone(stop: impl CloneStop) -> bool {
+            let s2 = stop.clone();
+            stop.should_stop() || s2.should_stop()
+        }
+        assert!(!needs_clone(Unstoppable));
+    }
+
+    #[test]
+    fn clone_stop_coerces_to_dyn() {
+        fn check_dyn(stop: &dyn Stop) -> bool {
+            stop.should_stop()
+        }
+        fn via_clone_stop(stop: impl CloneStop) -> bool {
+            check_dyn(&stop)
+        }
+        assert!(!via_clone_stop(Unstoppable));
     }
 }

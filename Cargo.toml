@@ -13,6 +13,7 @@ members = [
     "tests/test-tokio",
     "tests/test-ffi",
     "tests/test-codec-mock",
+    "tests/test-ergonomics",
 ]
 
 [workspace.package]

@@ -197,7 +197,7 @@ extern crate alloc;
 
 // Re-export everything from enough
 #[allow(deprecated)]
-pub use enough::{Never, Stop, StopReason, Unstoppable};
+pub use enough::{CloneStop, Never, Stop, StopReason, Unstoppable};
 
 // Core modules (no_std, no alloc)
 mod func;
