@@ -161,48 +161,68 @@ fn trivial_work(i: usize) -> usize {
     black_box(i.wrapping_mul(2654435761))
 }
 
-macro_rules! hot_loop {
-    ($stop:expr) => {{
-        let stop = &$stop;
-        let mut acc = 0usize;
-        for i in 0..HOT_LOOP_ITERS {
-            if i % CHECK_INTERVAL == 0 {
-                let _ = stop.check();
-            }
-            acc = acc.wrapping_add(trivial_work(i));
-        }
-        black_box(acc)
-    }};
-}
-
+/// Inline hot loop — each closure contains the full loop body so the
+/// compiler sees the concrete type directly. No macro, no helper function.
 fn bench_hot_loop(c: &mut Criterion) {
     let mut g = c.benchmark_group("hot_loop_stopper");
 
-    // impl Stop — fully inlined, direct call
     g.bench_function("impl_stop", |b| {
         let stop = Stopper::new();
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
-    // &dyn Stop + may_stop — one-time Option conversion
+    g.bench_function("stoptoken", |b| {
+        let stop = Stopper::new().into_token();
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
+    });
+
     g.bench_function("dyn_may_stop", |b| {
         let stop = Stopper::new();
         let stop: &dyn Stop = &stop;
         let stop = stop.may_stop().then_some(stop);
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
-    // StopToken — automatic Option optimization
-    g.bench_function("dynstop", |b| {
-        let stop = Stopper::new().into_token();
-        b.iter(|| hot_loop!(stop))
-    });
-
-    // &dyn Stop raw — no optimization
     g.bench_function("dyn_raw", |b| {
         let stop = Stopper::new();
         let stop: &dyn Stop = &stop;
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
     g.finish();
@@ -211,31 +231,61 @@ fn bench_hot_loop(c: &mut Criterion) {
 
     g.bench_function("impl_stop", |b| {
         let stop = Unstoppable;
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
+    });
+
+    g.bench_function("stoptoken", |b| {
+        let stop = Unstoppable.into_token();
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
     g.bench_function("dyn_may_stop", |b| {
         let stop = Unstoppable;
         let stop: &dyn Stop = &stop;
         let stop = stop.may_stop().then_some(stop);
-        b.iter(|| hot_loop!(stop))
-    });
-
-    g.bench_function("dynstop", |b| {
-        let stop = Unstoppable.into_token();
-        b.iter(|| hot_loop!(stop))
-    });
-
-    // Option<&dyn Stop> = None, constructed directly (not via may_stop)
-    g.bench_function("option_none_direct", |b| {
-        let stop: Option<&dyn Stop> = None;
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
     g.bench_function("dyn_raw", |b| {
         let stop = Unstoppable;
         let stop: &dyn Stop = &stop;
-        b.iter(|| hot_loop!(stop))
+        b.iter(|| {
+            let mut acc = 0usize;
+            for i in 0..HOT_LOOP_ITERS {
+                if i % CHECK_INTERVAL == 0 {
+                    let _ = stop.check();
+                }
+                acc = acc.wrapping_add(trivial_work(i));
+            }
+            black_box(acc)
+        })
     });
 
     g.finish();

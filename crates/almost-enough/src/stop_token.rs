@@ -56,10 +56,19 @@ use crate::{Stop, StopReason};
 /// assert!(stop2.should_stop()); // both see cancellation
 /// ```
 pub struct StopToken {
-    /// `None` when the wrapped type's `may_stop()` returned false at
-    /// construction (e.g., `Unstoppable`). `check()` and `should_stop()`
-    /// short-circuit to no-op without any vtable dispatch.
-    inner: Option<Arc<dyn Stop + Send + Sync>>,
+    inner: StopTokenInner,
+}
+
+/// Dispatch enum — avoids vtable for the common Stopper/SyncStopper cases.
+enum StopTokenInner {
+    /// No-op (Unstoppable). check() → Ok(()), no dispatch.
+    None,
+    /// Direct atomic load with Relaxed ordering (Stopper).
+    Relaxed(Arc<crate::stopper::StopperInner>),
+    /// Direct atomic load with Acquire ordering (SyncStopper).
+    Acquire(Arc<crate::sync_stopper::SyncStopperInner>),
+    /// Everything else — vtable dispatch.
+    Dyn(Arc<dyn Stop + Send + Sync>),
 }
 
 impl StopToken {
@@ -69,11 +78,13 @@ impl StopToken {
     /// double-wrapping (no extra indirection).
     #[inline]
     pub fn new<T: Stop + 'static>(stop: T) -> Self {
-        // Fast path: no-op stops skip all wrapping (no Arc, no TypeId checks)
+        // Fast path: no-op stops skip all wrapping
         if !stop.may_stop() {
-            return Self { inner: None };
+            return Self {
+                inner: StopTokenInner::None,
+            };
         }
-        // Collapse StopToken nesting: reuse its inner Option<Arc>
+        // Collapse StopToken nesting
         if TypeId::of::<T>() == TypeId::of::<StopToken>() {
             let any_ref: &dyn Any = &stop;
             let inner = any_ref.downcast_ref::<StopToken>().unwrap();
@@ -81,38 +92,32 @@ impl StopToken {
             drop(stop);
             return result;
         }
-        // Flatten Stopper: reuse its inner Arc (one hop, not two)
+        // Stopper: direct atomic, no vtable dispatch
         if TypeId::of::<T>() == TypeId::of::<crate::Stopper>() {
             let any_ref: &dyn Any = &stop;
             let stopper = any_ref.downcast_ref::<crate::Stopper>().unwrap();
             let result = Self {
-                inner: Some(stopper.inner.clone() as Arc<dyn Stop + Send + Sync>),
+                inner: StopTokenInner::Relaxed(stopper.inner.clone()),
             };
             drop(stop);
             return result;
         }
-        // Flatten SyncStopper: same
+        // SyncStopper: direct atomic with Acquire ordering
         if TypeId::of::<T>() == TypeId::of::<crate::SyncStopper>() {
             let any_ref: &dyn Any = &stop;
             let stopper = any_ref.downcast_ref::<crate::SyncStopper>().unwrap();
             let result = Self {
-                inner: Some(stopper.inner.clone() as Arc<dyn Stop + Send + Sync>),
+                inner: StopTokenInner::Acquire(stopper.inner.clone()),
             };
             drop(stop);
             return result;
         }
         Self {
-            inner: Some(Arc::new(stop)),
+            inner: StopTokenInner::Dyn(Arc::new(stop)),
         }
     }
 
     /// Create a `StopToken` from an existing `Arc<T>` without re-wrapping.
-    ///
-    /// This is zero-cost — just widens the pointer. Use this when you
-    /// already have an `Arc`-wrapped stop type.
-    ///
-    /// If `T` is `StopToken`, the inner Arc is extracted to avoid double
-    /// indirection (`Arc<Arc<dyn Stop>>`).
     ///
     /// ```rust
     /// use almost_enough::{StopToken, Stopper, Stop};
@@ -121,7 +126,7 @@ impl StopToken {
     /// use std::sync::Arc;
     ///
     /// let stopper = Arc::new(Stopper::new());
-    /// let stop = StopToken::from_arc(stopper); // pointer widening, no allocation
+    /// let stop = StopToken::from_arc(stopper);
     /// assert!(!stop.should_stop());
     /// # }
     /// # #[cfg(not(feature = "std"))]
@@ -130,16 +135,29 @@ impl StopToken {
     #[inline]
     pub fn from_arc<T: Stop + 'static>(arc: Arc<T>) -> Self {
         if !arc.may_stop() {
-            return Self { inner: None };
+            return Self {
+                inner: StopTokenInner::None,
+            };
         }
-        // Collapse Arc<StopToken> → reuse inner Arc
         if TypeId::of::<T>() == TypeId::of::<StopToken>() {
             let any_ref: &dyn Any = &*arc;
             let inner = any_ref.downcast_ref::<StopToken>().unwrap();
             return inner.clone();
         }
         Self {
-            inner: Some(arc as Arc<dyn Stop + Send + Sync>),
+            inner: StopTokenInner::Dyn(arc as Arc<dyn Stop + Send + Sync>),
+        }
+    }
+}
+
+impl Clone for StopTokenInner {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Relaxed(arc) => Self::Relaxed(Arc::clone(arc)),
+            Self::Acquire(arc) => Self::Acquire(Arc::clone(arc)),
+            Self::Dyn(arc) => Self::Dyn(Arc::clone(arc)),
         }
     }
 }
@@ -157,51 +175,48 @@ impl Stop for StopToken {
     #[inline(always)]
     fn check(&self) -> Result<(), StopReason> {
         match &self.inner {
-            Some(inner) => inner.check(),
-            None => Ok(()),
+            StopTokenInner::None => Ok(()),
+            StopTokenInner::Relaxed(inner) => inner.check(),
+            StopTokenInner::Acquire(inner) => inner.check(),
+            StopTokenInner::Dyn(inner) => inner.check(),
         }
     }
 
     #[inline(always)]
     fn should_stop(&self) -> bool {
         match &self.inner {
-            Some(inner) => inner.should_stop(),
-            None => false,
+            StopTokenInner::None => false,
+            StopTokenInner::Relaxed(inner) => inner.should_stop(),
+            StopTokenInner::Acquire(inner) => inner.should_stop(),
+            StopTokenInner::Dyn(inner) => inner.should_stop(),
         }
     }
 
     #[inline(always)]
     fn may_stop(&self) -> bool {
-        self.inner.is_some()
+        !matches!(self.inner, StopTokenInner::None)
     }
 }
 
-/// Zero-cost conversion: reuses the Stopper's existing `Arc` via pointer widening.
-/// No double-wrapping — the resulting `StopToken` shares the same heap allocation.
+/// Zero-cost conversion: reuses the Stopper's Arc. Direct atomic dispatch, no vtable.
 impl From<crate::Stopper> for StopToken {
     #[inline]
     fn from(stopper: crate::Stopper) -> Self {
         Self {
-            inner: Some(stopper.inner as Arc<dyn Stop + Send + Sync>),
+            inner: StopTokenInner::Relaxed(stopper.inner),
         }
     }
 }
 
-/// Zero-cost conversion: reuses the SyncStopper's existing `Arc` via pointer widening.
+/// Zero-cost conversion: reuses the SyncStopper's Arc. Direct atomic dispatch.
 impl From<crate::SyncStopper> for StopToken {
     #[inline]
     fn from(stopper: crate::SyncStopper) -> Self {
         Self {
-            inner: Some(stopper.inner as Arc<dyn Stop + Send + Sync>),
+            inner: StopTokenInner::Acquire(stopper.inner),
         }
     }
 }
-
-// Option<Arc<dyn Stop>> gets null-pointer optimization — same size as Arc<dyn Stop>.
-// StopToken is two pointers (data + vtable), no larger than a bare Arc<dyn>.
-const _: () = assert!(
-    core::mem::size_of::<StopToken>() == core::mem::size_of::<Arc<dyn Stop + Send + Sync>>()
-);
 
 impl core::fmt::Debug for StopToken {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

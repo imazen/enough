@@ -2,10 +2,10 @@
 
 Batteries-included ergonomic extensions for the [`enough`](https://crates.io/crates/enough) cooperative cancellation crate.
 
-[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/almost-enough.svg?style=for-the-badge)](https://crates.io/crates/almost-enough)
-[![Documentation](https://docs.rs/almost-enough/badge.svg?style=for-the-badge)](https://docs.rs/almost-enough)
-[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
+[![docs.rs](https://img.shields.io/docsrs/almost-enough?style=for-the-badge)](https://docs.rs/almost-enough)
+[![codecov](https://img.shields.io/codecov/c/github/imazen/enough?style=for-the-badge)](https://codecov.io/gh/imazen/enough)
 [![License](https://img.shields.io/crates/l/almost-enough.svg?style=for-the-badge)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
 
