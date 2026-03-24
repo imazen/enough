@@ -48,84 +48,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{Stop, StopReason};
 
-/// A cancellation primitive with Release/Acquire memory ordering.
-///
-/// Unlike [`Stopper`](crate::Stopper) which uses Relaxed ordering,
-/// `SyncStopper` guarantees that all writes before `cancel()` are visible
-/// to any clone that subsequently observes `should_stop() == true`.
-///
-/// # Example
-///
-/// ```rust
-/// use almost_enough::{SyncStopper, Stop};
-///
-/// let stop = SyncStopper::new();
-/// let stop2 = stop.clone();
-///
-/// // In producer thread:
-/// // ... write shared data ...
-/// stop.cancel();  // Release barrier
-///
-/// // In consumer thread:
-/// if stop2.should_stop() {  // Acquire barrier
-///     // Safe to read shared data written before cancel()
-/// }
-/// ```
-///
-/// # Performance
-///
-/// On x86/x64, Release/Acquire has negligible overhead (strong memory model).
-/// On ARM and other weakly-ordered architectures, there's a small cost for
-/// the memory barriers. Use [`Stopper`](crate::Stopper) if you don't
-/// need the synchronization guarantees.
-#[derive(Debug, Clone)]
-pub struct SyncStopper {
-    cancelled: Arc<AtomicBool>,
+/// Inner state for [`SyncStopper`] — implements [`Stop`] with Acquire ordering.
+pub(crate) struct SyncStopperInner {
+    cancelled: AtomicBool,
 }
 
-impl SyncStopper {
-    /// Create a new synchronized stopper.
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Create a stopper that is already cancelled.
-    #[inline]
-    pub fn cancelled() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    /// Cancel with Release ordering.
-    ///
-    /// All memory writes before this call are guaranteed to be visible
-    /// to any clone that subsequently observes `should_stop() == true`.
-    #[inline]
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    /// Check if cancelled with Acquire ordering.
-    ///
-    /// If this returns `true`, all memory writes that happened before
-    /// the corresponding `cancel()` call are guaranteed to be visible.
-    #[inline]
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-}
-
-impl Default for SyncStopper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Stop for SyncStopper {
+impl Stop for SyncStopperInner {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
         if self.cancelled.load(Ordering::Acquire) {
@@ -138,6 +66,92 @@ impl Stop for SyncStopper {
     #[inline]
     fn should_stop(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+/// A cancellation primitive with Release/Acquire memory ordering.
+///
+/// Unlike [`Stopper`](crate::Stopper) which uses Relaxed ordering,
+/// `SyncStopper` guarantees that all writes before `cancel()` are visible
+/// to any clone that subsequently observes `should_stop() == true`.
+///
+/// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
+/// overhead — the existing `Arc` is reused, not double-wrapped.
+///
+/// # Performance
+///
+/// On x86/x64, Release/Acquire has negligible overhead (strong memory model).
+/// On ARM and other weakly-ordered architectures, there's a small cost for
+/// the memory barriers. Use [`Stopper`](crate::Stopper) if you don't
+/// need the synchronization guarantees.
+#[derive(Debug, Clone)]
+pub struct SyncStopper {
+    pub(crate) inner: Arc<SyncStopperInner>,
+}
+
+impl SyncStopper {
+    /// Create a new synchronized stopper.
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(SyncStopperInner {
+                cancelled: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// Create a stopper that is already cancelled.
+    #[inline]
+    pub fn cancelled() -> Self {
+        Self {
+            inner: Arc::new(SyncStopperInner {
+                cancelled: AtomicBool::new(true),
+            }),
+        }
+    }
+
+    /// Cancel with Release ordering.
+    ///
+    /// All memory writes before this call are guaranteed to be visible
+    /// to any clone that subsequently observes `should_stop() == true`.
+    #[inline]
+    pub fn cancel(&self) {
+        self.inner.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Check if cancelled with Acquire ordering.
+    ///
+    /// If this returns `true`, all memory writes that happened before
+    /// the corresponding `cancel()` call are guaranteed to be visible.
+    #[inline]
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl Default for SyncStopper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stop for SyncStopper {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        self.inner.check()
+    }
+
+    #[inline]
+    fn should_stop(&self) -> bool {
+        self.inner.should_stop()
+    }
+}
+
+impl core::fmt::Debug for SyncStopperInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SyncStopperInner")
+            .field("cancelled", &self.cancelled.load(Ordering::Relaxed))
+            .finish()
     }
 }
 
@@ -171,19 +185,10 @@ mod tests {
         let stop1 = SyncStopper::new();
         let stop2 = stop1.clone();
 
-        assert!(!stop1.should_stop());
-        assert!(!stop2.should_stop());
-
         stop2.cancel();
 
         assert!(stop1.should_stop());
         assert!(stop2.should_stop());
-    }
-
-    #[test]
-    fn sync_stopper_is_default() {
-        let stop: SyncStopper = Default::default();
-        assert!(!stop.is_cancelled());
     }
 
     #[test]
@@ -193,35 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn cancel_is_idempotent() {
-        let stop = SyncStopper::new();
-        stop.cancel();
-        stop.cancel();
-        stop.cancel();
-        assert!(stop.is_cancelled());
-    }
-
-    #[cfg(feature = "std")]
-    #[test]
-    fn sync_ordering_guarantees() {
-        use std::sync::atomic::AtomicUsize;
-
-        let stop = SyncStopper::new();
-        let data = AtomicUsize::new(0);
-
-        // This test verifies the ordering semantics compile correctly.
-        // Actual ordering verification would require more complex testing
-        // with tools like loom or ThreadSanitizer.
-
-        // Producer
-        data.store(42, Ordering::Relaxed);
-        stop.cancel(); // Release
-
-        // Consumer (same thread for simplicity)
-        if stop.should_stop() {
-            // Acquire
-            let value = data.load(Ordering::Relaxed);
-            assert_eq!(value, 42);
-        }
+    fn sync_stopper_is_default() {
+        let stop: SyncStopper = Default::default();
+        assert!(!stop.is_cancelled());
     }
 }

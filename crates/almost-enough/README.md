@@ -38,7 +38,8 @@ assert!(stop2.should_stop());
 | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
 | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
-| [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
+| [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
+| [`BoxedStop`] | alloc | Type-erased dynamic dispatch (prefer `StopToken`) |
 | [`WithTimeout`] | std | Add deadline to any `Stop` |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
@@ -49,6 +50,7 @@ assert!(stop2.should_stop());
 [`Stopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Stopper.html
 [`SyncStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.SyncStopper.html
 [`ChildStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.ChildStopper.html
+[`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html
 [`WithTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.WithTimeout.html
 
@@ -117,17 +119,22 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
 
 ## Type Erasure
 
-Prevent monomorphization explosion at API boundaries:
+Prevent monomorphization explosion at API boundaries with [`StopToken`].
+[`Stopper`] and [`SyncStopper`] convert to `StopToken` at zero cost via
+`Into` — the existing Arc is reused, no double-wrapping:
 
 ```rust
-use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
+use almost_enough::{CloneStop, StopToken, Stopper, Stop, StopExt};
 
-fn outer(stop: impl Stop + 'static) {
-    // Erase the concrete type
-    inner(stop.into_boxed());
+fn outer(stop: impl CloneStop) {
+    // Erase the concrete type — StopToken is Clone (Arc-based)
+    // Stopper→StopToken is zero-cost (reuses the same Arc)
+    let stop: StopToken = stop.into_token();
+    inner(&stop);
 }
 
-fn inner(stop: BoxedStop) {
+fn inner(stop: &StopToken) {
+    let stop2 = stop.clone(); // cheap Arc increment, no allocation
     // Only one version of this function exists
     while !stop.should_stop() {
         break;
@@ -154,18 +161,21 @@ fn process(stop: &dyn Stop) -> Result<(), StopReason> {
 assert!(process(&Unstoppable).is_ok());
 ```
 
-`BoxedStop` also provides `active_stop()` which collapses indirection — the returned `&dyn Stop` points directly at the concrete type inside the box, bypassing the wrapper:
+`StopToken` and `BoxedStop` automatically optimize away no-op stops — when
+wrapping `Unstoppable`, `check()` short-circuits without any vtable dispatch:
 
 ```rust
-use almost_enough::{BoxedStop, Stopper, Stop, StopReason};
+use almost_enough::{StopToken, Stopper, Unstoppable, Stop, StopReason};
 
-fn hot_loop(stop: &BoxedStop) -> Result<(), StopReason> {
-    let stop = stop.active_stop(); // Option<&dyn Stop>, collapsed
+fn hot_loop(stop: &StopToken) -> Result<(), StopReason> {
     for i in 0..1_000_000 {
-        stop.check()?; // one vtable dispatch, not two
+        stop.check()?; // Unstoppable: no-op. Stopper: one dispatch.
     }
     Ok(())
 }
+
+hot_loop(&StopToken::new(Unstoppable)).unwrap();    // zero overhead
+hot_loop(&StopToken::new(Stopper::new())).unwrap(); // one dispatch per check
 ```
 
 ## See Also

@@ -5,17 +5,15 @@
 //!
 //! # When to Use
 //!
+//! **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`).
+//! `BoxedStop` is retained for cases where unique ownership is required.
+//!
 //! Generic functions like `fn process(stop: impl Stop)` are monomorphized
 //! for each concrete type, increasing binary size. `BoxedStop` provides a
 //! single concrete type for dynamic dispatch:
 //!
 //! ```rust
 //! use almost_enough::{BoxedStop, Stop};
-//!
-//! // Monomorphized for each Stop type - increases binary size
-//! fn process_generic(stop: impl Stop) {
-//!     // ...
-//! }
 //!
 //! // Single implementation - no monomorphization bloat
 //! fn process_boxed(stop: BoxedStop) {
@@ -47,8 +45,12 @@ use crate::{Stop, StopReason};
 
 /// A heap-allocated [`Stop`] implementation.
 ///
-/// This type provides dynamic dispatch for `Stop`, avoiding monomorphization
-/// bloat when you don't need the performance of generics.
+/// **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`) and
+/// supports indirection collapsing. `BoxedStop` is retained for cases where
+/// unique ownership is required.
+///
+/// No-op stops (like `Unstoppable`) are optimized away at construction —
+/// `check()` short-circuits without any vtable dispatch.
 ///
 /// # Example
 ///
@@ -69,63 +71,42 @@ use crate::{Stop, StopReason};
 /// process(BoxedStop::new(StopSource::new()));
 /// process(BoxedStop::new(Stopper::new()));
 /// ```
-pub struct BoxedStop(Box<dyn Stop + Send + Sync>);
+pub struct BoxedStop(Option<Box<dyn Stop + Send + Sync>>);
 
 impl BoxedStop {
     /// Create a new boxed stop from any [`Stop`] implementation.
+    ///
+    /// No-op stops (where `may_stop()` returns false) are not allocated —
+    /// `check()` will short-circuit to `Ok(())`.
     #[inline]
     pub fn new<T: Stop + 'static>(stop: T) -> Self {
-        Self(Box::new(stop))
-    }
-
-    /// Returns the effective inner stop if it may stop, collapsing indirection.
-    ///
-    /// The returned `&dyn Stop` points directly to the concrete type inside
-    /// the box, bypassing the `BoxedStop` wrapper. In a hot loop, subsequent
-    /// `check()` calls go through one vtable dispatch instead of two.
-    ///
-    /// Returns `None` if the inner stop is a no-op (e.g., `Unstoppable`).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use almost_enough::{BoxedStop, Stopper, Unstoppable, Stop, StopReason};
-    ///
-    /// fn hot_loop(stop: &BoxedStop) -> Result<(), StopReason> {
-    ///     let stop = stop.active_stop(); // Option<&dyn Stop>, collapsed
-    ///     for i in 0..1000 {
-    ///         stop.check()?;
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// // Unstoppable: returns None, check() is always Ok(())
-    /// assert!(hot_loop(&BoxedStop::new(Unstoppable)).is_ok());
-    ///
-    /// // Stopper: returns Some(&Stopper), one vtable dispatch per check()
-    /// assert!(hot_loop(&BoxedStop::new(Stopper::new())).is_ok());
-    /// ```
-    #[inline]
-    pub fn active_stop(&self) -> Option<&dyn Stop> {
-        let inner: &dyn Stop = &*self.0;
-        if inner.may_stop() { Some(inner) } else { None }
+        if !stop.may_stop() {
+            return Self(None);
+        }
+        Self(Some(Box::new(stop)))
     }
 }
 
 impl Stop for BoxedStop {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
-        self.0.check()
+        match &self.0 {
+            Some(inner) => inner.check(),
+            None => Ok(()),
+        }
     }
 
     #[inline]
     fn should_stop(&self) -> bool {
-        self.0.should_stop()
+        match &self.0 {
+            Some(inner) => inner.should_stop(),
+            None => false,
+        }
     }
 
     #[inline]
     fn may_stop(&self) -> bool {
-        self.0.may_stop()
+        self.0.is_some()
     }
 }
 
@@ -145,6 +126,7 @@ mod tests {
         let stop = BoxedStop::new(Unstoppable);
         assert!(!stop.should_stop());
         assert!(stop.check().is_ok());
+        assert!(!stop.may_stop());
     }
 
     #[test]
@@ -175,12 +157,10 @@ mod tests {
 
     #[test]
     fn boxed_stop_avoids_monomorphization() {
-        // This function has a single concrete implementation
         fn process(stop: BoxedStop) -> bool {
             stop.should_stop()
         }
 
-        // All these use the same process function
         assert!(!process(BoxedStop::new(Unstoppable)));
         assert!(!process(BoxedStop::new(StopSource::new())));
         assert!(!process(BoxedStop::new(Stopper::new())));
@@ -193,37 +173,10 @@ mod tests {
     }
 
     #[test]
-    fn active_stop_collapses_unstoppable() {
+    fn unstoppable_no_allocation() {
+        // Unstoppable wraps to None — no heap allocation
         let stop = BoxedStop::new(Unstoppable);
-        assert!(stop.active_stop().is_none());
-    }
-
-    #[test]
-    fn active_stop_collapses_nested() {
-        let inner = BoxedStop::new(Unstoppable);
-        let outer = BoxedStop::new(inner);
-        assert!(outer.active_stop().is_none());
-    }
-
-    #[test]
-    fn active_stop_returns_inner_for_stopper() {
-        let stopper = Stopper::new();
-        let stop = BoxedStop::new(stopper.clone());
-
-        let active = stop.active_stop();
-        assert!(active.is_some());
-        assert!(active.unwrap().check().is_ok());
-
-        stopper.cancel();
-        assert!(active.unwrap().should_stop());
-    }
-
-    #[test]
-    fn active_stop_hot_loop_pattern() {
-        let stop = BoxedStop::new(Unstoppable);
-        let active = stop.active_stop();
-        for _ in 0..1000 {
-            assert!(active.check().is_ok());
-        }
+        assert!(!stop.may_stop());
+        assert!(stop.check().is_ok());
     }
 }

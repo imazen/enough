@@ -38,10 +38,35 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{Stop, StopReason};
 
+/// Inner state for [`Stopper`] — implements [`Stop`] directly so that
+/// `Arc<StopperInner>` can be widened to `Arc<dyn Stop>` without double-wrapping.
+pub(crate) struct StopperInner {
+    cancelled: AtomicBool,
+}
+
+impl Stop for StopperInner {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn should_stop(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
 /// A cancellation primitive with unified clone semantics.
 ///
 /// This is the recommended default for most use cases. Clone it to share
 /// the cancellation state - any clone can cancel or check status.
+///
+/// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
+/// overhead — the existing `Arc` is reused, not double-wrapped.
 ///
 /// # Example
 ///
@@ -69,9 +94,10 @@ use crate::{Stop, StopReason};
 /// - `check()`: ~1-2ns (single atomic load with Relaxed ordering)
 /// - `clone()`: atomic increment
 /// - `cancel()`: atomic store
+/// - `into() -> StopToken`: zero-cost (Arc pointer widening)
 #[derive(Debug, Clone)]
 pub struct Stopper {
-    cancelled: Arc<AtomicBool>,
+    pub(crate) inner: Arc<StopperInner>,
 }
 
 impl Stopper {
@@ -79,7 +105,9 @@ impl Stopper {
     #[inline]
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(StopperInner {
+                cancelled: AtomicBool::new(false),
+            }),
         }
     }
 
@@ -89,7 +117,9 @@ impl Stopper {
     #[inline]
     pub fn cancelled() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(true)),
+            inner: Arc::new(StopperInner {
+                cancelled: AtomicBool::new(true),
+            }),
         }
     }
 
@@ -98,13 +128,13 @@ impl Stopper {
     /// This is idempotent - calling it multiple times has no additional effect.
     #[inline]
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        self.inner.cancelled.store(true, Ordering::Relaxed);
     }
 
     /// Check if cancellation has been requested.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.inner.cancelled.load(Ordering::Relaxed)
     }
 }
 
@@ -117,16 +147,20 @@ impl Default for Stopper {
 impl Stop for Stopper {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Relaxed) {
-            Err(StopReason::Cancelled)
-        } else {
-            Ok(())
-        }
+        self.inner.check()
     }
 
     #[inline]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.inner.should_stop()
+    }
+}
+
+impl core::fmt::Debug for StopperInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StopperInner")
+            .field("cancelled", &self.cancelled.load(Ordering::Relaxed))
+            .finish()
     }
 }
 

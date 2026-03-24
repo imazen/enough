@@ -74,7 +74,8 @@
 //! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
 //! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
-//! | [`BoxedStop`] | alloc | Type-erased dynamic dispatch |
+//! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
+//! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 //!
 //! ## StopExt Extension Trait
@@ -95,21 +96,29 @@
 //! assert!(combined.should_stop());
 //! ```
 //!
-//! ## Type Erasure with `into_boxed()`
+//! ## Type Erasure with `StopToken`
 //!
-//! Prevent monomorphization explosion at API boundaries:
+//! [`StopToken`] wraps `Arc<dyn Stop>` — it's `Clone` (cheap Arc increment),
+//! type-erased, and can be sent across threads. [`Stopper`] and
+//! [`SyncStopper`] convert to `StopToken` at zero cost via `From`/`Into`
+//! (the existing Arc is reused, no double-wrapping).
+//!
+//! Use [`CloneStop`] (a trait alias for `Stop + Clone + 'static`) to accept
+//! any clonable stop, then erase with `into_token()` at the boundary:
 //!
 //! ```rust
 //! # #[cfg(feature = "alloc")]
 //! # fn main() {
-//! use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
+//! use almost_enough::{CloneStop, StopToken, Stopper, Stop, StopExt};
 //!
-//! fn outer(stop: impl Stop + 'static) {
-//!     // Erase the concrete type to avoid monomorphizing inner()
-//!     inner(stop.into_boxed());
+//! fn outer(stop: impl CloneStop) {
+//!     // Erase the concrete type — StopToken is Clone
+//!     let stop: StopToken = stop.into_token();
+//!     inner(&stop);
 //! }
 //!
-//! fn inner(stop: BoxedStop) {
+//! fn inner(stop: &StopToken) {
+//!     let stop2 = stop.clone(); // cheap Arc increment
 //!     // Only one version of this function exists
 //!     while !stop.should_stop() {
 //!         break;
@@ -186,6 +195,7 @@
 //! - **None** - Core trait and stack-based types only
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
@@ -195,6 +205,33 @@ extern crate alloc;
 // Re-export everything from enough
 #[allow(deprecated)]
 pub use enough::{Never, Stop, StopReason, Unstoppable};
+
+/// Trait alias for stop tokens that can be cloned and sent across threads.
+///
+/// This is `Stop + Clone + 'static` — the minimum needed to clone a stop
+/// token and send it to other threads. Since `Stop` already requires
+/// `Send + Sync`, `CloneStop` types are fully thread-safe.
+///
+/// Use `impl CloneStop` in public API signatures when you need to clone
+/// the stop token, then erase with [`StopToken`] internally:
+///
+/// ```rust
+/// # #[cfg(feature = "alloc")]
+/// # fn main() {
+/// use almost_enough::{CloneStop, StopToken, Stop};
+///
+/// pub fn parallel_work(stop: impl CloneStop) {
+///     let stop = StopToken::new(stop);
+///     let s2 = stop.clone(); // Arc increment
+/// }
+/// # }
+/// # #[cfg(not(feature = "alloc"))]
+/// # fn main() {}
+/// ```
+pub trait CloneStop: Stop + Clone + 'static {}
+
+/// Blanket implementation: any `Stop + Clone + 'static` is `CloneStop`.
+impl<T: Stop + Clone + 'static> CloneStop for T {}
 
 // Core modules (no_std, no alloc)
 mod func;
@@ -217,6 +254,10 @@ mod tree;
 
 #[cfg(feature = "alloc")]
 pub use boxed::BoxedStop;
+#[cfg(feature = "alloc")]
+mod stop_token;
+#[cfg(feature = "alloc")]
+pub use stop_token::StopToken;
 #[cfg(feature = "alloc")]
 pub use stopper::Stopper;
 #[cfg(feature = "alloc")]
@@ -330,6 +371,10 @@ pub trait StopExt: Stop + Sized {
     /// # #[cfg(not(feature = "alloc"))]
     /// # fn main() {}
     /// ```
+    /// Convert this stop into a boxed trait object.
+    ///
+    /// **Prefer [`into_token()`](StopExt::into_token)** which returns a [`StopToken`]
+    /// that is `Clone` and supports indirection collapsing.
     #[cfg(feature = "alloc")]
     #[inline]
     fn into_boxed(self) -> BoxedStop
@@ -337,6 +382,36 @@ pub trait StopExt: Stop + Sized {
         Self: 'static,
     {
         BoxedStop::new(self)
+    }
+
+    /// Convert this stop into a shared, cloneable [`StopToken`].
+    ///
+    /// The result is `Clone` (via `Arc` increment) and can be sent across
+    /// threads. Use this when you need owned, cloneable type erasure.
+    ///
+    /// If `self` is already a `StopToken`, this is a no-op (no double-wrapping).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "alloc")]
+    /// # fn main() {
+    /// use almost_enough::{Stopper, StopToken, Stop, StopExt};
+    ///
+    /// let stop = Stopper::new();
+    /// let dyn_stop: StopToken = stop.into_token();
+    /// let clone = dyn_stop.clone(); // cheap Arc increment
+    /// # }
+    /// # #[cfg(not(feature = "alloc"))]
+    /// # fn main() {}
+    /// ```
+    #[cfg(feature = "alloc")]
+    #[inline]
+    fn into_token(self) -> StopToken
+    where
+        Self: 'static,
+    {
+        StopToken::new(self)
     }
 
     /// Create a child stop that inherits cancellation from this stop.
