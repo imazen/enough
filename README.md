@@ -1,318 +1,174 @@
 # enough
 
-Minimal cooperative cancellation for Rust.
+Minimal cooperative cancellation trait for Rust.
 
 [![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/enough.svg)](https://crates.io/crates/enough)
-[![Documentation](https://docs.rs/enough/badge.svg)](https://docs.rs/enough)
+[![Crates.io](https://img.shields.io/crates/v/enough.svg?style=for-the-badge)](https://crates.io/crates/enough)
+[![Documentation](https://docs.rs/enough/badge.svg?style=for-the-badge)](https://docs.rs/enough)
 [![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/enough.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.71-blue.svg)](https://blog.rust-lang.org/2023/07/13/Rust-1.71.0.html)
+[![License](https://img.shields.io/crates/l/enough.svg?style=for-the-badge)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
 
-## Why "enough"?
+A minimal, `no_std` trait for cooperative cancellation. Zero dependencies.
 
-Sometimes you've had *enough*. The operation is taking too long, the user hit cancel, or resources are constrained. This crate provides a minimal, shared trait that libraries can use to support cooperative cancellation without heavy dependencies.
+`StopReason` is 1 byte and `check()` compiles to a single boolean read from the stack.
 
-## Design Rationale
+## For Library Authors
 
-**Problem:** Image codecs, compression libraries, and other CPU-intensive operations need cancellation support, but shouldn't dictate which cancellation system you use.
-
-**Solution:** A minimal `Stop` trait that any cancellation system can implement:
-
-```rust
-pub trait Stop: Send + Sync {
-    fn check(&self) -> Result<(), StopReason>;
-    fn should_stop(&self) -> bool { self.check().is_err() }
-}
-```
-
-**Key decisions:**
-- **`no_std` core** - Works in embedded, WASM, everywhere
-- **Zero dependencies** - Won't bloat your dependency tree
-- **Bring your own impl** - Works with tokio, custom systems, FFI
-- **Error propagation via `?`** - Integrates cleanly with Result chains
-- **1-byte error type** - `StopReason` compiles to a single boolean read from the stack
-
-## Crate Structure
-
-| Crate | Purpose |
-|-------|---------|
-| `enough` | Core trait only: `Stop`, `StopReason`, `Unstoppable` |
-| `almost-enough` | **All implementations**: `Stopper`, `StopSource`, timeouts, combinators |
-| `enough-ffi` | C FFI for cross-language use |
-| `enough-tokio` | Bridge to tokio's CancellationToken |
-
-## Quick Start
-
-### For Library Authors
-
-Depend on `enough` (minimal) and accept `&dyn Stop`:
+Accept `impl Stop + 'static` in your public API. See
+[Choosing a Signature](#choosing-a-function-signature) below.
 
 ```rust
-use enough::{Stop, StopReason, Unstoppable};
+use enough::{Stop, StopReason};
 
-pub fn process(data: &[u8], stop: &dyn Stop) -> Result<Vec<u8>, MyError> {
-    let mut output = Vec::new();
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
-            stop.check()?;  // Returns Err(StopReason) if stopped
+            stop.check()?;
         }
-        // ... process chunk ...
+        // process...
     }
-    Ok(output)
+    Ok(vec![])
 }
+
+// Callers:
+// decode(&data, Unstoppable)?;   // no cancellation
+// decode(&data, stopper)?;       // with cancellation
 
 impl From<StopReason> for MyError {
     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 }
 ```
 
-**`&dyn Stop` vs `impl Stop`:**
-
-Prefer `&dyn Stop` by default. It keeps your binary smaller (no monomorphization), reduces compile times, and makes the API simpler for callers. The overhead of a virtual call on `check()` is negligible when you're checking every 16-100 iterations of a chunked loop.
-
-Use `impl Stop` (generic) only when the stop check is in a tight inner loop and you need the compiler to inline and eliminate it entirely — for example, checking on every pixel or every byte. In that case, the monomorphized `Unstoppable` path compiles down to zero overhead.
-
-**Naming conventions:**
-
-For **new libraries**, accept `&dyn Stop` as the final parameter with no suffix:
+## Zero-Cost Default
 
 ```rust
-use my_codec::process;
 use enough::Unstoppable;
-let result = process(&data, &Unstoppable);
+
+// Compiles away completely - zero runtime cost
+let result = my_lib::decode(&data, Unstoppable);
 ```
 
-For **existing libraries** adding cancellation support, create a `_stoppable` variant and delegate:
+## Optimizing Hot Loops with `dyn Stop`
+
+Behind `&dyn Stop`, the compiler can't inline away `Unstoppable::check()`. Use `may_stop()` with `Option<T>` to eliminate that overhead:
 
 ```rust
-// Original function - unchanged API
-pub fn decode(data: &[u8]) -> Result<Image, Error> {
-    decode_stoppable(data, &Unstoppable)
-}
+use enough::{Stop, StopReason};
 
-// New stoppable variant
-pub fn decode_stoppable(data: &[u8], stop: &dyn Stop) -> Result<Image, Error> {
-    // ... implementation with stop.check() calls
-}
-```
-
-This preserves backwards compatibility while making cancellation available.
-
-### For Application Developers
-
-```toml
-[dependencies]
-almost-enough = "0.3"  # Includes all implementations
-```
-
-Choose the implementation that fits your needs:
-
-```rust
-use almost_enough::{Stopper, Stop};
-
-// Create a cancellation source - clone to share
-let stop = Stopper::new();
-let stop2 = stop.clone();
-
-// Pass to libraries
-let handle = std::thread::spawn(move || {
-    my_codec::process(&data, &stop2)
-});
-
-// Any clone can cancel
-stop.cancel();
-```
-
-### Zero-Cost When Not Needed
-
-```rust
-use almost_enough::Unstoppable;  // or enough::Unstoppable
-
-// With &dyn Stop APIs: trivially cheap (Unstoppable::check always returns Ok)
-let result = my_codec::process(&data, &Unstoppable);
-
-// With impl Stop APIs: fully optimized away at compile time
-let result = my_codec::process_hot(&data, Unstoppable);
-```
-
-## Type Overview
-
-| Type | Crate | Feature | Use Case |
-|------|-------|---------|----------|
-| `Stop` | enough | core | The trait |
-| `StopReason` | enough | core | Cancellation reason enum |
-| `Unstoppable` | enough | core | Zero-cost "never stop" |
-| `StopSource` / `StopRef` | almost-enough | core | Stack-based, borrowed, Relaxed ordering |
-| `FnStop` | almost-enough | core | Wrap any closure |
-| `OrStop` | almost-enough | core | Combine multiple stop sources |
-| `Stopper` | almost-enough | alloc | **Default choice** - Arc-based, clone to share |
-| `SyncStopper` | almost-enough | alloc | Like Stopper with Acquire/Release ordering |
-| `ChildStopper` | almost-enough | alloc | Hierarchical parent-child cancellation |
-| `BoxedStop` | almost-enough | alloc | Type-erased dynamic dispatch |
-| `WithTimeout` | almost-enough | std | Add deadline to any Stop |
-
-## Feature Flags
-
-**`enough`** (for library authors):
-```toml
-enough = "0.3"                    # no_std core only
-enough = { version = "0.3", features = ["alloc"] }  # + Box/Arc impls
-enough = { version = "0.3", features = ["std"] }    # + Error impl
-```
-
-**`almost-enough`** (for applications):
-```toml
-almost-enough = "0.3"                    # std (default) - all features
-almost-enough = { version = "0.3", default-features = false, features = ["alloc"] }  # no_std + alloc
-```
-
-## Memory Ordering
-
-Two variants for different needs:
-
-```rust
-use almost_enough::{Stopper, SyncStopper};
-
-// Stopper: Relaxed ordering (faster on ARM)
-// Use when you just need to signal "stop"
-let stop = Stopper::new();
-stop.cancel();  // Relaxed store
-stop.should_stop();  // Relaxed load
-
-// SyncStopper: Release/Acquire ordering
-// Use when stop signals data is ready
-let stop = SyncStopper::new();
-// Thread A:
-shared_result.store(42, Relaxed);
-stop.cancel();  // Release: flushes shared_result
-
-// Thread B:
-if stop.should_stop() {  // Acquire: syncs with Release
-    shared_result.load(Relaxed);  // Guaranteed to see 42
-}
-```
-
-## Common Patterns
-
-### Timeouts
-
-```rust
-use almost_enough::{Stopper, TimeoutExt};
-use std::time::Duration;
-
-let stop = Stopper::new();
-let timed = stop.clone().with_timeout(Duration::from_secs(30));
-
-// Stops if cancelled OR timeout expires
-```
-
-### Hierarchical Cancellation
-
-```rust
-use almost_enough::ChildStopper;
-
-let parent = ChildStopper::new();
-let child_a = parent.child();
-let child_b = parent.child();
-
-child_a.cancel();  // Only child_a stops
-parent.cancel();   // Both children stop
-```
-
-### Combining Sources
-
-```rust
-use almost_enough::{Stopper, StopExt};
-
-let app_cancel = Stopper::new();
-let timeout = Stopper::new();
-
-// Stop if either triggers
-let combined = app_cancel.clone().or(timeout.clone());
-```
-
-### With Tokio
-
-```rust
-use enough_tokio::TokioStop;
-use tokio_util::sync::CancellationToken;
-
-let token = CancellationToken::new();
-let stop = TokioStop::new(token.clone());
-
-tokio::task::spawn_blocking(move || {
-    my_codec::process(&data, &stop)
-});
-```
-
-## Performance
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| `Unstoppable.check()` | <0.5ns | Compiled to a constant; eliminated entirely with `impl Stop` |
-| `StopSource.check()` | <0.5ns | Stack `AtomicBool`, Relaxed load |
-| `Stopper.check()` | ~0.5ns | Arc `AtomicBool`, Relaxed load |
-| `SyncStopper.check()` | ~0.5ns | Arc `AtomicBool`, Acquire load |
-| `FnStop.check()` | <0.5ns | Closure call returning `false` |
-| `BoxedStop.check()` | ~1ns | Dynamic dispatch overhead |
-| `ChildStopper.check()` | ~0.6–3ns | Walks parent chain; ~0.6ns root, ~1.4ns depth-1, ~2.7ns depth-3 |
-| `OrStop.check()` | ~0.7ns | Two Relaxed loads |
-| `WithTimeout.check()` | ~17ns | Inner check + `Instant::now()` |
-| `&dyn Stop` vs generic | ~0.2ns | Virtual call adds ~0.2ns over monomorphized dispatch |
-
-Measured with Criterion on x86-64 (`cargo bench -p almost-enough`). Check every 16–100 iterations for negligible overhead.
-
-## Adaptability
-
-The trait-based design means you can:
-
-1. **Start simple** - Use `Unstoppable` during development
-2. **Add cancellation** - Switch to `Stopper` when needed
-3. **Add timeouts** - Wrap with `.with_timeout()`
-4. **Go hierarchical** - Use `ChildStopper` for complex flows
-5. **Integrate with async** - Use `enough-tokio`
-6. **Call from FFI** - Use `enough-ffi`
-
-Libraries accepting `&dyn Stop` or `impl Stop` work with all of these without changes.
-
-## Zero-Cost Proof (impl Stop)
-
-When an API uses `impl Stop`, each type is monomorphized. Pass `Unstoppable` and the compiler eliminates all cancellation checks entirely. This matters for tight inner loops; for coarser check intervals, `&dyn Stop` is the better default (see [For Library Authors](#for-library-authors)).
-
-```rust
-#[inline(never)]
-pub fn process<S: Stop>(data: &[u8], stop: S) -> usize {
-    let mut sum = 0usize;
-    for (i, &byte) in data.iter().enumerate() {
-        if i % 16 == 0 && stop.should_stop() {  // <-- eliminated for Unstoppable
-            return sum;
-        }
-        sum = sum.wrapping_add(byte as usize);
+fn process(stop: &dyn Stop) -> Result<(), StopReason> {
+    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    for i in 0..1_000_000 {
+        stop.check()?; // None → Ok(()), Some → one vtable dispatch
     }
-    sum
+    Ok(())
 }
 ```
 
-Verify with `cargo asm`:
+`Option<T: Stop>` implements `Stop`: `None` is a no-op, `Some(inner)` delegates. The branch predictor handles the constant `None`/`Some` perfectly.
 
-```x86asm
-asm_demo::process_with_stop:            # Monomorphized for Unstoppable
-        mov     ecx, 4
-        xor     eax, eax
-.LBB4_1:
-        movzx   edx, byte ptr [rdi + rcx - 4]
-        add     rdx, rax
-        movzx   eax, byte ptr [rdi + rcx - 3]
-        ; ... unrolled loop, NO cancellation check
-        add     rcx, 5
-        cmp     rcx, 104
-        jne     .LBB4_1
-        ret
+## What's in This Crate
+
+This crate provides only the **core trait and types**:
+
+- `Stop` - The cooperative cancellation trait
+- `StopReason` - Why an operation stopped (Cancelled or TimedOut)
+- `Unstoppable` - Zero-cost "never stop" implementation
+- `impl Stop for Option<T: Stop>` - No-op when `None`, delegates when `Some`
+
+For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, etc.), see [`almost-enough`](https://crates.io/crates/almost-enough).
+
+## Choosing a Function Signature
+
+### Public API: `impl Stop + 'static`
+
+One function per operation. Callers pass `Unstoppable` explicitly
+for no cancellation:
+
+```rust
+use enough::{Stop, StopReason};
+
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
+    // ...
+    Ok(vec![])
+}
+
+// Callers:
+// decode(&data, Unstoppable)?;   // no cancellation
+// decode(&data, stopper)?;       // with cancellation
 ```
 
-No atomic loads, no branches for cancellation - just the loop. The `if stop.should_stop()` branch is dead-code eliminated because `Unstoppable::should_stop()` is `#[inline(always)]` and returns `false`.
+The `'static` bound is needed for `StopToken::new()` internally.
+Use `impl Stop` (without `'static`) for embedded/no_std code that
+accepts borrowed types like `StopRef<'a>`.
+
+### Internally: use `StopToken` (from `almost-enough`)
+
+[`StopToken`] is the best all-around choice for internal code. Benchmarks
+show it within 3% of fully-inlined generic for `Unstoppable`, and **25%
+faster** than generic for `Stopper` (due to the flattened Arc and
+automatic `Option` optimization).
+
+```rust
+use enough::Stop;
+use almost_enough::StopToken;
+
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
+    let stop = StopToken::new(stop); // erase once (no Clone needed on T)
+    decode_inner(data, &stop)       // single implementation below
+}
+
+fn decode_inner(data: &[u8], stop: &StopToken) -> Result<Vec<u8>, MyError> {
+    for (i, chunk) in data.chunks(1024).enumerate() {
+        if i % 16 == 0 {
+            stop.check()?; // Unstoppable: automatic no-op. Stopper: one dispatch.
+        }
+    }
+    Ok(vec![])
+}
+```
+
+`StopToken` handles the `Unstoppable` optimization automatically — no
+`may_stop()` call needed. For parallel work, clone the `StopToken`
+(cheap Arc increment). `Stopper`/`SyncStopper` convert at zero cost
+via `Into` (same Arc, no double-wrapping).
+
+### Without `almost-enough`
+
+Use `&dyn Stop` with `may_stop().then_some()`. The result is
+`Option<&dyn Stop>` which implements `Stop` — `None.check()` returns
+`Ok(())`, `Some.check()` delegates:
+
+```rust
+fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), MyError> {
+    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    for (i, chunk) in data.chunks(1024).enumerate() {
+        if i % 16 == 0 {
+            stop.check()?; // None → Ok(()), Some → one dispatch
+        }
+    }
+    Ok(())
+}
+```
+
+[`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
+
+> **Future direction:** `StopToken` may move from `almost-enough` into
+> `enough` in a future release, so library authors can get erased +
+> clonable stop tokens without the extra dependency.
+
+## Features
+
+- **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Unstoppable`
+- **`alloc`** - Adds `Box<T>` and `Arc<T>` blanket impls for `Stop`
+- **`std`** - Implies `alloc` (kept for downstream compatibility)
+
+## See Also
+
+- [`almost-enough`](https://crates.io/crates/almost-enough) - **All implementations**: `Stopper`, `StopSource`, `ChildStopper`, timeouts, combinators, guards
+- [`enough-ffi`](https://crates.io/crates/enough-ffi) - FFI helpers for C#, Python, Node.js
+- [`enough-tokio`](https://crates.io/crates/enough-tokio) - Tokio CancellationToken bridge
 
 ## License
 
-Licensed under either of Apache License 2.0 or MIT license at your option.
+MIT OR Apache-2.0

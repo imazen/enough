@@ -8,7 +8,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Minimal cooperative cancellation trait for long-running operations"
-readme = "README.md"
+readme = "../../README.md"
 
 [features]
 default = []
