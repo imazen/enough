@@ -15,20 +15,25 @@ A minimal, `no_std` trait for cooperative cancellation. Zero dependencies.
 
 ## For Library Authors
 
-Accept `impl Stop` in your functions:
+Accept `impl Stop + 'static` in your public API. See
+[Choosing a Signature](#choosing-a-function-signature) below.
 
 ```rust
 use enough::{Stop, StopReason};
 
-pub fn decode(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, MyError> {
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
-            stop.check()?; // Returns Err(StopReason) if stopped
+            stop.check()?;
         }
         // process...
     }
     Ok(vec![])
 }
+
+// Callers:
+// decode(&data, Unstoppable)?;   // no cancellation
+// decode(&data, stopper)?;       // with cancellation
 
 impl From<StopReason> for MyError {
     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
@@ -72,6 +77,85 @@ This crate provides only the **core trait and types**:
 - `impl Stop for Option<T: Stop>` - No-op when `None`, delegates when `Some`
 
 For concrete cancellation implementations (`Stopper`, `StopSource`, timeouts, etc.), see [`almost-enough`](https://crates.io/crates/almost-enough).
+
+## Choosing a Function Signature
+
+### Public API: `impl Stop + 'static`
+
+One function per operation. Callers pass `Unstoppable` explicitly
+for no cancellation:
+
+```rust
+use enough::{Stop, StopReason};
+
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
+    // ...
+    Ok(vec![])
+}
+
+// Callers:
+// decode(&data, Unstoppable)?;   // no cancellation
+// decode(&data, stopper)?;       // with cancellation
+```
+
+The `'static` bound is needed for `StopToken::new()` internally.
+Use `impl Stop` (without `'static`) for embedded/no_std code that
+accepts borrowed types like `StopRef<'a>`.
+
+### Internally: use `StopToken` (from `almost-enough`)
+
+[`StopToken`] is the best all-around choice for internal code. Benchmarks
+show it within 3% of fully-inlined generic for `Unstoppable`, and **25%
+faster** than generic for `Stopper` (due to the flattened Arc and
+automatic `Option` optimization).
+
+```rust
+use enough::Stop;
+use almost_enough::StopToken;
+
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
+    let stop = StopToken::new(stop); // erase once (no Clone needed on T)
+    decode_inner(data, &stop)       // single implementation below
+}
+
+fn decode_inner(data: &[u8], stop: &StopToken) -> Result<Vec<u8>, MyError> {
+    for (i, chunk) in data.chunks(1024).enumerate() {
+        if i % 16 == 0 {
+            stop.check()?; // Unstoppable: automatic no-op. Stopper: one dispatch.
+        }
+    }
+    Ok(vec![])
+}
+```
+
+`StopToken` handles the `Unstoppable` optimization automatically — no
+`may_stop()` call needed. For parallel work, clone the `StopToken`
+(cheap Arc increment). `Stopper`/`SyncStopper` convert at zero cost
+via `Into` (same Arc, no double-wrapping).
+
+### Without `almost-enough`
+
+Use `&dyn Stop` with `may_stop().then_some()`. The result is
+`Option<&dyn Stop>` which implements `Stop` — `None.check()` returns
+`Ok(())`, `Some.check()` delegates:
+
+```rust
+fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), MyError> {
+    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    for (i, chunk) in data.chunks(1024).enumerate() {
+        if i % 16 == 0 {
+            stop.check()?; // None → Ok(()), Some → one dispatch
+        }
+    }
+    Ok(())
+}
+```
+
+[`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
+
+> **Future direction:** `StopToken` may move from `almost-enough` into
+> `enough` in a future release, so library authors can get erased +
+> clonable stop tokens without the extra dependency.
 
 ## Features
 

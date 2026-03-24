@@ -9,19 +9,22 @@
 //!
 //! ## For Library Authors
 //!
-//! Accept `impl Stop` as the last parameter. Re-export `Unstoppable` for callers who don't need cancellation:
+//! Accept `impl Stop + 'static` in your public API. Internally,
+//! use [`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html)
+//! from `almost-enough` — it handles the `Unstoppable` optimization
+//! automatically and is the fastest option for real stop types:
 //!
 //! ```rust
 //! use enough::{Stop, StopReason};
 //!
-//! pub fn decode(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, DecodeError> {
+//! pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, DecodeError> {
+//!     // Internally: StopToken::new(stop) erases the type and optimizes
+//!     // Unstoppable to a no-op. See almost-enough docs for details.
 //!     let mut output = Vec::new();
 //!     for (i, chunk) in data.chunks(1024).enumerate() {
-//!         // Check periodically in hot loops
 //!         if i % 16 == 0 {
 //!             stop.check()?;
 //!         }
-//!         // process chunk...
 //!         output.extend_from_slice(chunk);
 //!     }
 //!     Ok(output)
@@ -61,6 +64,7 @@
 //! - **`std`** - Implies `alloc` (kept for downstream compatibility)
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
@@ -416,8 +420,6 @@ mod tests {
         use core::sync::atomic::{AtomicBool, Ordering};
 
         struct TestStop(AtomicBool);
-        unsafe impl Send for TestStop {}
-        unsafe impl Sync for TestStop {}
         impl Stop for TestStop {
             fn check(&self) -> Result<(), StopReason> {
                 if self.0.load(Ordering::Relaxed) {
