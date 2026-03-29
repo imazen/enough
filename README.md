@@ -2,12 +2,12 @@
 
 Minimal cooperative cancellation trait for Rust.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/enough.svg?style=for-the-badge)](https://crates.io/crates/enough)
-[![docs.rs](https://img.shields.io/docsrs/enough?style=for-the-badge)](https://docs.rs/enough)
-[![codecov](https://img.shields.io/codecov/c/github/imazen/enough?style=for-the-badge)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/enough.svg?style=for-the-badge)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
+[![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/enough.svg?style=flat-square)](https://crates.io/crates/enough)
+[![docs.rs](https://img.shields.io/docsrs/enough?style=flat-square)](https://docs.rs/enough)
+[![codecov](https://img.shields.io/codecov/c/github/imazen/enough?style=flat-square)](https://codecov.io/gh/imazen/enough)
+[![License](https://img.shields.io/crates/l/enough.svg?style=flat-square)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=flat-square)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
 
 A `no_std`, zero-dependency trait for cooperative cancellation.
 
