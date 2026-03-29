@@ -32,6 +32,21 @@ fn light_work(acc: &mut u64) {
     }
 }
 
+/// Medium work with jitter: average ~100ns but bursty.
+/// Uses the accumulator itself to pick between short bursts (few iters)
+/// and long bursts (many iters), so the pattern is deterministic but
+/// appears irregular to the CPU branch predictor.
+#[inline(always)]
+fn jittery_work(acc: &mut u64) {
+    // LCG step determines this iteration's cost
+    *acc = acc.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    // Use top bits to pick iteration count: 2..38 (avg ~20, ~100ns)
+    let iters = 2 + ((*acc >> 59) as u32 * 5); // 0..31 * 5 + 2 → 2..157, clustered low
+    for _ in 0..iters {
+        *acc = acc.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+    }
+}
+
 const BUF: usize = 256 * 1024;
 const CHUNK: usize = 4096;
 
@@ -68,6 +83,16 @@ fn check_10k_light(stop: &dyn Stop) -> Result<u64, StopReason> {
     for _ in 0..10_000 {
         stop.check()?;
         light_work(&mut acc);
+    }
+    Ok(acc)
+}
+
+#[inline(never)]
+fn check_10k_jittery(stop: &dyn Stop) -> Result<u64, StopReason> {
+    let mut acc = 0x12345678u64;
+    for _ in 0..10_000 {
+        stop.check()?;
+        jittery_work(&mut acc);
     }
     Ok(acc)
 }
@@ -142,6 +167,46 @@ fn main() {
             group.bench("Stopper (no timeout)", |b| {
                 let stop = Stopper::new();
                 b.iter(|| check_10k_light(&stop))
+            });
+        });
+
+        // ═══════════════════════════════════════════════════════════
+        // 2b. Medium work with jitter: avg ~100ns, bursty
+        //
+        // Simulates irregular workloads where some iterations are
+        // cheap (few ns) and others expensive (hundreds of ns).
+        // The debouncer must track the *average* rate despite
+        // per-call variance. This stresses the adaptation logic.
+        // ═══════════════════════════════════════════════════════════
+
+        suite.compare("jittery_work_10k", |group| {
+            group.config().sort_by_speed(true).cache_firewall(false);
+            group.baseline("WithTimeout");
+            group.throughput(zenbench::Throughput::Elements(10_000));
+            group.throughput_unit("checks");
+
+            group.bench("WithTimeout", |b| {
+                let stop = Stopper::new();
+                let timeout = stop.with_timeout(Duration::from_secs(60));
+                b.iter(|| check_10k_jittery(&timeout))
+            });
+
+            group.bench("DebouncedTimeout", |b| {
+                let stop = Stopper::new();
+                let timeout = stop.with_debounced_timeout(Duration::from_secs(60));
+                // Pre-warm with jittery-rate calls
+                let mut warmup_acc = 0x12345678u64;
+                for _ in 0..20_000 {
+                    let _ = timeout.check();
+                    jittery_work(&mut warmup_acc);
+                }
+                zenbench::black_box(warmup_acc);
+                b.iter(|| check_10k_jittery(&timeout))
+            });
+
+            group.bench("Stopper (no timeout)", |b| {
+                let stop = Stopper::new();
+                b.iter(|| check_10k_jittery(&stop))
             });
         });
 
