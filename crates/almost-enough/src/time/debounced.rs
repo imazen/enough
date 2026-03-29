@@ -4,10 +4,20 @@
 //! like [`WithTimeout`]. The key difference: it learns how fast `check()` is
 //! being called and skips the expensive clock read on most calls.
 //!
-//! This is useful when `check()` is called in a very tight loop where
-//! `Instant::now()` (~15-25ns) dominates the per-iteration cost. In
-//! codec-style workloads with real computation between checks, use
-//! [`WithTimeout`] instead — the clock read is invisible next to the work.
+//! This matters for codecs and libraries where the caller controls the `Stop`
+//! implementation but not the check frequency, and vice versa. A library
+//! calling `stop.check()` every 4KB row can't know whether the caller passed a
+//! `WithTimeout` (which calls `Instant::now()` every check) or a plain
+//! `Stopper`. `DebouncedTimeout` lets callers add deadlines without imposing
+//! a hidden ~17ns-per-check tax on the library's hot path.
+//!
+//! # Deadline precision
+//!
+//! The maximum overshoot equals the target interval (default 100μs). For
+//! timeouts measured in seconds or minutes this is negligible. If you need
+//! sub-100μs precision, either lower the target with
+//! [`with_target_interval`](DebouncedTimeout::with_target_interval) or use
+//! [`WithTimeout`] directly.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
@@ -20,6 +30,12 @@ use crate::{Stop, StopReason};
 /// regardless of how fast `check()` is called. At 10ns per call, that's one
 /// clock read per ~10,000 checks.
 const DEFAULT_TARGET_NANOS: u64 = 100_000;
+
+/// Convert a Duration to nanoseconds as u64, clamping at u64::MAX.
+#[inline]
+fn duration_to_nanos(d: Duration) -> u64 {
+    d.as_nanos().min(u64::MAX as u128) as u64
+}
 
 /// A [`Stop`] wrapper that debounces the `Instant::now()` call.
 ///
@@ -35,10 +51,14 @@ const DEFAULT_TARGET_NANOS: u64 = 100_000;
 ///
 /// # When to Use
 ///
-/// Use `DebouncedTimeout` when `check()` is called in a tight loop with
-/// very little work between calls (sub-microsecond). For codec-style workloads
-/// with real computation between checks, [`WithTimeout`](super::WithTimeout)
-/// is simpler and equally fast.
+/// Prefer `DebouncedTimeout` over [`WithTimeout`](super::WithTimeout) when
+/// the `Stop` implementation crosses an API boundary — the caller adds the
+/// deadline, but the library controls check frequency. This avoids coupling
+/// timeout overhead to the library's internal loop structure.
+///
+/// In tight loops (sub-microsecond between checks), the savings are ~10x.
+/// In codec workloads (~4KB between checks), both types are equivalent
+/// because the real work dwarfs the clock read.
 ///
 /// # Example
 ///
@@ -81,13 +101,14 @@ impl<T: Stop> DebouncedTimeout<T> {
     /// Create a new debounced timeout with the default target interval (100μs).
     ///
     /// The deadline is calculated as `Instant::now() + duration`.
+    /// Durations longer than ~584 years are clamped to `u64::MAX` nanoseconds.
     #[inline]
     pub fn new(inner: T, duration: Duration) -> Self {
         let now = Instant::now();
         Self {
             inner,
             created: now,
-            deadline_nanos: duration.as_nanos() as u64,
+            deadline_nanos: duration_to_nanos(duration),
             target_nanos: DEFAULT_TARGET_NANOS,
             call_count: AtomicU32::new(0),
             skip_mod: AtomicU32::new(1),
@@ -97,13 +118,16 @@ impl<T: Stop> DebouncedTimeout<T> {
     }
 
     /// Create a debounced timeout with an absolute deadline.
+    ///
+    /// If the deadline is in the past, the first clock read will trigger
+    /// [`StopReason::TimedOut`].
     #[inline]
     pub fn with_deadline(inner: T, deadline: Instant) -> Self {
         let now = Instant::now();
         Self {
             inner,
             created: now,
-            deadline_nanos: deadline.saturating_duration_since(now).as_nanos() as u64,
+            deadline_nanos: duration_to_nanos(deadline.saturating_duration_since(now)),
             target_nanos: DEFAULT_TARGET_NANOS,
             call_count: AtomicU32::new(0),
             skip_mod: AtomicU32::new(1),
@@ -121,7 +145,7 @@ impl<T: Stop> DebouncedTimeout<T> {
     /// Default: 100μs (0.1ms).
     #[inline]
     pub fn with_target_interval(mut self, interval: Duration) -> Self {
-        self.target_nanos = interval.as_nanos().max(1) as u64;
+        self.target_nanos = duration_to_nanos(interval).max(1);
         self
     }
 
@@ -249,10 +273,8 @@ impl<T: Stop> DebouncedTimeout<T> {
     /// a different check frequency.
     #[inline]
     pub fn tighten(self, duration: Duration) -> Self {
-        let new_deadline_nanos = Instant::now()
-            .saturating_duration_since(self.created)
-            .as_nanos() as u64
-            + duration.as_nanos() as u64;
+        let elapsed = duration_to_nanos(Instant::now().saturating_duration_since(self.created));
+        let new_deadline_nanos = elapsed.saturating_add(duration_to_nanos(duration));
         let deadline_nanos = self.deadline_nanos.min(new_deadline_nanos);
         Self {
             inner: self.inner,
@@ -272,7 +294,8 @@ impl<T: Stop> DebouncedTimeout<T> {
     /// a different check frequency.
     #[inline]
     pub fn tighten_deadline(self, deadline: Instant) -> Self {
-        let new_deadline_nanos = deadline.saturating_duration_since(self.created).as_nanos() as u64;
+        let new_deadline_nanos =
+            duration_to_nanos(deadline.saturating_duration_since(self.created));
         let deadline_nanos = self.deadline_nanos.min(new_deadline_nanos);
         Self {
             inner: self.inner,
@@ -447,6 +470,157 @@ mod tests {
     fn is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DebouncedTimeout<crate::StopRef<'_>>>();
+    }
+
+    #[test]
+    fn zero_duration_immediate_timeout() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::ZERO);
+
+        // First call reads the clock (skip_mod starts at 1) and sees expiry
+        assert_eq!(stop.check(), Err(StopReason::TimedOut));
+    }
+
+    #[test]
+    fn deadline_in_the_past() {
+        let source = StopSource::new();
+        let past = Instant::now() - Duration::from_secs(1);
+        let stop = DebouncedTimeout::with_deadline(source.as_ref(), past);
+
+        // deadline_nanos is 0 (saturating_duration_since clamps to zero)
+        assert_eq!(stop.check(), Err(StopReason::TimedOut));
+    }
+
+    #[test]
+    fn with_deadline_basic() {
+        let source = StopSource::new();
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let stop = DebouncedTimeout::with_deadline(source.as_ref(), deadline);
+
+        assert!(!stop.should_stop());
+
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Pump enough calls to trigger a clock read
+        for _ in 0..100 {
+            if stop.should_stop() {
+                return;
+            }
+        }
+        panic!("should have detected timeout");
+    }
+
+    #[test]
+    fn deadline_accessor() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(10));
+
+        let deadline = stop.deadline();
+        let remaining = stop.remaining();
+        assert!(remaining > Duration::from_secs(9));
+        assert!(remaining <= Duration::from_secs(10));
+        // deadline should be ~10s from now
+        assert!(deadline > Instant::now() + Duration::from_secs(9));
+    }
+
+    #[test]
+    fn inner_access() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(10));
+
+        assert!(!stop.inner().should_stop());
+
+        source.cancel();
+
+        assert!(stop.inner().should_stop());
+    }
+
+    #[test]
+    fn into_inner_works() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(10));
+
+        let inner = stop.into_inner();
+        assert!(!inner.should_stop());
+    }
+
+    #[test]
+    fn tighten_deadline_works() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(60))
+            .tighten_deadline(Instant::now() + Duration::from_secs(1));
+
+        let remaining = stop.remaining();
+        assert!(remaining < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn tighten_does_not_loosen() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(1))
+            .tighten(Duration::from_secs(60));
+
+        // Should still be ~1 second, not 60
+        let remaining = stop.remaining();
+        assert!(remaining < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn debug_format() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(10));
+        let debug = format!("{stop:?}");
+        assert!(debug.contains("DebouncedTimeout"));
+        assert!(debug.contains("skip_mod"));
+        assert!(debug.contains("target_interval_us"));
+    }
+
+    #[test]
+    fn with_target_interval_zero_clamps_to_one() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(60))
+            .with_target_interval(Duration::ZERO);
+
+        // Should still work (target_nanos clamped to 1, not 0)
+        assert!(stop.check().is_ok());
+    }
+
+    #[test]
+    fn with_debounced_deadline_ext() {
+        let source = StopSource::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let stop = source.as_ref().with_debounced_deadline(deadline);
+
+        assert!(!stop.should_stop());
+        assert!(stop.remaining() > Duration::from_secs(9));
+    }
+
+    #[test]
+    fn check_and_should_stop_agree() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_secs(60));
+
+        // Both should report not stopped
+        for _ in 0..1000 {
+            assert!(!stop.should_stop());
+            assert!(stop.check().is_ok());
+        }
+
+        source.cancel();
+
+        // Both should report stopped (inner cancellation is immediate)
+        assert!(stop.should_stop());
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn remaining_after_expiry_is_zero() {
+        let source = StopSource::new();
+        let stop = DebouncedTimeout::new(source.as_ref(), Duration::from_millis(1));
+
+        std::thread::sleep(Duration::from_millis(10));
+
+        assert_eq!(stop.remaining(), Duration::ZERO);
     }
 
     #[test]

@@ -39,11 +39,15 @@ fn light_work(acc: &mut u64) {
 #[inline(always)]
 fn jittery_work(acc: &mut u64) {
     // LCG step determines this iteration's cost
-    *acc = acc.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *acc = acc
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     // Use top bits to pick iteration count: 2..38 (avg ~20, ~100ns)
     let iters = 2 + ((*acc >> 59) as u32 * 5); // 0..31 * 5 + 2 → 2..157, clustered low
     for _ in 0..iters {
-        *acc = acc.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        *acc = acc
+            .wrapping_mul(2862933555777941757)
+            .wrapping_add(3037000493);
     }
 }
 
