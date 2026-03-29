@@ -37,6 +37,10 @@
 //! // Effective timeout is ~10 seconds (the tighter of the two)
 //! ```
 
+mod debounced;
+
+pub use debounced::{DebouncedTimeout, DebouncedTimeoutExt};
+
 use std::time::{Duration, Instant};
 
 use crate::{Stop, StopReason};

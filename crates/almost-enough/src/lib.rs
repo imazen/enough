@@ -77,6 +77,7 @@
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` |
+//! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
 //!
 //! ## StopExt Extension Trait
 //!
@@ -269,7 +270,7 @@ pub use tree::ChildStopper;
 #[cfg(feature = "std")]
 pub mod time;
 #[cfg(feature = "std")]
-pub use time::{TimeoutExt, WithTimeout};
+pub use time::{DebouncedTimeout, DebouncedTimeoutExt, TimeoutExt, WithTimeout};
 
 // Cancel guard module
 #[cfg(feature = "alloc")]

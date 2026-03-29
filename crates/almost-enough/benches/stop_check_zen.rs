@@ -33,7 +33,9 @@ fn sub_defilter(buf: &mut [u8]) {
 }
 
 fn make_buf() -> Vec<u8> {
-    (0..BUF).map(|i| (i.wrapping_mul(0x9E3779B9) >> 24) as u8).collect()
+    (0..BUF)
+        .map(|i| (i.wrapping_mul(0x9E3779B9) >> 24) as u8)
+        .collect()
 }
 
 // ── Single decode function for fair comparison ──────────────────────

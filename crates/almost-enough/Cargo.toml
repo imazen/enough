@@ -28,3 +28,7 @@ harness = false
 [[bench]]
 name = "stop_check_zen"
 harness = false
+
+[[bench]]
+name = "debounced_timeout"
+harness = false
