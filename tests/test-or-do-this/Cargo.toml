@@ -1,0 +1,15 @@
+[package]
+name = "test-or-do-this"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The `zerodep` module is the pattern under test. It must remain
+# zero-dep to prove the "copy this file into your crate" story.
+# `almost-enough` is a dev-dep only — used by the bridge tests to
+# validate that enough users and zerodep users can interoperate.
+
+[dependencies]
+
+[dev-dependencies]
+almost-enough = { workspace = true }
