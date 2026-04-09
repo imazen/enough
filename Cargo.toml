@@ -14,6 +14,7 @@ members = [
     "tests/test-ffi",
     "tests/test-codec-mock",
     "tests/test-ergonomics",
+    "tests/test-or-do-this",
 ]
 
 [workspace.package]

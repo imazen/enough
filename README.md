@@ -105,6 +105,8 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
 
+Can't add a dependency? See [`ZERO-DEP.md`](ZERO-DEP.md).
+
 ## Features
 
 - **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Unstoppable`
