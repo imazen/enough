@@ -38,6 +38,26 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+        if: matrix.rust == 'stable'
+
+      # MSRV: criterion 0.8 requires 1.86, so test per-crate to skip bench deps
+      - name: Test MSRV
+        run: |
+          cargo test -p enough
+          cargo test -p almost-enough
+          cargo test -p enough-ffi
+          cargo test -p enough-tokio
+          cargo test -p test-basic
+          cargo test -p test-atomic
+          cargo test -p test-timeout
+          cargo test -p test-child
+          cargo test -p test-rayon
+          cargo test -p test-tokio
+          cargo test -p test-ffi
+          cargo test -p test-codec-mock
+          cargo test -p test-ergonomics
+          cargo test -p test-or-do-this
+        if: matrix.rust != 'stable'
 
       - name: Test (no default features)
         run: |

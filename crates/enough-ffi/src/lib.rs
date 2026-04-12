@@ -424,6 +424,16 @@ pub unsafe extern "C" fn enough_token_destroy(token: *mut FfiCancellationToken) 
 mod tests {
     use super::*;
 
+    /// Wrapper to send raw pointers across threads in tests.
+    /// Sound because `FfiCancellationToken` is backed by `Arc` and is thread-safe.
+    struct SendPtr(*mut FfiCancellationToken);
+    unsafe impl Send for SendPtr {}
+    impl SendPtr {
+        fn ptr(self) -> *mut FfiCancellationToken {
+            self.0
+        }
+    }
+
     #[test]
     fn source_create_cancel_destroy() {
         unsafe {
@@ -641,20 +651,19 @@ mod tests {
             let cancelled_count = Arc::new(AtomicUsize::new(0));
             let check_count = Arc::new(AtomicUsize::new(0));
 
-            // Create tokens upfront and convert to addresses
             let tokens: Vec<_> = (0..10)
-                .map(|_| enough_token_create(source) as usize)
+                .map(|_| SendPtr(enough_token_create(source)))
                 .collect();
 
             // Spawn multiple threads that check cancellation
             let handles: Vec<_> = tokens
                 .into_iter()
-                .map(|token_addr| {
+                .map(|ptr| {
                     let cancelled_count = Arc::clone(&cancelled_count);
                     let check_count = Arc::clone(&check_count);
 
                     thread::spawn(move || {
-                        let token = token_addr as *mut FfiCancellationToken;
+                        let token = ptr.ptr();
                         let view = FfiCancellationToken::from_ptr(token);
                         for _ in 0..10000 {
                             check_count.fetch_add(1, Ordering::Relaxed);
@@ -693,10 +702,10 @@ mod tests {
             let source = enough_cancellation_create();
             let token = enough_token_create(source);
 
-            // Send token to another thread
-            let token_addr = token as usize;
+            // Send token to another thread via SendPtr (preserves provenance)
+            let send_token = SendPtr(token);
             let handle = thread::spawn(move || {
-                let token = token_addr as *const FfiCancellationToken;
+                let token = send_token.ptr();
                 let view = FfiCancellationToken::from_ptr(token);
 
                 // Spin until cancelled
