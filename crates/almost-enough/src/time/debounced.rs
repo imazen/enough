@@ -237,7 +237,7 @@ impl<T: Stop> Stop for DebouncedTimeout<T> {
         let skip = self.skip_mod.load(Relaxed);
 
         // Hot path: skip the clock read.
-        if !count.is_multiple_of(skip) {
+        if count % skip != 0 {
             return Ok(());
         }
 
@@ -258,7 +258,7 @@ impl<T: Stop> Stop for DebouncedTimeout<T> {
         let count = self.call_count.fetch_add(1, Relaxed).wrapping_add(1);
         let skip = self.skip_mod.load(Relaxed);
 
-        if !count.is_multiple_of(skip) {
+        if count % skip != 0 {
             return false;
         }
 

@@ -18,13 +18,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, 1.89]
+        rust: [stable, 1.85]
         exclude:
           # MSRV only on Linux
           - os: windows-latest
-            rust: 1.89
+            rust: 1.85
           - os: macos-latest
-            rust: 1.89
+            rust: 1.85
 
     steps:
       - uses: actions/checkout@v6
@@ -36,25 +36,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test (default features)
+      - name: Test
         run: cargo test --workspace
-        if: matrix.rust == 'stable'
-
-      # MSRV: test core crates only (test-rayon requires rayon-core 1.13 which needs Rust 1.80)
-      - name: Test MSRV (core crates)
-        run: |
-          cargo test -p enough
-          cargo test -p almost-enough
-          cargo test -p enough-ffi
-          cargo test -p enough-tokio
-          cargo test -p test-basic
-          cargo test -p test-atomic
-          cargo test -p test-timeout
-          cargo test -p test-child
-          cargo test -p test-tokio
-          cargo test -p test-ffi
-          cargo test -p test-codec-mock
-        if: matrix.rust != 'stable'
 
       - name: Test (no default features)
         run: |
@@ -77,6 +60,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v6
@@ -113,8 +98,11 @@ jobs:
       - name: Test (i686/QEMU)
         run: cross test --workspace --target i686-unknown-linux-gnu
 
+  # ==========================================================================
+  # no_std and WASM build verification
+  # ==========================================================================
   no-std:
-    name: no_std build
+    name: no_std / WASM
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -122,7 +110,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: thumbv7em-none-eabihf
+          targets: thumbv7em-none-eabihf, wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
@@ -131,6 +119,97 @@ jobs:
 
       - name: Build no_std (almost-enough)
         run: cargo build -p almost-enough --target thumbv7em-none-eabihf --no-default-features
+
+      - name: Build WASM (enough)
+        run: cargo build -p enough --target wasm32-unknown-unknown --no-default-features --features alloc
+
+      - name: Build WASM (almost-enough)
+        run: cargo build -p almost-enough --target wasm32-unknown-unknown --no-default-features --features alloc
+
+  # ==========================================================================
+  # Feature powerset — verify all feature combinations compile
+  # ==========================================================================
+  features:
+    name: Feature powerset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check feature powerset
+        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough
+
+  # ==========================================================================
+  # Semver — catch accidental breaking changes
+  # ==========================================================================
+  semver:
+    name: Semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@cargo-semver-checks
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check semver (enough)
+        run: cargo semver-checks -p enough
+
+      - name: Check semver (almost-enough)
+        run: cargo semver-checks -p almost-enough
+
+  # ==========================================================================
+  # Miri — check unsafe code soundness (enough-ffi)
+  # ==========================================================================
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly + Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run Miri (enough-ffi)
+        run: cargo +nightly miri test -p enough-ffi
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
+  # ==========================================================================
+  # Dependency audit — licenses and advisories
+  # ==========================================================================
+  deny:
+    name: Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Check advisories
+        run: cargo deny check advisories
+
+      - name: Check licenses
+        run: cargo deny check licenses
+
+      - name: Check bans
+        run: cargo deny check bans
 
   lint:
     name: Lint
