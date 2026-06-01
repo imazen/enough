@@ -9,7 +9,41 @@ Minimal cooperative cancellation trait for Rust.
 [![License](https://img.shields.io/crates/l/enough.svg?style=flat-square)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue.svg?style=flat-square)](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 
-A `no_std`, zero-dependency trait for cooperative cancellation.
+A `no_std`, zero-dependency trait for cooperative cancellation. One required
+method, one zero-cost no-op type. Long-running operations accept a `Stop` and
+check it periodically; callers that don't need cancellation pass `Unstoppable`,
+which optimizes away to nothing.
+
+```toml
+[dependencies]
+enough = "0.4.4"
+```
+
+```rust
+use enough::{Stop, StopReason, Unstoppable};
+
+// A function that can be cancelled mid-flight.
+fn sum_chunks(data: &[u8], stop: impl Stop) -> Result<u64, StopReason> {
+    let mut total = 0u64;
+    for (i, chunk) in data.chunks(1024).enumerate() {
+        if i % 16 == 0 {
+            stop.check()?; // Ok(()) → keep going, Err(StopReason) → bail out
+        }
+        total += chunk.iter().map(|&b| b as u64).sum::<u64>();
+    }
+    Ok(total)
+}
+
+// No cancellation needed — `Unstoppable::check()` inlines to nothing.
+let data = [1u8; 4096];
+assert_eq!(sum_chunks(&data, Unstoppable).unwrap(), 4096);
+```
+
+To actually cancel something, you need a concrete stop type — a `Stopper` you can
+flip from another thread, a timeout, a tree of child cancellations. Those live in
+[`almost-enough`](https://docs.rs/almost-enough); this crate is just the trait
+plus `Unstoppable`, so library authors can accept cancellation without pulling in
+allocation or any dependencies.
 
 ## The Trait
 
