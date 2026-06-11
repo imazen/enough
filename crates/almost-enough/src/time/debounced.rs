@@ -203,9 +203,9 @@ impl<T: Stop> DebouncedTimeout<T> {
 
         if delta_calls > 0 && delta_nanos > 0 {
             let nanos_per_call = delta_nanos / delta_calls;
-            if nanos_per_call > 0 {
-                let ideal_skip =
-                    (self.target_nanos / nanos_per_call).clamp(1, u32::MAX as u64) as u32;
+            // nanos_per_call is 0 when calls outpace the clock; skip recalibration then.
+            if let Some(ideal) = self.target_nanos.checked_div(nanos_per_call) {
+                let ideal_skip = ideal.clamp(1, u32::MAX as u64) as u32;
                 let current_skip = self.skip_mod.load(Relaxed);
 
                 let new_skip = if ideal_skip <= current_skip {
