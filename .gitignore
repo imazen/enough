@@ -1,5 +1,8 @@
 /target
+apidoc/target/
 Cargo.lock
+# ...but the apidoc snapshot runner's lockfile is committed (last match wins)
+!apidoc/Cargo.lock
 *.swp
 *.swo
 *~

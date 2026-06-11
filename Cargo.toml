@@ -16,6 +16,10 @@ members = [
     "tests/test-ergonomics",
     "tests/test-or-do-this",
 ]
+# `apidoc/` is the CI-free public-API snapshot runner: excluded so plain
+# `cargo test` and every CI job (incl. --all-features) never compile its
+# dependency tree or run rustdoc. Regenerate via `just api-doc`.
+exclude = ["apidoc"]
 
 [workspace.package]
 version = "0.4.4"
