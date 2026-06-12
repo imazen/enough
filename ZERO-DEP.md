@@ -23,7 +23,7 @@ pub struct StopCheck {
 
 The full file — including docs — is
 [`tests/test-or-do-this/src/zerodep.rs`](tests/test-or-do-this/src/zerodep.rs).
-Under 300 lines, most of which are docs and doctests. **You copy it
+About 330 lines, two-thirds of which are docs and doctests. **You copy it
 into your crate and stop thinking about it.**
 
 ## Why these exact choices
