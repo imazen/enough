@@ -18,6 +18,22 @@ This crate bridges tokio's `CancellationToken` with the `Stop` trait, allowing y
 
 ## Quick Start
 
+Add the direct dependencies a consumer needs. `enough-tokio` re-exports neither the
+`Stop` trait (you `use enough::Stop` directly) nor `CancellationToken` (it lives in
+`tokio-util`), so all four are direct dependencies of your crate:
+
+```toml
+[dependencies]
+enough-tokio = "0.5"
+# enough-tokio does NOT re-export `Stop`; add `enough` to call `stop.should_stop()` / `.check()`
+enough = "0.5"
+# `CancellationToken` comes from tokio-util (enough-tokio re-exports nothing from it)
+tokio-util = "0.7"
+# tokio is only a *dev*-dependency of enough-tokio; a consumer adds it explicitly.
+# The runtime + `#[tokio::main]` + `spawn_blocking` + `sleep` used below need these features:
+tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "time"] }
+```
+
 ```rust
 use enough_tokio::TokioStop;
 use enough::Stop;

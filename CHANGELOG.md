@@ -7,6 +7,20 @@
 - README: a complete construct-and-cancel example using
   `almost_enough::Stopper` — the producer side (how to make and flip a real
   cancellation token) was previously undocumented.
+
+### Fixed
+
+- `enough-tokio` README: added the consumer `[dependencies]` block a copy-paster
+  needs — `enough` (not re-exported, required for the `Stop` trait), `tokio-util`
+  (provides `CancellationToken`), and the `tokio` features the examples use
+  (`rt-multi-thread`/`macros`/`time`); previously only the crate's own dev-dep
+  manifest was shown.
+- `enough-ffi` README: reconciled `FfiCancellationToken::from_ptr` — documented its
+  real signature and that it returns a `FfiCancellationTokenView` (not a
+  `FfiCancellationToken`), is `unsafe`, treats a null pointer as never-cancelled,
+  and is safe to poll from one thread while another cancels. Added a pure-C
+  end-to-end snippet and a note that the `enough_*` symbols export only via a
+  downstream `cdylib`/`staticlib`.
 - Versioned public-API surface snapshots at `docs/public-api/<crate>.txt`
   for `enough`, `almost-enough`, `enough-tokio`, and `enough-ffi`,
   regenerated on every `cargo test` via
