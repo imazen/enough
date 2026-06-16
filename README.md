@@ -39,11 +39,54 @@ let data = [1u8; 4096];
 assert_eq!(sum_chunks(&data, Unstoppable).unwrap(), 4096);
 ```
 
-To actually cancel something, you need a concrete stop type — a `Stopper` you can
-flip from another thread, a timeout, a tree of child cancellations. Those live in
-[`almost-enough`](https://docs.rs/almost-enough); this crate is just the trait
-plus `Unstoppable`, so library authors can accept cancellation without pulling in
-allocation or any dependencies.
+`enough` gives a library the *consumer* side: accept `impl Stop`, call
+`check()`, optimize away `Unstoppable`. It deliberately ships **no constructible
+token** — no allocation, no dependencies. To *produce* and *flip* a real
+cancellation flag, an application reaches for `Stopper` in the sibling
+[`almost-enough`](https://crates.io/crates/almost-enough) crate.
+
+## Actually Cancel Something
+
+`Stopper` is an `Arc`-backed flag: clone it to share one flag across threads, and
+call `.cancel()` on any clone to flip them all. It implements `Stop`, so the same
+function above accepts it directly.
+
+```toml
+[dependencies]
+enough = "0.4.4"
+almost-enough = "0.4.4"  # the constructible Stopper lives here
+```
+
+```rust
+use std::thread;
+use std::time::Duration;
+use almost_enough::Stopper; // implements `enough::Stop`
+
+let stop = Stopper::new();
+let worker_stop = stop.clone(); // same flag, shared across threads
+
+let worker = thread::spawn(move || {
+    let mut ticks = 0u64;
+    // Loop until another thread flips the flag.
+    while worker_stop.check().is_ok() {
+        ticks += 1;
+        thread::sleep(Duration::from_millis(1));
+    }
+    ticks // returns once cancelled
+});
+
+// ...let it run, then cancel from this side.
+thread::sleep(Duration::from_millis(20));
+stop.cancel(); // flips every clone; check() now returns Err(StopReason::Cancelled)
+
+let ticks = worker.join().unwrap();
+assert!(ticks > 0); // it ran, then stopped when we cancelled
+```
+
+`stop.cancel()` is the flip method (idempotent), and `Stopper::cancelled()`
+constructs one that is already tripped. `almost-enough` also provides timeouts,
+parent/child cancellation trees, and `StopToken` — see its
+[docs](https://docs.rs/almost-enough).
 
 ## The Trait
 
