@@ -11,20 +11,126 @@ Batteries-included ergonomic extensions for the [`enough`](https://crates.io/cra
 
 While [`enough`](https://crates.io/crates/enough) provides only the minimal `Stop` trait, this crate provides all concrete implementations, combinators, and helpers. It re-exports everything from `enough` for convenience.
 
+## Install
+
+```toml
+[dependencies]
+almost-enough = "0.4.4"
+```
+
+The default `std` feature pulls in everything (Arc-based stoppers, timeouts, guards). For `no_std`, disable default features and opt into `alloc` for the Arc-based types: `almost-enough = { version = "0.4.4", default-features = false, features = ["alloc"] }`. See [Features](#features).
+
+## Start Here: `Stopper`
+
+The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
+
 ## Quick Start
 
 ```rust
 use almost_enough::{Stopper, Stop};
 
 let stop = Stopper::new();
-let stop2 = stop.clone();  // Clone to share
+let stop2 = stop.clone();  // Clone to share the same flag
 
-// Pass to operations
+// Check it (any clone)
 assert!(!stop2.should_stop());
 
-// Any clone can cancel
+// Cancel it (any clone)
 stop.cancel();
 assert!(stop2.should_stop());
+```
+
+The two methods you need:
+
+- **`stop.cancel()`** — flip the flag. `cancel(&self)` is an **inherent method on `Stopper`** (it takes `&self`, not `self`, so it never consumes the stopper), and it's idempotent. Construct with `Stopper::new()`.
+- **`stop.should_stop() -> bool`** — `true` once cancelled. This comes from the **`Stop` trait** (`almost_enough::Stop`), which `Stopper` implements directly, so the `Stop` trait must be in scope to call it.
+
+Prefer the `?` idiom in fallible code: **`stop.check()?`** returns `Result<(), StopReason>` — `Ok(())` while running, `Err(StopReason::Cancelled)` once cancelled. `check` is also a `Stop`-trait method, and `should_stop()` is just `self.check().is_err()`.
+
+## Cancel a Worker Thread
+
+`Stopper` is `Send + Sync` (it's an `Arc<AtomicBool>` under the hood, and the `Stop` trait requires `Send + Sync`), so a clone can move into another thread and the original can cancel it from across the thread boundary:
+
+```rust
+use almost_enough::{Stopper, Stop};
+use std::thread;
+
+// `Stopper` is Send + Sync, so a clone is safe to move into a worker thread.
+fn assert_send_sync<T: Send + Sync>() {}
+assert_send_sync::<Stopper>();
+
+let stop = Stopper::new();
+let worker_stop = stop.clone(); // clone shares the same cancellation flag
+
+let handle = thread::spawn(move || {
+    let mut iterations = 0u64;
+    // Loop until the parent thread asks us to stop.
+    while !worker_stop.should_stop() {
+        // ... do a chunk of work ...
+        iterations += 1;
+        if iterations > 10_000_000 {
+            break; // safety valve for the doctest
+        }
+    }
+    iterations
+});
+
+// Cancel from the parent thread (or a signal handler, a timeout, etc.).
+stop.cancel();
+
+let done = handle.join().unwrap();
+let _ = done;
+```
+
+Inside a fallible worker, use `check()?` instead of the `while` loop:
+
+```rust
+use almost_enough::{Stopper, Stop, StopReason};
+use std::thread;
+
+let stop = Stopper::new();
+let worker_stop = stop.clone();
+
+let handle = thread::spawn(move || -> Result<(), StopReason> {
+    for _ in 0..10_000_000u64 {
+        worker_stop.check()?; // returns Err(StopReason::Cancelled) once cancelled
+        // ... do work ...
+    }
+    Ok(())
+});
+
+stop.cancel();
+// The worker returns Err(StopReason::Cancelled) (or Ok if it finished first).
+let _ = handle.join().unwrap();
+```
+
+### Accepting a `Stopper` in your own functions
+
+`Stopper` implements the [`enough::Stop`](https://docs.rs/enough) trait directly, so you can pass it (or a `&Stopper`) anywhere a stop is expected — `impl Stop`, `&dyn Stop`, or `&impl Stop`. Library code typically accepts `impl Stop` (or `impl Stop + 'static`) and your `Stopper` satisfies it:
+
+```rust
+use almost_enough::{Stopper, Stop, StopReason};
+
+// Accepts any stop — including a Stopper.
+fn run(stop: impl Stop) -> Result<(), StopReason> {
+    for _ in 0..1000 {
+        stop.check()?;
+        // ... work ...
+    }
+    Ok(())
+}
+
+// Or behind dynamic dispatch:
+fn run_dyn(stop: &dyn Stop) -> Result<(), StopReason> {
+    while !stop.should_stop() {
+        break;
+    }
+    Ok(())
+}
+
+let stop = Stopper::new();
+run(stop.clone()).unwrap();
+run_dyn(&stop).unwrap();
 ```
 
 ## Type Overview
