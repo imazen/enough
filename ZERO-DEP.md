@@ -165,6 +165,104 @@ use almost_enough::StopReason as EReason;
 use your_crate::zerodep::StopReason as ZReason;
 ```
 
+## Picking a rung: `CancelCheck` → `StopCheck` → `enough`
+
+`StopCheck` isn't your only option, and the alternatives aren't
+competitors — they're three rungs of one ladder, differentiated by
+footprint and capability. Climb when you need more; every rung bridges
+*up* with a one-line closure.
+
+| Rung | What | Returns | Reasons (cancel vs timeout) | `enough` interop | Footprint |
+|------|------|---------|------------------------------|------------------|-----------|
+| **`CancelCheck`** | a one-method trait; closures impl it | `bool` | no | lossy (one closure) | ~25 lines, no dep |
+| **`StopCheck`** (above) | a concrete handle you store | `Result<(), StopReason>` | yes | first-class, reason-preserving | ~330 lines, no dep |
+| **`enough`** | the crate | `Result<(), StopReason>` | yes, + hierarchy / timeouts / combinators / FFI | native | a dependency |
+
+The trait rung in full — no `StopReason`, no `Arc`, ~25 lines:
+
+```rust
+/// Cooperative cancellation check. Modelled on `enough::Stop`, but
+/// deliberately distinct in name and shape so a vendored copy never
+/// masquerades as that type.
+pub trait CancelCheck: Send + Sync {
+    /// `true` to stop as soon as possible. Polled often — keep it cheap.
+    fn is_cancelled(&self) -> bool;
+    /// `false` if this can never fire, letting hot loops skip it entirely.
+    #[inline]
+    fn may_cancel(&self) -> bool {
+        true
+    }
+}
+
+/// A `CancelCheck` that never cancels — a zero-cost opt-out.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NeverCancel;
+
+impl CancelCheck for NeverCancel {
+    #[inline(always)]
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    #[inline(always)]
+    fn may_cancel(&self) -> bool {
+        false
+    }
+}
+
+/// Any `Fn() -> bool` is a `CancelCheck`, so closures bridge everything.
+impl<F: Fn() -> bool + Send + Sync> CancelCheck for F {
+    #[inline]
+    fn is_cancelled(&self) -> bool {
+        self()
+    }
+}
+```
+
+Take `impl CancelCheck` in generic APIs (monomorphized, so `NeverCancel`
+optimizes to nothing) or store `Box<dyn CancelCheck>` /
+`Arc<dyn CancelCheck>` for a runtime handle. For loops that poll roughly
+per byte, wrap the stored check in a tiny stack-local debounce that
+consults the closure only every *N*-th call.
+
+### A `Fn() -> bool` closure is the lingua franca
+
+This is what makes the rungs one ecosystem rather than three files: a
+bool closure is the common currency, and every rung ingests and emits
+one. `CancelCheck` *is* that closure, named.
+
+| From → To | Bridge |
+|-----------|--------|
+| `CancelCheck` → `StopCheck` | `StopCheck::from_flag(move \|\| c.is_cancelled())` |
+| `CancelCheck` → `enough` | `FnStop::new(move \|\| c.is_cancelled())` |
+| `StopCheck` → `CancelCheck` | `move \|\| sc.check().is_err()` |
+| `enough` → `CancelCheck` | `move \|\| stop.should_stop()` |
+| `StopCheck` ↔ `enough` | the reason-preserving bridges above |
+
+(To keep the `may_stop()` short-circuit across a bridge, gate the
+closure with `.may_stop().then(...)` and fall back to `NeverCancel` /
+`StopCheck::none()` / `Unstoppable` — exactly as the `StopCheck` bridges
+do above.)
+
+The only lossy edge is `CancelCheck` → anything-with-reasons: a `bool`
+can't carry *cancel vs timeout*. That's by design — reasonlessness is
+the trait rung's whole identity. If you need the reason, you're on the
+wrong rung; copy `StopCheck` instead.
+
+### Which to copy
+
+- **`CancelCheck`** when you want the absolute minimum: a yes/no poll,
+  ~25 lines, a name unmistakably *not* `enough::Stop`, and no need for
+  reasons. Ideal for a PR to a conservative crate that won't take more.
+- **`StopCheck`** when you want reason distinction and first-class,
+  reason-preserving `enough` interop without a dependency yet.
+- **`enough`** when you want hierarchy, timeouts, combinators, or
+  ready-made tokio/FFI bridges.
+
+The **cancel** vs **stop** vocabulary tracks the split: *cancel* is the
+minimal standalone rung; *stop* is the reason-preserving `enough` family
+(`StopCheck` is its vendored form). So the word you wrote tells you which
+world you're in.
+
 ## Layout and cost
 
 `StopCheck` is 16 bytes:
