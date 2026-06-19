@@ -48,9 +48,11 @@ StopToken stores `None`. No Arc allocated. `check()` short-circuits to
 `Option<Arc<dyn Stop>>` gets null-pointer optimization — same 16 bytes
 as `Arc<dyn Stop>`. Verified with compile-time assertion.
 
-**Benchmark result:** StopToken(Unstoppable) is within 3% of fully-inlined
-generic `impl Stop` in hot loops. StopToken(Stopper) is 25% faster than
-generic due to the flattened Arc and Option branch prediction.
+**Benchmark result:** StopToken(Unstoppable) is within noise of fully-inlined
+generic `impl Stop` in hot loops — the check is optimized away in both. For
+`Stopper`, the dispatch path makes no meaningful difference on real codec
+workloads (see "Benchmark-Driven Findings" below); the flattened Arc keeps
+the always-`Some` path a single, perfectly-predicted branch.
 
 ### 3. Stopper uses `Arc<StopperInner>`, not `Arc<AtomicBool>`
 
@@ -115,30 +117,36 @@ what it can accept. `'static` is required at the StopToken boundary.
 
 ## Benchmark-Driven Findings
 
-### DynStop/StopToken is faster than generic for Stopper
+### For real codec work, the dispatch path doesn't matter
 
-Surprising: in hot loops (10k iters, check every 64), `StopToken(Stopper)`
-at 2.57µs beats generic `impl Stop` at 3.41µs. The `Option` branch
-(always-Some, perfectly predicted) is cheaper than the monomorphized
-code path the compiler generates.
+The layout-immune benchmark routes every variant through one
+`#[inline(never)] fn decode(&dyn Stop)`, so the measurement isn't biased
+by where each variant's code happens to land. On that benchmark all
+variants — generic `impl Stop`, `StopToken(Stopper)`, `StopToken(Unstoppable)`,
+and `Option<&dyn Stop>` — sit within noise of each other. For the kind of
+inner-loop check a codec actually does (check every N iterations against a
+token that stays hot in L1), the choice between monomorphized generic and
+type-erased `StopToken` is not a performance decision. Pick whichever is
+ergonomic; `StopToken` is the recommended all-around handle for its
+flatter type and `Clone`-for-fan-out.
+
+> The micro hot-loop benchmarks (`hot_loop_stopper`, `hot_loop_unstoppable`)
+> put each variant in its own closure, so their relative ordering is sensitive
+> to code layout (Mytkowicz et al., ASPLOS 2009) and can flip between runs.
+> Don't read a winner out of small µs deltas there — the layout-immune
+> codec benchmark above is the one to trust.
 
 ### `impl Stop` inlining advantage is negligible
 
-For `Unstoppable`, `impl Stop` (2.0µs) vs `StopToken` (2.0µs) — within
-noise. The compiler eliminates the check in both cases.
-
-For `Stopper`, `impl Stop` is the slowest path. The compiler's
-monomorphized code generation doesn't beat the branch-predicted
-Option path in StopToken.
-
-**Conclusion:** Don't recommend `impl Stop` for "hot inner functions."
-StopToken is the best all-around choice.
+For `Unstoppable`, the compiler eliminates the check entirely whether it's
+behind a generic `impl Stop` or a `StopToken` — both compile to the same
+do-nothing path.
 
 ### `may_stop().then_some()` matches StopToken for Unstoppable
 
-`Option<&dyn Stop> = None` at 2.0µs matches generic and StopToken.
-The `None` discriminant branch is perfectly predicted — effectively
-zero cost. This is the `enough`-only optimization path.
+`Option<&dyn Stop> = None` matches generic and StopToken: the `None`
+discriminant branch is perfectly predicted — effectively zero cost. This
+is the `enough`-only optimization path.
 
 ### WithTimeout dominates all other costs
 

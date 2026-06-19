@@ -139,9 +139,10 @@ pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError
 
 `StopToken` is `Clone` (Arc increment) for thread fan-out.
 `Stopper`/`SyncStopper` convert to `StopToken` at zero cost via `Into`
-(same Arc, no double-wrapping). Benchmarks show `StopToken` within 3%
-of fully-inlined generic for `Unstoppable`, and 25% faster than generic
-for `Stopper`.
+(same Arc, no double-wrapping). For real codec workloads, benchmarks show
+no meaningful difference between `StopToken` and a fully-inlined generic
+`impl Stop` — the dispatch path is within noise, so pick whichever reads
+best.
 
 ### Without `almost-enough`
 

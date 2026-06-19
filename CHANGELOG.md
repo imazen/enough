@@ -10,6 +10,12 @@
 
 ### Fixed
 
+- TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
+  the zenbench migration (PR #8) contradicted — the "StopToken(Stopper) 25%
+  faster than generic" / "2.57µs beats 3.41µs" / "impl Stop is the slowest
+  path" claims were code-layout artifacts of the old per-function harness.
+  Docs now state the layout-immune codec finding (dispatch path is within
+  noise on real workloads); the confirmed WithTimeout/table timings stay (#9).
 - `enough-tokio` README: added the consumer `[dependencies]` block a copy-paster
   needs — `enough` (not re-exported, required for the `Stop` trait), `tokio-util`
   (provides `CancellationToken`), and the `tokio` features the examples use
