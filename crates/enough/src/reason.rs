@@ -74,6 +74,18 @@ impl fmt::Display for StopReason {
     }
 }
 
+// `core::error::Error` (stable since Rust 1.81; this crate's MSRV is 1.85) is
+// available in `no_std` with no feature flag, so implementing it costs nothing
+// on the `no_std` feature surface. `StopReason` is a leaf — it has no inner
+// cause, so `source()` keeps the default `None`. The value of the impl is that
+// `StopReason` can now appear as a *findable cause* in another error type's
+// `source()` chain: a consumer that wraps it (`impl From<StopReason> for
+// MyError`) can expose it via `#[source]`/`#[from]`, and a generic caller can
+// recover it with a downcast walk (e.g. zencodec's `CodecErrorExt::cancelled`)
+// without naming the concrete error enum. (Re-added after 0.4.0's removal,
+// which predated the classification use case and targeted `std::error::Error`.)
+impl core::error::Error for StopReason {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +96,19 @@ mod tests {
         use alloc::format;
         assert_eq!(format!("{}", StopReason::Cancelled), "operation cancelled");
         assert_eq!(format!("{}", StopReason::TimedOut), "operation timed out");
+    }
+
+    #[test]
+    fn stop_reason_is_error_and_downcastable() {
+        // The point of the re-added impl: StopReason can be a findable cause in
+        // another error's source() chain and be recovered by a downcast walk.
+        let r = StopReason::Cancelled;
+        let dyn_err: &(dyn core::error::Error + 'static) = &r;
+        assert!(dyn_err.source().is_none(), "StopReason is a leaf cause");
+        assert_eq!(
+            dyn_err.downcast_ref::<StopReason>(),
+            Some(&StopReason::Cancelled)
+        );
     }
 
     #[test]

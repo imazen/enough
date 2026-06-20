@@ -4,6 +4,14 @@
 
 ### Added
 
+- `impl core::error::Error for StopReason` — re-added (it was removed in 0.4.0).
+  `StopReason` stays a leaf cause (`source()` is `None`); the impl lets a
+  consumer expose a wrapped `StopReason` through its own error's `source()`
+  chain so a generic caller can classify cancellation/timeout by downcast
+  (e.g. `zencodec::CodecErrorExt::cancelled` / `stop_reason`) without naming
+  the concrete error enum. `core::error::Error` (Rust 1.81+, MSRV here is 1.85)
+  is available in `no_std` with no feature flag, so the `no_std` surface is
+  unchanged. Additive — re-adding the impl is non-breaking.
 - README: a complete construct-and-cancel example using
   `almost_enough::Stopper` — the producer side (how to make and flip a real
   cancellation token) was previously undocumented.

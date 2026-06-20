@@ -22,7 +22,7 @@ members = [
 exclude = ["apidoc"]
 
 [workspace.package]
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -31,8 +31,8 @@ keywords = ["cancellation", "cooperative", "async", "ffi", "no_std"]
 categories = ["concurrency", "no-std", "rust-patterns"]
 
 [workspace.dependencies]
-enough = { version = "0.4.4", path = "crates/enough", default-features = false }
-almost-enough = { version = "0.4.4", path = "crates/almost-enough", features = ["std"] }
+enough = { version = "0.4.5", path = "crates/enough", default-features = false }
+almost-enough = { version = "0.4.5", path = "crates/almost-enough", features = ["std"] }
 zenbench = "0.1.6"
 # enough-tokio and enough-ffi have independent versioning
 enough-tokio = { path = "crates/enough-tokio" }

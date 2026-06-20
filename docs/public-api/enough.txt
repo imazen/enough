@@ -15,7 +15,7 @@
 #   free functions                              3
 #   inherent methods                            6
 #   enum variants                               2
-#   trait roster entries (type × trait)        18
+#   trait roster entries (type × trait)        19
 #   auto-trait-complete types                   2
 #
 # per-module pub lines:
@@ -44,7 +44,7 @@ pub type Never = Unstoppable
 
 &T: Stop
 &mut T: Stop
-StopReason: Clone, Copy, Debug, Display, Eq, Hash, PartialEq
+StopReason: Clone, Copy, Debug, Display, Eq, Error, Hash, PartialEq
 Unstoppable: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Stop
 core::option::Option<T>: Stop
 
