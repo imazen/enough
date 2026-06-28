@@ -1,4 +1,6 @@
-# enough [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/enough?style=flat-square)](https://crates.io/crates/enough) [![lib.rs](https://img.shields.io/crates/v/enough?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/enough) [![docs.rs](https://img.shields.io/docsrs/enough?style=flat-square)](https://docs.rs/enough) [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/enough?style=flat-square)](#license) [![codecov](https://img.shields.io/codecov/c/github/imazen/enough?style=flat-square)](https://codecov.io/gh/imazen/enough)
+<!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
+
+# enough
 
 A `no_std`, zero-dependency trait for cooperative cancellation. One required
 method, one zero-cost no-op type. Long-running operations accept a `Stop` and

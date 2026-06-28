@@ -8,6 +8,13 @@
   `almost_enough::Stopper` — the producer side (how to make and flip a real
   cancellation token) was previously undocumented.
 
+### Changed
+
+- README: badge row moved inline on the H1 (dropped `branch=`, added lib.rs and
+  the shared crosslink footer, license badge → `#license`) and a top-level
+  `## Quick start` added; the crates.io README is now a generated, badge-free
+  `README.crates.md` with absolute links (`readme = "../../README.crates.md"`).
+
 ### Fixed
 
 - TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
