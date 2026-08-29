@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 almost-enough = { workspace = true }
-rayon = "1.10"
+rayon = "1.12.0"

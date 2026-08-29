@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency requirements written out in full instead of truncated to two
+  components, at the versions already locked and tested: `tokio` 1.43 →
+  1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
+  `rayon` 1.10 → 1.12.0 (in `test-rayon`). `zenutils-apidoc` 0.1.0 → 0.1.1 in
+  the workspace-excluded apidoc runner. Lockfile refreshed; a
+  package-by-package diff confirms no zen-family crate moved (`zenbench` stays
+  at 0.1.9, and its `0.1.6` requirement is deliberately left alone). Test suite
+  unchanged at 29 suites / 417 passed / 0 failed.
+
 ### Added
 
 - README: a complete construct-and-cancel example using

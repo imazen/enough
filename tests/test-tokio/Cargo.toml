@@ -7,5 +7,5 @@ publish = false
 [dependencies]
 almost-enough = { workspace = true }
 enough-tokio = { workspace = true }
-tokio = { version = "1.43", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
-tokio-util = { version = "0.7" }
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
+tokio-util = { version = "0.7.19" }
