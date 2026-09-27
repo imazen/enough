@@ -54,6 +54,24 @@ manifests cannot propagate.
 | zenjxl decode, 2048² | 86 ms | 66 | clean — max 7.7ms |
 | zensim codec_target, 1024² | 22 ms | 70 | clean — max 6.2ms |
 
+### Post-fix results (2026-09-27, same host, local checkouts)
+
+| case | before | after |
+|---|---|---|
+| zenflate 256KB | 80ms worst | **6.6ms** — clean |
+| zenflate 16MB | 1.30s worst | **18.3ms** — clean, output byte-identical |
+| zenwebp lossless 2048² | SILENT | **13.8ms** — clean |
+| zenwebp lossy m6 | 339ms worst | **20.1ms** — clean |
+| zengif encode 64f | 2.78s worst | **43.4ms** — clean |
+| zenbitmaps pam 8K | 111ms | **0.4ms** — clean |
+| zenzop squeeze 4MB | 1.15s | **24.0ms** — clean, output byte-identical |
+| butteraugli 2048² | SILENT (637ms) | **21.1ms** — clean |
+| fast-ssim2 2048² | 456ms worst | **14.3ms** — clean, score unchanged |
+| zenpng maniac | 124ms in zenflate | still flags **registry zenflate-0.3.6** — resolves when the local zenflate fix ships |
+
+`meter-overhead-1m` still reports STORM by design — it is the 1M-call
+A/B baseline, not a codec.
+
 ### Reading the callsites
 
 `#[track_caller]` on `enough::Stop` propagates through `&dyn Stop`,
