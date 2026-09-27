@@ -14,6 +14,14 @@
 - `enough`: `Stop::check` / `should_stop` / forwarding impls are now
   `#[track_caller]` so instrumented wrappers can attribute polls to the
   caller's source location — additive, no signature change.
+- `dev/cancel-latency`: cross-codec adversarial harness driving every zen
+  codec through `PollMeter` (excluded workspace; own `[patch.crates-io]`
+  unifies codecs onto in-repo `enough`/`almost-enough`). First-run findings:
+  zenflate effort-200 gaps scale with input size (1.3 s worst at 16 MB),
+  zenwebp lossless and butteraugli compare are cancellation-blind mid-op,
+  zengif quantization gaps reach 2.78 s, zenpng Maniac polls 1.08M times
+  (~103 µs mean), fast-ssim2 has 456 ms per-stage gaps. PollMeter's own cost
+  measures 62.7 ns/call. See `dev/cancel-latency/README.md`.
 
 ### Changed
 
