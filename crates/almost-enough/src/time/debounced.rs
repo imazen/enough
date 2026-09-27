@@ -228,6 +228,7 @@ impl<T: Stop> DebouncedTimeout<T> {
 
 impl<T: Stop> Stop for DebouncedTimeout<T> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         // Always check the inner stop (typically a single atomic load).
         self.inner.check()?;
@@ -250,6 +251,7 @@ impl<T: Stop> Stop for DebouncedTimeout<T> {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         if self.inner.should_stop() {
             return true;

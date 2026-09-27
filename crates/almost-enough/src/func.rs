@@ -80,6 +80,7 @@ where
     F: Fn() -> bool + Send + Sync,
 {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if (self.f)() {
             Err(StopReason::Cancelled)
@@ -89,6 +90,7 @@ where
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         (self.f)()
     }

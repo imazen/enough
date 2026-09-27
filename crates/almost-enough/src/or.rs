@@ -77,12 +77,14 @@ impl<A, B> OrStop<A, B> {
 
 impl<A: Stop, B: Stop> Stop for OrStop<A, B> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         self.a.check()?;
         self.b.check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.a.should_stop() || self.b.should_stop()
     }

@@ -224,6 +224,7 @@ impl Default for ChildStopper {
 
 impl Stop for ChildStopper {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if self.inner.self_cancelled.load(Ordering::Relaxed) {
             return Err(StopReason::Cancelled);
@@ -236,6 +237,7 @@ impl Stop for ChildStopper {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.is_cancelled()
     }

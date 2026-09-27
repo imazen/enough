@@ -89,6 +89,7 @@ impl BoxedStop {
 
 impl Stop for BoxedStop {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         match &self.0 {
             Some(inner) => inner.check(),
@@ -97,6 +98,7 @@ impl Stop for BoxedStop {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         match &self.0 {
             Some(inner) => inner.should_stop(),

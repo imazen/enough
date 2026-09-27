@@ -132,6 +132,7 @@ impl Default for StopSource {
 
 impl Stop for StopSource {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
@@ -141,6 +142,7 @@ impl Stop for StopSource {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
@@ -193,6 +195,7 @@ pub struct StopRef<'a> {
 
 impl Stop for StopRef<'_> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
@@ -202,6 +205,7 @@ impl Stop for StopRef<'_> {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }

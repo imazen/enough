@@ -118,6 +118,7 @@ impl<T: Stop> WithTimeout<T> {
 
 impl<T: Stop> Stop for WithTimeout<T> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         // Check inner first (may be Cancelled)
         self.inner.check()?;
@@ -130,6 +131,7 @@ impl<T: Stop> Stop for WithTimeout<T> {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.inner.should_stop() || Instant::now() >= self.deadline
     }

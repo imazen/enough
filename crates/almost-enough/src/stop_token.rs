@@ -173,6 +173,7 @@ impl Clone for StopToken {
 
 impl Stop for StopToken {
     #[inline(always)]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         match &self.inner {
             StopTokenInner::None => Ok(()),
@@ -183,6 +184,7 @@ impl Stop for StopToken {
     }
 
     #[inline(always)]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         match &self.inner {
             StopTokenInner::None => false,

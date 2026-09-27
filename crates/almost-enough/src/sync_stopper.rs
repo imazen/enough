@@ -55,6 +55,7 @@ pub(crate) struct SyncStopperInner {
 
 impl Stop for SyncStopperInner {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if self.cancelled.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
@@ -64,6 +65,7 @@ impl Stop for SyncStopperInner {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
@@ -137,11 +139,13 @@ impl Default for SyncStopper {
 
 impl Stop for SyncStopper {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         self.inner.check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.inner.should_stop()
     }

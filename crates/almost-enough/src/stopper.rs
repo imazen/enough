@@ -46,6 +46,7 @@ pub(crate) struct StopperInner {
 
 impl Stop for StopperInner {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
@@ -55,6 +56,7 @@ impl Stop for StopperInner {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
@@ -146,11 +148,13 @@ impl Default for Stopper {
 
 impl Stop for Stopper {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         self.inner.check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         self.inner.should_stop()
     }

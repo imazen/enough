@@ -323,9 +323,16 @@ impl<S: Stop> Stop for PollMeter<S> {
         self.inner.should_stop()
     }
 
+    /// Always returns `true`, even when the inner stop can never stop.
+    ///
+    /// Wrapping [`Unstoppable`] still records polls — that is the point of the
+    /// meter. Reporting `false` here would let callers (e.g.
+    /// `StopToken::new`'s no-op collapse) erase the instrumentation.
+    ///
+    /// [`Unstoppable`]: crate::Unstoppable
     #[inline]
     fn may_stop(&self) -> bool {
-        self.inner.may_stop()
+        true
     }
 }
 
@@ -637,9 +644,21 @@ mod tests {
     }
 
     #[test]
-    fn may_stop_delegates() {
-        assert!(!PollMeter::new(Unstoppable).may_stop());
+    fn may_stop_always_true() {
+        // The meter must never be optimized away — even over Unstoppable —
+        // or instrumentation would see no polls.
+        assert!(PollMeter::new(Unstoppable).may_stop());
         assert!(PollMeter::new(StopSource::new()).may_stop());
+    }
+
+    #[test]
+    fn survives_stop_token_collapse() {
+        // StopToken::new collapses may_stop()==false to a no-op; the meter
+        // must stay live inside one.
+        let meter = PollMeter::new(Unstoppable);
+        let token = crate::StopToken::new(meter.clone());
+        token.check().unwrap();
+        assert_eq!(meter.report().calls, 1);
     }
 
     #[test]
