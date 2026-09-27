@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: almost-enough.txt 131 lines (supported surface) | almost-enough.features.txt 0 added (features: alloc,std) | almost-enough.internal.txt 1 lines (1 hidden + 0 excluded-feature)
+# files: almost-enough.txt 131 lines (supported surface) | almost-enough.features.txt 48 added (features: alloc,poll-meter,std) | almost-enough.internal.txt 1 lines (1 hidden + 0 excluded-feature)
 
 ## summary
 #

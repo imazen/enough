@@ -272,6 +272,15 @@ pub mod time;
 #[cfg(feature = "std")]
 pub use time::{DebouncedTimeout, DebouncedTimeoutExt, TimeoutExt, WithTimeout};
 
+// Poll-latency instrumentation (opt-in: ~10-15ms compile cost, needs Instant)
+#[cfg(feature = "poll-meter")]
+mod meter;
+#[cfg(feature = "poll-meter")]
+pub use meter::{
+    DEFAULT_FAST_GAP, DEFAULT_FLOOD_CALLS, DEFAULT_SLOW_GAP, HISTOGRAM_BUCKETS, PollMeter,
+    PollProblem, PollReport, SiteReport,
+};
+
 // Cancel guard module
 #[cfg(feature = "alloc")]
 mod guard;
@@ -453,6 +462,30 @@ pub trait StopExt: Stop + Sized {
         Self: Clone + 'static,
     {
         ChildStopper::with_parent(self.clone())
+    }
+
+    /// Wrap this stop in a [`PollMeter`] that records time between polls.
+    ///
+    /// For tests and perf investigations — see the `meter` module docs.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "poll-meter")]
+    /// # fn main() {
+    /// use almost_enough::{Stopper, Stop, StopExt};
+    ///
+    /// let meter = Stopper::new().metered();
+    /// meter.check().unwrap();
+    /// assert_eq!(meter.report().calls, 1);
+    /// # }
+    /// # #[cfg(not(feature = "poll-meter"))]
+    /// # fn main() {}
+    /// ```
+    #[cfg(feature = "poll-meter")]
+    #[inline]
+    fn metered(self) -> PollMeter<Self> {
+        PollMeter::new(self)
     }
 }
 

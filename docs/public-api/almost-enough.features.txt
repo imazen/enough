@@ -1,5 +1,5 @@
 # almost-enough public API — additions from non-default features
-# features: alloc,std
+# features: alloc,poll-meter,std
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -7,4 +7,73 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 
-(no additional public surface)
+## summary
+#
+#   pub types (struct/enum/trait/alias)         4
+#   pub consts/statics                          4
+#   inherent methods                           10
+#   struct fields                              22
+#   enum variants                               2
+#   trait roster entries (type × trait)        11
+#   auto-trait-complete types                   3
+#   auto-trait exceptions                       1
+#
+# per-module pub lines:
+#   (root)                           42
+
+## items (42 lines)
+
+pub enum PollProblem
+pub PollProblem::PollStorm
+pub PollProblem::PollStorm::calls: u64
+pub PollProblem::PollStorm::mean_gap: core::time::Duration
+pub PollProblem::SlowGap
+pub PollProblem::SlowGap::count: u64
+pub PollProblem::SlowGap::gap: core::time::Duration
+pub PollProblem::SlowGap::site: core::option::Option<alloc::string::String>
+pub struct PollMeter<S>
+pub fn PollMeter<S>::inner(&self) -> &S
+pub fn PollMeter<S>::into_inner(self) -> S
+pub fn PollMeter<S>::new(S) -> Self
+pub fn PollMeter<S>::report(&self) -> PollReport
+pub fn PollMeter<S>::reset(&self)
+pub struct PollReport
+pub PollReport::calls: u64
+pub PollReport::fast_gaps: u64
+pub PollReport::histogram_ms: [u64; 100]
+pub PollReport::max_gap: core::time::Duration
+pub PollReport::max_gap_from: core::option::Option<alloc::string::String>
+pub PollReport::max_gap_to: core::option::Option<alloc::string::String>
+pub PollReport::mean_gap: core::time::Duration
+pub PollReport::overflow_ms: u64
+pub PollReport::sites: alloc::vec::Vec<SiteReport>
+pub PollReport::slow_gaps: u64
+pub PollReport::span: core::time::Duration
+pub fn PollReport::histogram_ascii(&self, usize) -> alloc::string::String
+pub fn PollReport::problems(&self) -> alloc::vec::Vec<PollProblem>
+pub fn PollReport::problems_with(&self, core::time::Duration, core::time::Duration, u64) -> alloc::vec::Vec<PollProblem>
+pub struct SiteReport
+pub SiteReport::calls: u64
+pub SiteReport::fast_gaps: u64
+pub SiteReport::max_gap: core::time::Duration
+pub SiteReport::mean_gap: core::time::Duration
+pub SiteReport::site: alloc::string::String
+pub SiteReport::slow_gaps: u64
+pub const DEFAULT_FAST_GAP: core::time::Duration
+pub const DEFAULT_FLOOD_CALLS: u64
+pub const DEFAULT_SLOW_GAP: core::time::Duration
+pub const HISTOGRAM_BUCKETS: usize
+pub fn StopExt::metered(self) -> PollMeter<Self>
+pub fn T::metered(self) -> PollMeter<Self>
+
+## trait impls (4 types)
+
+PollMeter<S>: Clone, Debug, enough::Stop
+PollProblem: Clone, Debug, PartialEq
+PollReport: Clone, Debug, Display
+SiteReport: Clone, Debug
+
+## auto traits
+
+3 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+PollMeter<S>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

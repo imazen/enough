@@ -108,12 +108,18 @@ pub trait Stop: Send + Sync {
     ///
     /// Call this periodically in long-running loops. The frequency depends
     /// on your workload - typically every 16-1000 iterations is reasonable.
+    ///
+    /// `#[track_caller]` lets instrumented implementations (e.g.
+    /// `almost_enough::PollMeter`) attribute a poll to this call site.
+    /// Implementations that don't need it are unaffected.
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason>;
 
     /// Returns `true` if the operation should stop.
     ///
     /// Convenience method for when you want to handle stopping yourself
     /// rather than using the `?` operator.
+    #[track_caller]
     #[inline]
     fn should_stop(&self) -> bool {
         self.check().is_err()
@@ -187,11 +193,13 @@ pub type Never = Unstoppable;
 
 impl Stop for Unstoppable {
     #[inline(always)]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         Ok(())
     }
 
     #[inline(always)]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         false
     }
@@ -205,11 +213,13 @@ impl Stop for Unstoppable {
 // Blanket impl: &T where T: Stop
 impl<T: Stop + ?Sized> Stop for &T {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         (**self).check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
@@ -223,11 +233,13 @@ impl<T: Stop + ?Sized> Stop for &T {
 // Blanket impl: &mut T where T: Stop
 impl<T: Stop + ?Sized> Stop for &mut T {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         (**self).check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
@@ -241,11 +253,13 @@ impl<T: Stop + ?Sized> Stop for &mut T {
 #[cfg(feature = "alloc")]
 impl<T: Stop + ?Sized> Stop for alloc::boxed::Box<T> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         (**self).check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
@@ -259,11 +273,13 @@ impl<T: Stop + ?Sized> Stop for alloc::boxed::Box<T> {
 #[cfg(feature = "alloc")]
 impl<T: Stop + ?Sized> Stop for alloc::sync::Arc<T> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         (**self).check()
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         (**self).should_stop()
     }
@@ -294,6 +310,7 @@ impl<T: Stop + ?Sized> Stop for alloc::sync::Arc<T> {
 /// ```
 impl<T: Stop> Stop for Option<T> {
     #[inline]
+    #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         match self {
             Some(s) => s.check(),
@@ -302,6 +319,7 @@ impl<T: Stop> Stop for Option<T> {
     }
 
     #[inline]
+    #[track_caller]
     fn should_stop(&self) -> bool {
         match self {
             Some(s) => s.should_stop(),
@@ -421,6 +439,7 @@ mod tests {
 
         struct TestStop(AtomicBool);
         impl Stop for TestStop {
+            #[track_caller]
             fn check(&self) -> Result<(), StopReason> {
                 if self.0.load(Ordering::Relaxed) {
                     Err(StopReason::Cancelled)

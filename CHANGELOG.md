@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
+  opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
+  default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
+  bucket histogram with per-call-site attribution via `#[track_caller]`, flags
+  gaps >= 50 ms (`PollProblem::SlowGap`) and >= 1M mostly-sub-0.5 ms calls
+  (`PollProblem::PollStorm`), renders an ASCII histogram via
+  `PollReport::histogram_ascii` / `{:#}`. `StopExt::metered()` wraps any stop.
+- `enough`: `Stop::check` / `should_stop` / forwarding impls are now
+  `#[track_caller]` so instrumented wrappers can attribute polls to the
+  caller's source location — additive, no signature change.
+
 ### Changed
 
 - Dependency requirements written out in full instead of truncated to two
