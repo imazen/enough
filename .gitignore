@@ -1,8 +1,11 @@
 /target
+dev/cancel-latency/target/
 apidoc/target/
 Cargo.lock
 # ...but the apidoc snapshot runner's lockfile is committed (last match wins)
 !apidoc/Cargo.lock
+# The dev harness pins git-dep revs (rav1d-safe, zenanalyze) for reproducible runs
+!dev/cancel-latency/Cargo.lock
 *.swp
 *.swo
 *~

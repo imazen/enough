@@ -1,0 +1,80 @@
+# Independent workspace: the `[patch.crates-io]` table here is what unifies
+# every codec's `enough`/`almost-enough` deps with the in-repo copies under
+# `crates/` (a crates.io `enough 0.4.4` and a path `enough 0.4.4` are different
+# packages otherwise, and the `Stop` impls would not unify).
+#
+# Dependency-manifest `[patch]` tables do NOT propagate to dependents, so this
+# file also mirrors the patches each codec needs but cannot supply itself
+# (unpublished zenjxl-decoder 0.4.0, butteraugli 0.9.4, zenavif-serialize 0.2.0,
+# zenanalyze-api main).
+[workspace]
+
+[package]
+name = "cancel-latency"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+default = [
+    "zenflate",
+    "zenpng",
+    "zenjpeg",
+    "zenwebp",
+    "zengif",
+    "zenbitmaps",
+    "zenavif",
+    "butteraugli",
+    "fast-ssim2",
+]
+# Heavy/optional pulls — enable explicitly:
+#   zenjxl: pure-Rust JXL decode via zenjxl-decoder + jxl-encoder paths
+#   zensim: full ML scoring pipeline
+zenjxl = ["dep:zenjxl", "dep:jxl-encoder"]
+zensim = ["dep:zensim"]
+zenflate = ["dep:zenflate"]
+zenpng = ["dep:zenpng"]
+zenjpeg = ["dep:zenjpeg"]
+zenwebp = ["dep:zenwebp"]
+zengif = ["dep:zengif"]
+zenbitmaps = ["dep:zenbitmaps"]
+zenavif = ["dep:zenavif"]
+butteraugli = ["dep:butteraugli"]
+fast-ssim2 = ["dep:fast-ssim2"]
+
+[dependencies]
+enough = { path = "../../crates/enough" }
+almost-enough = { path = "../../crates/almost-enough", features = ["poll-meter"] }
+
+imgref = "1.11"
+rgb = "0.8"
+
+zenflate = { path = "/home/lilith/work/zen/zenflate", optional = true }
+zenpng = { path = "/home/lilith/work/zen/zenpng", optional = true }
+zenjpeg = { path = "/home/lilith/work/zen/zenjpeg/zenjpeg", optional = true }
+zenwebp = { path = "/home/lilith/work/zen/zenwebp", optional = true }
+zenjxl = { path = "/home/lilith/work/zen/zenjxl", optional = true }
+jxl-encoder = { path = "/home/lilith/work/zen/jxl-encoder/jxl-encoder", optional = true }
+zengif = { path = "/home/lilith/work/zen/zengif", optional = true }
+zenbitmaps = { path = "/home/lilith/work/zen/zenbitmaps", optional = true }
+zenavif = { path = "/home/lilith/work/zen/zenavif", optional = true }
+butteraugli = { path = "/home/lilith/work/butteraugli/butteraugli", optional = true }
+fast-ssim2 = { path = "/home/lilith/work/zen/fast-ssim2/fast-ssim2", optional = true }
+zensim = { path = "/home/lilith/work/zen/zensim/zensim", features = ["zenpixels", "imgref"], optional = true }
+zenpixels = { version = ">=0.2.16, <0.4.0", features = ["rgb", "imgref"] }
+
+[patch.crates-io]
+enough = { path = "../../crates/enough" }
+almost-enough = { path = "../../crates/almost-enough" }
+# zenjxl requires zenjxl-decoder 0.4.0 and jxl-encoder 0.4.0 — both are
+# unpublished; the local checkouts supply them (mirrors zenjxl's own patch
+# table, which does not propagate to dependents).
+zenjxl-decoder = { path = "/home/lilith/work/zen/zenjxl-decoder/zenjxl-decoder" }
+jxl-encoder = { path = "/home/lilith/work/zen/jxl-encoder/jxl-encoder" }
+# jxl-encoder needs butteraugli 0.9.4 (unreleased; crates.io has 0.9.3).
+butteraugli = { path = "/home/lilith/work/butteraugli/butteraugli" }
+# zenavif-serialize 0.2.0 is unpublished (workspace member of zenavif).
+zenavif-serialize = { path = "/home/lilith/work/zen/zenavif/zenavif-serialize" }
+# zenanalyze-api/zenanalyze 0.1.1/0.2.0 additions live on main, unpublished.
+zenanalyze-api = { git = "https://github.com/imazen/zenanalyze" }
+zenanalyze = { git = "https://github.com/imazen/zenanalyze" }
