@@ -26,6 +26,7 @@ default = [
     "zenavif",
     "butteraugli",
     "fast-ssim2",
+    "zenzop",
 ]
 # Heavy/optional pulls — enable explicitly:
 #   zenjxl: pure-Rust JXL decode via zenjxl-decoder + jxl-encoder paths
@@ -41,6 +42,7 @@ zenbitmaps = ["dep:zenbitmaps"]
 zenavif = ["dep:zenavif"]
 butteraugli = ["dep:butteraugli"]
 fast-ssim2 = ["dep:fast-ssim2"]
+zenzop = ["dep:zenzop"]
 
 [dependencies]
 enough = { path = "../../crates/enough" }
@@ -60,6 +62,7 @@ zenbitmaps = { path = "/home/lilith/work/zen/zenbitmaps", optional = true }
 zenavif = { path = "/home/lilith/work/zen/zenavif", optional = true }
 butteraugli = { path = "/home/lilith/work/butteraugli/butteraugli", optional = true }
 fast-ssim2 = { path = "/home/lilith/work/zen/fast-ssim2/fast-ssim2", optional = true }
+zenzop = { path = "/home/lilith/work/zen/zenzop", optional = true }
 zensim = { path = "/home/lilith/work/zen/zensim/zensim", features = ["zenpixels", "imgref"], optional = true }
 zenpixels = { version = ">=0.2.16, <0.4.0", features = ["rgb", "imgref"] }
 
@@ -78,3 +81,7 @@ zenavif-serialize = { path = "/home/lilith/work/zen/zenavif/zenavif-serialize" }
 # zenanalyze-api/zenanalyze 0.1.1/0.2.0 additions live on main, unpublished.
 zenanalyze-api = { git = "https://github.com/imazen/zenanalyze" }
 zenanalyze = { git = "https://github.com/imazen/zenanalyze" }
+# zenquant's `*_with_stop` entry points are merged on main but unreleased
+# (crates.io tops out at 0.1.3, pre-cancellation); zengif's stop plumbing
+# needs the local checkout.
+zenquant = { path = "/home/lilith/work/zen/zenquant" }

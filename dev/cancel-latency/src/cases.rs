@@ -330,6 +330,35 @@ pub fn all() -> Vec<Case> {
         });
     }
 
+    #[cfg(feature = "zenzop")]
+    {
+        v.push(Case {
+            name: "zenzop-squeeze-enhanced-4mb",
+            codec: "zenzop",
+            blurb: "enhanced zopfli, maxblocks=1 (largest DP per squeeze iter) on 4MB mixed",
+            run: |m| {
+                use std::io::Write;
+                let data = crate::inputs::bytes_mixed(4 << 20, 0x20F1);
+                let mut opts = zenzop::Options::default();
+                opts.enhanced = true;
+                // One block per 1MB master chunk: the squeeze loop checks
+                // once per iteration, so this maximizes per-check work.
+                opts.maximum_block_splits = 1;
+                let t = Instant::now();
+                let mut enc = zenzop::DeflateEncoder::with_stop(opts, Vec::new(), m);
+                enc.write_all(&data).map_err(err)?;
+                let res = enc.finish().map_err(err)?;
+                let out = res.into_inner();
+                Ok(format!(
+                    "{}B -> {}B in {:?}",
+                    data.len(),
+                    out.len(),
+                    t.elapsed()
+                ))
+            },
+        });
+    }
+
     #[cfg(feature = "zenavif")]
     {
         v.push(Case {
