@@ -32,8 +32,9 @@ let observer = pulse.observer();
 // observer.try_snapshot();          // sample on a UI thread when ready
 ```
 
-The library can declare and finish weighted child phases via the `Pulse` trait
-in `howfar`. `PulseTree` translates those declarations into this crate's tree,
+The library can run serial leaf phases through `howfar::Steps`, or declare
+parallel/nested branches with the underlying `Pulse` trait. `PulseTree`
+translates those declarations into this crate's tree,
 and forwards every cancellation check to the supplied stop policy. Existing
 `Phase`/`Progress` handles remain useful when the consumer plans a tree itself.
 

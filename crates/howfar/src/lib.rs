@@ -29,7 +29,9 @@ extern crate alloc;
 pub use enough::{Stop, StopReason};
 
 mod pulse;
+mod steps;
 pub use pulse::{Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, Total};
+pub use steps::{RunError, Steps};
 
 /// A sink for **completed** units. Reporting does not check cancellation.
 ///

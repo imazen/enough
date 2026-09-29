@@ -1,5 +1,5 @@
 use enough::{Stop, StopReason, Unstoppable};
-use howfar::{Execution, Outcome, PhaseSpec, Pulse, Report, Total};
+use howfar::{Execution, Outcome, PhaseSpec, Pulse, Report, RunError, Steps, Total};
 use howfar_along::{Phase, PlanError, PulseTree, Status};
 
 fn nested_operation(pulse: &dyn Pulse) -> Result<(), StopReason> {
@@ -88,6 +88,63 @@ fn first_report_prevents_late_replanning_and_abandoned_child_freezes() {
         pulse.finish(Outcome::Succeeded),
         Err(PlanError::UnsuccessfulChildren)
     );
+    assert_eq!(
+        observer.snapshot().children[0].status,
+        Status::Finished(Outcome::Abandoned)
+    );
+}
+
+#[test]
+fn steps_finish_success_and_classify_stop_or_work_failure() {
+    let specs = [
+        PhaseSpec::new("before", 1, Total::Exact(1)),
+        PhaseSpec::new("current", 1, Total::Exact(2)),
+        PhaseSpec::new("after", 1, Total::Exact(1)),
+    ];
+    for (stoppable, failure) in [(true, Outcome::Cancelled), (false, Outcome::Failed)] {
+        let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+        let observer = pulse.observer();
+        let mut steps = Steps::new(&pulse, &specs).unwrap();
+        steps
+            .run(|stage| {
+                stage.advance(1);
+                Ok::<(), StopReason>(())
+            })
+            .unwrap();
+        let result = if stoppable {
+            steps.run_stoppable(|stage| {
+                stage.advance(1);
+                Err::<(), _>(StopReason::Cancelled)
+            })
+        } else {
+            steps.run(|stage| {
+                stage.advance(1);
+                Err::<(), _>(StopReason::Cancelled)
+            })
+        };
+        assert!(matches!(result, Err(RunError::Work(StopReason::Cancelled))));
+        assert_eq!(steps.finish(), Err(PlanError::Finished));
+        let snapshot = observer.snapshot();
+        assert_eq!(snapshot.status, Status::Finished(failure));
+        assert_eq!(
+            snapshot.children[0].status,
+            Status::Finished(Outcome::Succeeded)
+        );
+        assert_eq!(snapshot.children[1].completed, 1);
+        assert_eq!(snapshot.children[1].status, Status::Finished(failure));
+        assert_eq!(
+            snapshot.children[2].status,
+            Status::Finished(Outcome::Skipped)
+        );
+    }
+}
+
+#[test]
+fn unfinished_steps_cannot_mark_a_parent_successful() {
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let steps = Steps::new(&pulse, &[PhaseSpec::new("pending", 1, Total::Exact(1))]).unwrap();
+    assert_eq!(steps.finish(), Err(PlanError::UnfinishedChildren));
     assert_eq!(
         observer.snapshot().children[0].status,
         Status::Finished(Outcome::Abandoned)

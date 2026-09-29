@@ -60,6 +60,8 @@ pub enum PlanError {
     Finished,
     /// All children must finish before the parent does.
     UnfinishedChildren,
+    /// Every declared child has already run.
+    NoMoreChildren,
     /// A successful parent cannot contain unsuccessful children.
     UnsuccessfulChildren,
     /// A work pool needs at least one possible worker.
@@ -75,6 +77,7 @@ impl core::fmt::Display for PlanError {
             Self::AlreadyInUse => "phase planning must precede use",
             Self::Finished => "the phase is already finished",
             Self::UnfinishedChildren => "join and finish every child first",
+            Self::NoMoreChildren => "no declared child remains to run",
             Self::UnsuccessfulChildren => "a required child did not succeed",
             Self::ZeroParallelism => "pool parallelism must be positive",
             Self::Busy => "another thread is administering the phase",

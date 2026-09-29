@@ -18,35 +18,41 @@ howfar = "0.1"
 ## One callback through a library
 
 ```rust
-use howfar::{Execution, Outcome, PhaseSpec, Pulse, StopReason, Total};
+use howfar::{PhaseSpec, Pulse, RunError, Steps, StopReason, Total};
 
-fn process(rows: &[u8], pulse: &dyn Pulse) -> Result<(), StopReason> {
-    pulse.check()?;
-    let phases = pulse.split(Execution::Sequence, &[
+fn process(rows: &[u8], pulse: &dyn Pulse) -> Result<(), RunError<StopReason>> {
+    let mut steps = Steps::new(pulse, &[
         PhaseSpec::new("rows", 1, Total::Exact(rows.len() as u64)).units("rows"),
-    ]).expect("this fixed plan is valid");
-    let rows_phase = &*phases[0];
-    for row in rows {
-        // Process the row successfully, then count it.
-        let _ = row;
-        rows_phase.advance(1);
-        rows_phase.check()?;
-    }
-    rows_phase.finish(Outcome::Succeeded).unwrap();
-    pulse.finish(Outcome::Succeeded).unwrap();
+    ])?;
+    steps.run_stoppable(|stage| {
+        for row in rows {
+            stage.check()?;
+            // Process the row successfully, then count it.
+            let _ = row;
+            stage.advance(1);
+        }
+        Ok(())
+    })?;
+    steps.finish()?;
     Ok(())
 }
 
 process(&[1, 2, 3], &howfar::NoPulse).unwrap();
 ```
 
-A real library should propagate a failed `split`/`finish` through its own error
-type and publish `Cancelled` or `Failed` outcomes on error. `NoPulse` is the
-zero-sized, non-cancelling choice. Child phases can themselves split into
-`Sequence`, `ForkJoin`, or `WorkPool` groups. The relative weights of siblings
-are fixed before their work starts; a parallel middle phase can therefore keep
-30% of its parent's budget regardless of worker count. The returned children
-can be shared across scoped threads, then finished after their workers join.
+`Steps` runs declared leaf phases in order. It marks a successful phase finished;
+on a stop request, it marks that phase cancelled and later phases skipped.
+Use `run` instead of `run_stoppable` when an error means failure rather than
+cancellation. `RunError<E>` separates an operation error from a plan error,
+so a library can use a type alias for its public error. A panic leaves work
+abandoned. `NoPulse` is the zero-sized, non-cancelling choice.
+
+For nested or parallel work, use the underlying `Pulse::split` and `finish`
+methods. Child phases can split into `Sequence`, `ForkJoin`, or `WorkPool`
+groups. The relative weights of siblings are fixed before their work starts;
+a parallel middle phase can therefore keep 30% of its parent's budget
+regardless of worker count. The returned children can be shared across scoped
+threads, then finished after their workers join.
 
 `Pulse` extends `Stop` and `Report`, so the same `&dyn Pulse` also works
 at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.

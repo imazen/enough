@@ -6,25 +6,26 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: howfar.txt 60 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
+# files: howfar.txt 72 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 1
-#   pub types (struct/enum/trait/alias)         9
+#   pub types (struct/enum/trait/alias)        11
 #   pub consts/statics                          3
 #   free functions                              2
-#   inherent methods                            4
+#   inherent methods                            8
 #   struct fields                               6
-#   enum variants                              20
+#   enum variants                              23
 #   re-exports                                  2
-#   trait roster entries (type × trait)        43
+#   trait roster entries (type × trait)        47
 #   auto-trait-complete types                   7
+#   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                           47
+#   (root)                           56
 
-## items (47 lines)
+## items (56 lines)
 
 pub mod howfar
 pub use Stop
@@ -46,10 +47,14 @@ pub PlanError::AlreadyInUse
 pub PlanError::Busy
 pub PlanError::EmptyOrZeroWeight
 pub PlanError::Finished
+pub PlanError::NoMoreChildren
 pub PlanError::Overflow
 pub PlanError::UnfinishedChildren
 pub PlanError::UnsuccessfulChildren
 pub PlanError::ZeroParallelism
+pub enum RunError<E>
+pub RunError::Plan(PlanError)
+pub RunError::Work(E)
 pub enum Total
 pub Total::Estimated(u64)
 pub Total::Exact(u64)
@@ -65,6 +70,11 @@ pub PhaseSpec::weight: u64
 pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
 pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
 pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
+pub struct Steps<'a>
+pub fn Steps<'a>::finish(self) -> core::result::Result<(), PlanError>
+pub fn Steps<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
+pub fn Steps<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Steps<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub trait Pulse: enough::Stop + Report
 pub fn Pulse::finish(&self, Outcome) -> core::result::Result<(), PlanError>
 pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<alloc::boxed::Box<(dyn Pulse + '_)>>, PlanError>
@@ -74,7 +84,7 @@ pub fn Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64)
 pub fn &mut T::may_report(&self) -> bool
 
-## trait impls (12 types)
+## trait impls (13 types)
 
 &T: Report
 &mut T: Report
@@ -84,6 +94,7 @@ NoPulse: Clone, Copy, Debug, Default, Pulse, Report, enough::Stop
 Outcome: Clone, Copy, Debug, Eq, PartialEq
 PhaseSpec<'a>: Clone, Copy, Debug
 PlanError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
+RunError<E>: Debug, Display, Error, From<PlanError>
 Total: Clone, Copy, Debug, Eq, PartialEq
 alloc::boxed::Box<T>: Report
 alloc::sync::Arc<T>: Report
@@ -92,3 +103,5 @@ core::option::Option<T>: Report
 ## auto traits
 
 7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+Steps<'a>: !RefUnwindSafe !UnwindSafe

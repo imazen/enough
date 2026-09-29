@@ -4,8 +4,10 @@
 
 * [`howfar`](../crates/howfar/README.md) is the library-author interface:
   `&dyn Pulse` combines `enough::Stop`, completed-work reporting, and fixed
-  weighted child plans. `NoPulse`, `Report`, and `IgnoreProgress` support the
-  no-op and count-only cases. Its only dependency is `enough`; it has no feature
+  weighted child plans. `Steps` handles success, cancellation, failure, and
+  skipped siblings for serial leaf work; primitive `split` remains available
+  for parallel and nested branches. `NoPulse`, `Report`, and `IgnoreProgress`
+  support the no-op and count-only cases. Its only dependency is `enough`; it has no feature
   flags, timers, or runtime. It always uses no_std + alloc.
 * [`howfar-along`](../crates/howfar-along/README.md) is the opt-in consumer/test
   toolkit: `PulseTree`, `Work`, batching, weighted trees, snapshots, polling,
@@ -154,6 +156,7 @@ wasm-bindgen callback trampolines remain outside this fixture's scope.
 | --- | --- |
 | Featureless interface, ignored/borrowed/owned reporting, original call sites | `crates/howfar/tests/interface.rs` |
 | No-op generic paths and existing Stop forwarding | `crates/howfar-along/tests/core.rs`, `crates/howfar-along/tests/polling.rs` |
+| Sequential `Steps` success, cancellation, failure, skipped siblings, and unfinished parent | `crates/howfar/tests/pulse.rs`, `crates/howfar-along/tests/pulse.rs` |
 | Strided completed work, empty input, partial final batch, overflow | `crates/howfar-along/tests/core.rs`, `crates/howfar-along/tests/phases.rs` |
 | Serial → middle 30% parallel → join → serial, nested/repeated joins | `crates/howfar-along/tests/phases.rs` |
 | Manual threads and asymmetric Rayon work sharing one counter | `crates/howfar-along/tests/phases.rs` |
