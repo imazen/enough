@@ -91,15 +91,8 @@ dependencies = [
 [[package]]
 name = "howfar"
 version = "0.1.0"
-
-[[package]]
-name = "howfar-browser-probe"
-version = "0.0.0"
 dependencies = [
- "howfar-along",
- "rayon",
- "wasm-bindgen",
- "wasm-bindgen-rayon",
+ "enough",
 ]
 
 [[package]]
@@ -109,6 +102,16 @@ dependencies = [
  "critical-section",
  "enough",
  "howfar",
+]
+
+[[package]]
+name = "howfar-browser-probe"
+version = "0.0.0"
+dependencies = [
+ "howfar-along",
+ "rayon",
+ "wasm-bindgen",
+ "wasm-bindgen-rayon",
 ]
 
 [[package]]
