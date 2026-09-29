@@ -2,10 +2,11 @@
 
 Consumer-owned progress trees, callbacks, and opt-in execution profiling.
 
-Library interfaces depend on the tiny [`howfar`](../howfar/README.md) crate and,
-for cancellation, `enough`. Applications and library tests opt into this crate.
-It re-exports the same `Report` and `IgnoreProgress`; no adapter is needed at a
-library boundary. Neither crate permits unsafe code.
+Library interfaces depend only on the small [`howfar`](../howfar/README.md)
+crate. Applications and library tests opt into this crate. `PulseTree` supplies
+the same `&dyn Pulse` a library accepts, including cancellation and nested
+phases, while keeping tracking machinery out of the library dependency graph.
+Neither crate permits unsafe code.
 
 **MSRV: Rust 1.88.** `enough` and `almost-enough` retain Rust 1.85. The browser
 test application's threaded Wasm build uses nightly; these libraries do not.
@@ -18,6 +19,23 @@ howfar-along = "0.1"
 # Embedded: always requires alloc and a platform critical-section provider.
 # howfar-along = { version = "0.1", default-features = false }
 ```
+
+## Give a library one Pulse
+
+```rust
+use howfar_along::{Phase, PulseTree, Total, Unstoppable};
+
+let stop = Unstoppable;
+let pulse = PulseTree::new(Phase::new("resize", Total::Unknown), &stop);
+let observer = pulse.observer();
+// my_library::resize(input, &pulse); // accepts &dyn howfar::Pulse
+// observer.try_snapshot();          // sample on a UI thread when ready
+```
+
+The library can declare and finish weighted child phases via the `Pulse` trait
+in `howfar`. `PulseTree` translates those declarations into this crate's tree,
+and forwards every cancellation check to the supplied stop policy. Existing
+`Phase`/`Progress` handles remain useful when the consumer plans a tree itself.
 
 ## Count work in three steps
 
@@ -48,11 +66,11 @@ independent of progress sampling. `step(n)` counts work **already completed**
 before checking cancellation; keep the initial `check()` and report the actual
 partial-batch length.
 
-An algorithm accepts `impl Stop + Report`, or accepts the two independently.
+An algorithm may still accept `impl Stop + Report` or the two independently.
 `Report` requires only `advance(u64)`; `Stop` remains unchanged. Pass
 `Work::new(Unstoppable, IgnoreProgress)` to compile both policies away. `&dyn Stop`
-seams continue to work through `Work`, but cannot discover a reporting interface
-after type erasure: add `with_progress` or a `Report` parameter where work is counted.
+seams continue to work through `Work`; new nested APIs can take `&dyn Pulse`
+instead and let the library plan phases without depending on this crate.
 
 ## Add structure when it helps
 

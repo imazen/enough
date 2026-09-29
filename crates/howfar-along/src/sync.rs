@@ -2,6 +2,57 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+/// Move a unique owner out under a short lock, then administer it outside the
+/// lock. In particular, phase splitting may allocate and publish metadata.
+pub(crate) struct OwnerCell<T> {
+    #[cfg(feature = "std")]
+    value: std::sync::Mutex<Option<T>>,
+    #[cfg(not(feature = "std"))]
+    value: critical_section::Mutex<core::cell::RefCell<Option<T>>>,
+}
+impl<T> OwnerCell<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self {
+            #[cfg(feature = "std")]
+            value: std::sync::Mutex::new(Some(value)),
+            #[cfg(not(feature = "std"))]
+            value: critical_section::Mutex::new(core::cell::RefCell::new(Some(value))),
+        }
+    }
+    pub(crate) fn take(&self) -> Option<T> {
+        #[cfg(feature = "std")]
+        {
+            self.value
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            critical_section::with(|cs| self.value.borrow(cs).borrow_mut().take())
+        }
+    }
+    pub(crate) fn put(&self, value: T) {
+        #[cfg(feature = "std")]
+        {
+            let mut slot = self
+                .value
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            debug_assert!(slot.is_none());
+            *slot = Some(value);
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            critical_section::with(|cs| {
+                let mut slot = self.value.borrow(cs).borrow_mut();
+                debug_assert!(slot.is_none());
+                *slot = Some(value);
+            });
+        }
+    }
+}
+
 /// Copy an Arc under a short platform lock; cloning metadata and walking trees
 /// happen after releasing it. Replaced versions die when their last reader drops.
 pub(crate) struct MetadataCell<T> {

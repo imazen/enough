@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Minimal progress reporting interface for libraries"
 keywords = ["progress", "no_std"]
 categories = ["concurrency", "no-std"]
+
+[dependencies]
+enough = { workspace = true }

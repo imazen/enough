@@ -2,11 +2,14 @@
 
 ## Crate boundary
 
-* [`howfar`](../crates/howfar/README.md) is the library-author interface: `Report`,
-  `IgnoreProgress`, and pointer forwarding. It has no dependencies, feature flags,
-  timers, or runtime. It always uses no_std + alloc. Its API is the same in every build.
+* [`howfar`](../crates/howfar/README.md) is the library-author interface:
+  `&dyn Pulse` combines `enough::Stop`, completed-work reporting, and fixed
+  weighted child plans. `NoPulse`, `Report`, and `IgnoreProgress` support the
+  no-op and count-only cases. Its only dependency is `enough`; it has no feature
+  flags, timers, or runtime. It always uses no_std + alloc.
 * [`howfar-along`](../crates/howfar-along/README.md) is the opt-in consumer/test
-  toolkit: `Work`, batching, weighted trees, snapshots, polling, and profiling.
+  toolkit: `PulseTree`, `Work`, batching, weighted trees, snapshots, polling,
+  and profiling.
   Library tests can use it as a dev-dependency without imposing it on users.
 * Both forbid unsafe code at crate level. No macro generates the core interface
   or its forwarding implementations; no proc macros are required.
@@ -38,7 +41,7 @@ must ensure it excludes all participating threads/cores. Entry latency is a
 property of that provider; its critical section encloses only a handle operation.
 See [the upstream provider contract](https://docs.rs/critical-section/1.2.0/critical_section/).
 The tracker depends on howfar, enough, and critical-section. Rayon/Tokio and browser
-bindings are test dependencies; the interface crate depends on none of them.
+bindings are test dependencies; the interface crate depends only on enough.
 
 This follows the scheduling concern in
 [Spinlocks Considered Harmful](https://matklad.github.io/2020/01/02/spinlocks-considered-harmful.html):

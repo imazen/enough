@@ -1,88 +1,79 @@
 # howfar
 
-A tiny interface for reporting completed work. **Zero dependencies, no feature
-flags, `no_std + alloc`, and `#![forbid(unsafe_code)]`.** Rust 1.88+.
+A small, object-safe progress interface for libraries. A library accepts one
+`&dyn Pulse` for cancellation, completed work, and nested phase planning. It
+depends only on `howfar`; the caller decides whether to ignore reports or opt
+into [`howfar-along`](../howfar-along/README.md) for a shared tree, snapshots,
+callbacks, and profiling.
 
-Library authors depend on `howfar`. Applications and library tests can opt into
-[`howfar-along`](../howfar-along/README.md) for counters, weighted phases,
-callbacks, snapshots, and profiling. A library's users do not compile that
-machinery just because the library supports progress.
+**Rust 1.88+, `no_std + alloc`, `#![forbid(unsafe_code)]`.** There are no feature
+flags or macros. The only dependency is the small `enough` cancellation trait
+crate; the reporting hot path does not allocate or read a clock.
 
 ```toml
 [dependencies]
 howfar = "0.1"
 ```
 
+## One callback through a library
+
 ```rust
-use howfar::{IgnoreProgress, Report};
+use howfar::{Execution, Outcome, PhaseSpec, Pulse, Total};
+use enough::StopReason;
 
-pub fn process(rows: &[u8], progress: impl Report) {
-    for chunk in rows.chunks(16) {
-        // Successfully process the chunk, then report actual completed rows.
-        progress.advance(chunk.len() as u64);
+fn process(rows: &[u8], pulse: &dyn Pulse) -> Result<(), StopReason> {
+    pulse.check()?;
+    let phases = pulse.split(Execution::Sequence, &[
+        PhaseSpec::new("rows", 1, Total::Exact(rows.len() as u64)).units("rows"),
+    ]).expect("this fixed plan is valid");
+    let rows_phase = &*phases[0];
+    for row in rows {
+        // Process the row successfully, then count it.
+        let _ = row;
+        rows_phase.advance(1);
+        rows_phase.check()?;
     }
-}
-
-process(&[0; 17], IgnoreProgress);
-```
-
-`IgnoreProgress` deliberately discards reports; it does not mean the operation
-has made no progress. It is zero-sized and optimizes away in generic code.
-
-A caller can implement `Report` with a borrowed atomic counter, a custom metric,
-or a test recorder. Workers can share the sink: `Report` requires `Send + Sync`.
-`advance` counts completed units; it does not imply a clock read, callback,
-cancellation check, or percentage calculation. Check `may_report()` when expensive
-report preparation could be skipped for a permanent no-op sink.
-
-References, `Box`, `Arc`, and `Option` have explicit forwarding implementations.
-They are always available: `alloc` is required, with no feature switch or
-macro-generated implementation. The API is identical in every build. `Report`
-and `IgnoreProgress` themselves never allocate; the caller chooses its storage.
-
-## Cancellation stays independent
-
-Use `enough::Stop` alongside `Report` when a library supports cancellation:
-
-```rust,ignore
-use enough::{Stop, StopReason};
-use howfar::Report;
-
-pub fn process(rows: &[u8], stop: impl Stop, progress: impl Report)
-    -> Result<(), StopReason>
-{
-    stop.check()?;
-    for chunk in rows.chunks(16) {
-        // Process the chunk successfully.
-        progress.advance(chunk.len() as u64);
-        stop.check()?;
-    }
+    rows_phase.finish(Outcome::Succeeded).unwrap();
+    pulse.finish(Outcome::Succeeded).unwrap();
     Ok(())
 }
+
+process(&[1, 2, 3], &howfar::NoPulse).unwrap();
 ```
 
-Keep the initial check, count the actual final partial batch, and choose checking
-and reporting cadence separately. An API may also accept `impl Stop + Report`;
-consumers can supply `howfar_along::Work` to combine their two policies.
+A real library should propagate a failed `split`/`finish` through its own error
+type and publish `Cancelled` or `Failed` outcomes on error. `NoPulse` is the
+zero-sized, non-cancelling choice. Child phases can themselves split into
+`Sequence`, `ForkJoin`, or `WorkPool` groups. The relative weights of siblings
+are fixed before their work starts; a parallel middle phase can therefore keep
+30% of its parent's budget regardless of worker count. The returned children
+can be shared across scoped threads, then finished after their workers join.
 
-## Opt into tracking only where it is used
+`Pulse` extends `enough::Stop` and `Report`, so the same `&dyn Pulse` also works
+at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.
+`check()` does not report completed work, and `advance()` does not poll or call
+subscribers. The caller chooses both cadences.
+
+## Count only
+
+Algorithms that need no phase structure can continue to accept `impl Report`.
+`IgnoreProgress` discards counts while preserving a separate cancellation
+policy. References, `Box`, `Arc`, and `Option` forward `Report` without feature
+switches. The interface is identical in every build.
+
+## Opt into tracking in applications and tests
 
 ```toml
 # In a library's Cargo.toml:
 [dependencies]
 howfar = "0.1"
-enough = "0.4"
 
 [dev-dependencies]
 howfar-along = { version = "0.1", features = ["profile"] }
 ```
 
-Applications can put `howfar-along` in normal dependencies instead. The tracker
-has the same tree/polling API with std or no_std + alloc; it owns synchronization
-and instrumentation costs. `howfar` always remains the lightweight interface.
-Neither crate contains unsafe code or proc-macro dependencies.
-
-Fresh-target default library builds on the development host measured **0.088 s
-for howfar versus 0.099 s for enough** (five runs, medians, warm toolchain and
-filesystem caches). This is a host measurement, not an absolute CI time limit.
-See [the validation notes](../../docs/howfar-implementation.md).
+Applications can use `howfar-along::PulseTree` to pair a phase tree with a stop
+policy, pass it as `&dyn Pulse`, and sample through an observer. Its optional
+plumbing stays out of the library dependency graph. Neither crate permits unsafe
+code. See the [tracker example](../howfar-along/README.md) and
+[validation notes](../../docs/howfar-implementation.md).

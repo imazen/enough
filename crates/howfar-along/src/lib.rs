@@ -1,7 +1,8 @@
 //! Consumer-owned progress tracking, polling, and execution profiling.
 //!
-//! Library signatures depend on [`howfar::Report`] and [`enough::Stop`].
-//! Applications and tests opt into this crate to create trees and callbacks.
+//! Libraries can accept one [`howfar::Pulse`] for cancellation, reporting, and
+//! nested phase planning. Applications and tests use [`PulseTree`] to supply
+//! that interface with trees, observers, callbacks, and profiling.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -14,8 +15,11 @@ mod json;
 pub mod poll;
 #[cfg(feature = "profile")]
 pub mod profile;
+mod pulse;
 mod sync;
 mod tree;
+pub use howfar::{NoPulse, PhaseSpec, Pulse};
+pub use pulse::PulseTree;
 pub use tree::{
     Execution, Observer, Outcome, Part, Phase, PlanError, Progress, Snapshot, Status, Total,
 };

@@ -57,7 +57,7 @@ pub profile::SiteStats::reports: u64
 pub profile::SiteStats::units: u64
 pub struct profile::Span
 pub fn profile::Span::child(&self, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
-pub fn profile::Span::finish(self, Outcome)
+pub fn profile::Span::finish(self, howfar::pulse::Outcome)
 pub fn profile::Span::id(&self) -> usize
 pub fn profile::Span::instrument<T>(&self, T) -> profile::Instrumented<T>
 pub struct profile::SpanRecord
@@ -65,7 +65,7 @@ pub profile::SpanRecord::end: core::time::Duration
 pub profile::SpanRecord::id: usize
 pub profile::SpanRecord::kind: profile::SpanKind
 pub profile::SpanRecord::node: usize
-pub profile::SpanRecord::outcome: Outcome
+pub profile::SpanRecord::outcome: howfar::pulse::Outcome
 pub profile::SpanRecord::parent: core::option::Option<usize>
 pub profile::SpanRecord::start: core::time::Duration
 pub profile::SpanRecord::stats: profile::Stats

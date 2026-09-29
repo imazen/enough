@@ -24,6 +24,9 @@
 
 extern crate alloc;
 
+mod pulse;
+pub use pulse::{Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, Total};
+
 /// A sink for **completed** units. Reporting does not check cancellation.
 ///
 /// Implementations can be shared by workers. `advance` may run on any of their

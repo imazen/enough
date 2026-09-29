@@ -5,50 +5,9 @@ use crate::{
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
-/// The denominator for counted units, never an estimate of elapsed time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Total {
-    /// A known count. Exceeding it is exposed as an accounting error.
-    Exact(u64),
-    /// A revisable estimate; exceeding it does not complete a phase.
-    Estimated(u64),
-    /// No denominator yet (or intentionally no finite denominator).
-    Unknown,
-}
+pub use howfar::{Execution, Outcome, PlanError, Total};
 
-/// Execution relationships, supplied by the coordinator; these do not schedule work.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Execution {
-    /// No scheduling information is asserted.
-    #[default]
-    Unspecified,
-    /// Children execute in order, with intermediate joins represented as children.
-    Sequence,
-    /// Concurrent branches must all join before this phase finishes.
-    ForkJoin,
-    /// Logical tasks use a shared pool. The limit is not measured concurrency.
-    WorkPool {
-        /// A positive configured concurrency ceiling.
-        max_parallelism: usize,
-    },
-}
-
-/// Explicit terminal result. Counters reaching their total do not imply success.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// The coordinator has successfully completed and joined this phase.
-    Succeeded,
-    /// This obligation proved unnecessary; it discharges its planned weight.
-    Skipped,
-    /// Cooperatively cancelled. Completed counts are retained.
-    Cancelled,
-    /// Failed. The application retains its domain-specific error.
-    Failed,
-    /// The owner was dropped without an explicit outcome.
-    Abandoned,
-}
-
-/// Lifecycle, independent of counted fraction.
+/// Lifecycle state, independent of the counted fraction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Work has not started.
@@ -58,39 +17,6 @@ pub enum Status {
     /// A frozen terminal observation.
     Finished(Outcome),
 }
-
-/// Invalid phase planning or lifecycle transition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlanError {
-    /// A partition must contain at least one child, all with positive weights.
-    EmptyOrZeroWeight,
-    /// The weight sum or the job-local node identifier space overflowed.
-    Overflow,
-    /// A leaf was already started, partitioned, or handed to reporters.
-    AlreadyInUse,
-    /// Terminal phases cannot be changed.
-    Finished,
-    /// A parent must join and finish its children before publishing an outcome.
-    UnfinishedChildren,
-    /// A successful parent cannot contain failed/cancelled/abandoned children.
-    UnsuccessfulChildren,
-    /// A pool needs at least one possible worker.
-    ZeroParallelism,
-}
-impl core::fmt::Display for PlanError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::EmptyOrZeroWeight => "a partition needs positive child weights",
-            Self::Overflow => "phase weights or identifiers overflowed",
-            Self::AlreadyInUse => "phase planning must precede use",
-            Self::Finished => "the phase is already finished",
-            Self::UnfinishedChildren => "join and finish every child first",
-            Self::UnsuccessfulChildren => "a required child did not succeed",
-            Self::ZeroParallelism => "pool parallelism must be positive",
-        })
-    }
-}
-impl core::error::Error for PlanError {}
 
 /// One child's fixed relative budget in a partition.
 #[derive(Clone, Debug)]
@@ -240,6 +166,11 @@ impl Phase {
     /// A branch handle is inert: only leaves count work, avoiding double counting.
     pub fn progress(&self) -> Progress {
         self.node.issued.store(true, Ordering::Relaxed);
+        self.deferred_progress()
+    }
+    /// Build a reporter without starting or claiming the phase for planning.
+    /// The Pulse adapter publishes its first report only after split is ruled out.
+    pub(crate) fn deferred_progress(&self) -> Progress {
         Progress {
             node: Arc::clone(&self.node),
         }
@@ -447,6 +378,7 @@ impl Report for Progress {
         if completed == 0 || self.node.branch.load(Ordering::Relaxed) {
             return;
         }
+        self.node.issued.store(true, Ordering::Relaxed);
         match self.node.state.load(Ordering::Acquire) {
             2 => return,
             0 => {

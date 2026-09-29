@@ -20,8 +20,8 @@ metadata = json.loads(subprocess.check_output(
     ["cargo", "metadata", "--format-version=1", "--no-deps"], cwd=root))
 interface = next(p for p in metadata["packages"] if p["name"] == "howfar")
 assert interface["features"] == {}, "howfar's interface must not vary with features"
-assert not [d for d in interface["dependencies"] if d["kind"] != "dev"], \
-    "howfar must not compile consumer machinery or other normal/build dependencies"
+assert [(d["name"], d["kind"]) for d in interface["dependencies"] if d["kind"] != "dev"] == [("enough", None)], \
+    "howfar may depend only on the lightweight enough interface"
 print(subprocess.check_output(["rustc", "--version"], text=True).strip())
 samples = {"enough": [], "howfar": []}
 for run in range(args.runs):
