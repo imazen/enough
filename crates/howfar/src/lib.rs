@@ -1,8 +1,9 @@
-//! Minimal completed-work reporting for library interfaces.
+//! One small cancellation-and-progress interface for library authors.
 //!
-//! Accept [`Report`] in an algorithm; the caller chooses whether to ignore,
-//! count, display, or profile the work. This crate uses `no_std + alloc` with
-//! no Cargo dependencies or feature flags. Reporting itself never allocates.
+//! Accept [`Pulse`] to let a library declare nested work through one callback;
+//! the caller chooses whether to ignore, count, display, or profile it.
+//! This crate uses `no_std + alloc`, has one dependency on `enough`, and has
+//! no feature flags. Reporting itself never allocates.
 //!
 //! ```
 //! use howfar::{IgnoreProgress, Report};
@@ -16,13 +17,16 @@
 //! process(&[0; 17], &IgnoreProgress);
 //! ```
 //!
-//! Use `enough::Stop` independently for cancellation. Applications can opt into
-//! `howfar-along` for shared counters, weighted trees, callbacks, and profiling.
+//! Applications can opt into `howfar-along` for shared counters, weighted trees,
+//! callbacks, and profiling. A library only needs this crate; it re-exports
+//! [`Stop`] and [`StopReason`] from `enough`.
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 extern crate alloc;
+
+pub use enough::{Stop, StopReason};
 
 mod pulse;
 pub use pulse::{Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, Total};

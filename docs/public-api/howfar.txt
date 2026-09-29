@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: howfar.txt 58 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
+# files: howfar.txt 60 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -17,15 +17,18 @@
 #   inherent methods                            4
 #   struct fields                               6
 #   enum variants                              20
+#   re-exports                                  2
 #   trait roster entries (type × trait)        43
 #   auto-trait-complete types                   7
 #
 # per-module pub lines:
-#   (root)                           45
+#   (root)                           47
 
-## items (45 lines)
+## items (47 lines)
 
 pub mod howfar
+pub use Stop
+pub use StopReason
 pub enum Execution
 pub Execution::ForkJoin
 pub Execution::Sequence

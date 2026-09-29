@@ -18,8 +18,7 @@ howfar = "0.1"
 ## One callback through a library
 
 ```rust
-use howfar::{Execution, Outcome, PhaseSpec, Pulse, Total};
-use enough::StopReason;
+use howfar::{Execution, Outcome, PhaseSpec, Pulse, StopReason, Total};
 
 fn process(rows: &[u8], pulse: &dyn Pulse) -> Result<(), StopReason> {
     pulse.check()?;
@@ -49,8 +48,10 @@ are fixed before their work starts; a parallel middle phase can therefore keep
 30% of its parent's budget regardless of worker count. The returned children
 can be shared across scoped threads, then finished after their workers join.
 
-`Pulse` extends `enough::Stop` and `Report`, so the same `&dyn Pulse` also works
+`Pulse` extends `Stop` and `Report`, so the same `&dyn Pulse` also works
 at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.
+`Stop` and `StopReason` are re-exported here, so a new library needs only
+`howfar` in its manifest.
 `check()` does not report completed work, and `advance()` does not poll or call
 subscribers. The caller chooses both cadences.
 
