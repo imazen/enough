@@ -1,4 +1,4 @@
-# howfar-tracker
+# howfar-along
 
 Consumer-owned progress trees, callbacks, and opt-in execution profiling.
 
@@ -12,18 +12,18 @@ test application's threaded Wasm build uses nightly; these libraries do not.
 
 ```toml
 [dependencies]
-howfar-tracker = "0.1"
+howfar-along = "0.1"
 # Optional profiling:
-# howfar-tracker = { version = "0.1", features = ["profile"] }
+# howfar-along = { version = "0.1", features = ["profile"] }
 # Embedded: always requires alloc and a platform critical-section provider.
-# howfar-tracker = { version = "0.1", default-features = false }
+# howfar-along = { version = "0.1", default-features = false }
 ```
 
 ## Count work in three steps
 
 ```rust
-use howfar_tracker::{Phase, Report, Stop, Total, Unstoppable, Work};
-use howfar_tracker::ext::WorkExt;
+use howfar_along::{Phase, Report, Stop, Total, Unstoppable, Work};
+use howfar_along::ext::WorkExt;
 
 let mut phase = Phase::new("resize", Total::Exact(17));
 let observer = phase.observer();
@@ -57,7 +57,7 @@ after type erasure: add `with_progress` or a `Report` parameter where work is co
 ## Add structure when it helps
 
 ```rust
-use howfar_tracker::{Execution, Part, Phase, Total};
+use howfar_along::{Execution, Part, Phase, Total};
 
 let mut job = Phase::new("encode", Total::Unknown);
 let [before, middle, after] = job.split(Execution::Sequence, [
@@ -108,8 +108,8 @@ turn. No callbacks run unless you poll.
   This is how a worker sends progress to a browser UI or a server telemetry task.
 
 ```rust
-use howfar_tracker::{Phase, Total};
-use howfar_tracker::poll::{Control, ControlHandle, LocalPoller};
+use howfar_along::{Phase, Total};
+use howfar_along::poll::{Control, ControlHandle, LocalPoller};
 
 let phase = Phase::new("job", Total::Unknown);
 let control = ControlHandle::new();
@@ -175,7 +175,7 @@ and dropped spans/unattributed calls are visible. See the [profile example](exam
 ## Feature and synchronization boundaries
 
 `howfar` has no features: `Report`, `IgnoreProgress`, and pointer forwarding are
-always the same. Both crates require alloc; `howfar-tracker` constructs allocated state. Its tree/polling
+always the same. Both crates require alloc; `howfar-along` constructs allocated state. Its tree/polling
 API is identical with or without std; there is no `alloc` switch.
 
 | Tracker build | Synchronization and capabilities |
@@ -238,6 +238,6 @@ progress and cancels the worker while remaining responsive. Main-thread tests
 exercise native JSPI or resumable chunks on engines without it. These are host
 integration tests, not a production codec port or certification of packaged Safari.
 
-`cargo test -p howfar-tracker --all-features` runs the native scenarios; browser builds and
+`cargo test -p howfar-along --all-features` runs the native scenarios; browser builds and
 tests have separate CI jobs. [The full test matrix](../../docs/howfar-implementation.md#test-matrix)
 documents the platform boundaries and reproducible build/performance measurements.

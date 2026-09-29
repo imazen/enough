@@ -49,7 +49,7 @@ jobs:
 
       - name: Test existing crates at their MSRV
         if: matrix.rust == '1.85'
-        run: cargo test --workspace --exclude howfar --exclude howfar-tracker
+        run: cargo test --workspace --exclude howfar --exclude howfar-along
 
       - name: Test (no default features)
         run: |
@@ -142,8 +142,8 @@ jobs:
         run: |
           cargo build -p howfar --target thumbv7em-none-eabihf
           cargo build -p howfar --target wasm32-unknown-unknown
-          cargo build -p howfar-tracker --target thumbv7em-none-eabihf --no-default-features
-          cargo build -p howfar-tracker --target wasm32-unknown-unknown --no-default-features
+          cargo build -p howfar-along --target thumbv7em-none-eabihf --no-default-features
+          cargo build -p howfar-along --target wasm32-unknown-unknown --no-default-features
 
   # ==========================================================================
   # Feature powerset — verify all feature combinations compile
@@ -163,7 +163,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check feature powerset
-        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p howfar -p howfar-tracker
+        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p howfar -p howfar-along
 
   # ==========================================================================
   # Semver — catch accidental breaking changes
@@ -209,10 +209,10 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
-      - name: Run Miri (howfar-tracker metadata replacement and snapshots)
+      - name: Run Miri (howfar-along metadata replacement and snapshots)
         run: |
-          cargo +nightly miri test -p howfar-tracker --lib
-          cargo +nightly miri test -p howfar-tracker --test phases snapshots_during_metadata_publication
+          cargo +nightly miri test -p howfar-along --lib
+          cargo +nightly miri test -p howfar-along --test phases snapshots_during_metadata_publication
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
@@ -227,8 +227,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           cargo test -p howfar
-          cargo test -p howfar-tracker --all-features
-          cargo test -p howfar-tracker --no-default-features
+          cargo test -p howfar-along --all-features
+          cargo test -p howfar-along --no-default-features
       - name: Verify interface boundary and report cold builds
         run: python3 dev/bench-howfar-build.py --runs 3
 

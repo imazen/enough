@@ -96,14 +96,14 @@ version = "0.1.0"
 name = "howfar-browser-probe"
 version = "0.0.0"
 dependencies = [
- "howfar-tracker",
+ "howfar-along",
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-rayon",
 ]
 
 [[package]]
-name = "howfar-tracker"
+name = "howfar-along"
 version = "0.1.0"
 dependencies = [
  "critical-section",

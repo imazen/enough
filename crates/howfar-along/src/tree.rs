@@ -296,14 +296,14 @@ impl Phase {
     /// Replace an unused leaf with a fixed weighted group, preserving array destructuring.
     ///
     /// ```
-    /// use howfar_tracker::{Execution, Part, Phase, Total};
+    /// use howfar_along::{Execution, Part, Phase, Total};
     /// let mut job = Phase::new("encode", Total::Unknown);
     /// let [before, middle, after] = job.split(Execution::Sequence, [
     ///     Part::new("prepare", 35, Total::Exact(1)),
     ///     Part::new("parallel", 30, Total::Unknown),
     ///     Part::new("write", 35, Total::Exact(1)),
     /// ])?;
-    /// # Ok::<(), howfar_tracker::PlanError>(())
+    /// # Ok::<(), howfar_along::PlanError>(())
     /// ```
     pub fn split<const N: usize>(
         &mut self,

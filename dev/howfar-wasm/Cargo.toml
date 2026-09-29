@@ -9,4 +9,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-howfar-tracker = { path = "../../crates/howfar-tracker" }
+howfar-along = { path = "../../crates/howfar-along" }

@@ -176,7 +176,7 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
 | [`howfar`](crates/howfar/README.md) | Minimal progress interface for libraries (`no_std + alloc`, Rust 1.88) |
-| [`howfar-tracker`](crates/howfar-tracker/README.md) | Opt-in phase trees, callbacks, and task profiling for consumers/tests (`no_std + alloc`) |
+| [`howfar-along`](crates/howfar-along/README.md) | Opt-in phase trees, callbacks, and task profiling for consumers/tests (`no_std + alloc`) |
 
 Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blob/main/ZERO-DEP.md).
 

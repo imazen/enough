@@ -1,4 +1,4 @@
-# howfar-tracker public API — supported surface (default features)
+# howfar-along public API — supported surface (default features)
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: howfar-tracker.txt 158 lines (supported surface) | howfar-tracker.features.txt 95 added (features: profile,std) | howfar-tracker.internal.txt 18 lines (18 hidden + 0 excluded-feature)
+# files: howfar-along.txt 158 lines (supported surface) | howfar-along.features.txt 95 added (features: profile,std) | howfar-along.internal.txt 18 lines (18 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -28,7 +28,7 @@
 
 ## items (131 lines)
 
-pub mod howfar_tracker
+pub mod howfar_along
 pub use IgnoreProgress
 pub use Report
 pub use Stop

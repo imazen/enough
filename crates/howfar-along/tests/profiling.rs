@@ -1,8 +1,8 @@
 #![cfg(feature = "profile")]
-use howfar_tracker::ext::WorkExt;
-use howfar_tracker::poll::ControlHandle;
-use howfar_tracker::profile::{Clock, Profiler, SpanKind};
-use howfar_tracker::{IgnoreProgress, Outcome, Report, Stop, StopReason, Unstoppable, Work};
+use howfar_along::ext::WorkExt;
+use howfar_along::poll::ControlHandle;
+use howfar_along::profile::{Clock, Profiler, SpanKind};
+use howfar_along::{IgnoreProgress, Outcome, Report, Stop, StopReason, Unstoppable, Work};
 use std::{
     sync::{
         Arc,
@@ -312,8 +312,8 @@ fn timeout_reason_and_attached_plan_survive_export() {
     let span = profiler.span(0, "deadline", SpanKind::Work);
     assert_eq!(span.instrument(Timeout).check(), Err(StopReason::TimedOut));
     span.finish(Outcome::Cancelled);
-    let mut phase = howfar_tracker::Phase::new("job", howfar_tracker::Total::Estimated(3));
-    phase.set_total(howfar_tracker::Total::Exact(4)).unwrap();
+    let mut phase = howfar_along::Phase::new("job", howfar_along::Total::Estimated(3));
+    phase.set_total(howfar_along::Total::Exact(4)).unwrap();
     let trace = profiler
         .snapshot()
         .with_progress(phase.observer().snapshot());

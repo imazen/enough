@@ -9,7 +9,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-howfar-tracker = { path = "../../crates/howfar-tracker", features = ["profile"] }
+howfar-along = { path = "../../crates/howfar-along", features = ["profile"] }
 rayon = "1.10"
 # Match zenpipe/demo's binding and worker adapter versions. Test-only dependencies.
 wasm-bindgen = "=0.2.123"

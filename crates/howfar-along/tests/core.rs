@@ -1,5 +1,5 @@
-use howfar_tracker::ext::{ReportExt, WorkExt};
-use howfar_tracker::{IgnoreProgress, Report, Stop, StopReason, Unstoppable, Work};
+use howfar_along::ext::{ReportExt, WorkExt};
+use howfar_along::{IgnoreProgress, Report, Stop, StopReason, Unstoppable, Work};
 use std::{num::NonZeroU64, sync::Mutex};
 
 #[derive(Default)]

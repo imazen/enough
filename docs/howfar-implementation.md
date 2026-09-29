@@ -5,7 +5,7 @@
 * [`howfar`](../crates/howfar/README.md) is the library-author interface: `Report`,
   `IgnoreProgress`, and pointer forwarding. It has no dependencies, feature flags,
   timers, or runtime. It always uses no_std + alloc. Its API is the same in every build.
-* [`howfar-tracker`](../crates/howfar-tracker/README.md) is the opt-in consumer/test
+* [`howfar-along`](../crates/howfar-along/README.md) is the opt-in consumer/test
   toolkit: `Work`, batching, weighted trees, snapshots, polling, and profiling.
   Library tests can use it as a dev-dependency without imposing it on users.
 * Both forbid unsafe code at crate level. No macro generates the core interface
@@ -150,23 +150,23 @@ wasm-bindgen callback trampolines remain outside this fixture's scope.
 | Scenario | Automated evidence |
 | --- | --- |
 | Featureless interface, ignored/borrowed/owned reporting, original call sites | `crates/howfar/tests/interface.rs` |
-| No-op generic paths and existing Stop forwarding | `crates/howfar-tracker/tests/core.rs`, `crates/howfar-tracker/tests/polling.rs` |
-| Strided completed work, empty input, partial final batch, overflow | `crates/howfar-tracker/tests/core.rs`, `crates/howfar-tracker/tests/phases.rs` |
-| Serial → middle 30% parallel → join → serial, nested/repeated joins | `crates/howfar-tracker/tests/phases.rs` |
-| Manual threads and asymmetric Rayon work sharing one counter | `crates/howfar-tracker/tests/phases.rs` |
-| Codec-style geometry, strided preparation, two parallel waves, serial filter, cancellation and joined output | `crates/howfar-tracker/tests/hosts.rs` |
-| CLI terminal output and Tokio client disconnect cancelling/joining blocking CPU work | `crates/howfar-tracker/tests/hosts.rs` |
-| Unknown/estimated/exact/zero totals, revisions, overrun, skip/fail/cancel | `crates/howfar-tracker/tests/phases.rs` |
-| Frozen terminal records, abandoned parents, stale handles and new attempts | `crates/howfar-tracker/tests/phases.rs` |
-| Metadata replacement concurrent with observations | `crates/howfar-tracker/tests/phases.rs`, strict-provenance Miri |
-| Busy child metadata skips a UI snapshot without blocking reports or cancellation | `crates/howfar-tracker/src/tree.rs` |
-| Thread-affine FnMut, arbitrary callback work, memoized/deferred snapshots | `crates/howfar-tracker/tests/polling.rs` |
-| Cancellation during busy dispatch, recursion, panic recovery, posted delivery | `crates/howfar-tracker/tests/polling.rs` |
-| StopToken/Option/reference/Arc/builder compatibility and same-check cancellation | `crates/howfar-tracker/tests/polling.rs` |
-| Per-task entry/exit gaps, storms, original call sites, callback cost | `crates/howfar-tracker/tests/profiling.rs` |
-| Straggler overlap, nested spans, queue/join/yield/callback classification | `crates/howfar-tracker/tests/profiling.rs` |
-| Cancellation request → observation → join/cleanup return | `crates/howfar-tracker/tests/profiling.rs` |
-| Bounded retention, abandoned spans, counter/clock diagnostics, JSON escaping | `crates/howfar-tracker/tests/profiling.rs` |
+| No-op generic paths and existing Stop forwarding | `crates/howfar-along/tests/core.rs`, `crates/howfar-along/tests/polling.rs` |
+| Strided completed work, empty input, partial final batch, overflow | `crates/howfar-along/tests/core.rs`, `crates/howfar-along/tests/phases.rs` |
+| Serial → middle 30% parallel → join → serial, nested/repeated joins | `crates/howfar-along/tests/phases.rs` |
+| Manual threads and asymmetric Rayon work sharing one counter | `crates/howfar-along/tests/phases.rs` |
+| Codec-style geometry, strided preparation, two parallel waves, serial filter, cancellation and joined output | `crates/howfar-along/tests/hosts.rs` |
+| CLI terminal output and Tokio client disconnect cancelling/joining blocking CPU work | `crates/howfar-along/tests/hosts.rs` |
+| Unknown/estimated/exact/zero totals, revisions, overrun, skip/fail/cancel | `crates/howfar-along/tests/phases.rs` |
+| Frozen terminal records, abandoned parents, stale handles and new attempts | `crates/howfar-along/tests/phases.rs` |
+| Metadata replacement concurrent with observations | `crates/howfar-along/tests/phases.rs`, strict-provenance Miri |
+| Busy child metadata skips a UI snapshot without blocking reports or cancellation | `crates/howfar-along/src/tree.rs` |
+| Thread-affine FnMut, arbitrary callback work, memoized/deferred snapshots | `crates/howfar-along/tests/polling.rs` |
+| Cancellation during busy dispatch, recursion, panic recovery, posted delivery | `crates/howfar-along/tests/polling.rs` |
+| StopToken/Option/reference/Arc/builder compatibility and same-check cancellation | `crates/howfar-along/tests/polling.rs` |
+| Per-task entry/exit gaps, storms, original call sites, callback cost | `crates/howfar-along/tests/profiling.rs` |
+| Straggler overlap, nested spans, queue/join/yield/callback classification | `crates/howfar-along/tests/profiling.rs` |
+| Cancellation request → observation → join/cleanup return | `crates/howfar-along/tests/profiling.rs` |
+| Bounded retention, abandoned spans, counter/clock diagnostics, JSON escaping | `crates/howfar-along/tests/profiling.rs` |
 | Actual Wasm timer boundary, JSPI yield and cancel, worker posts | `dev/howfar-wasm/check.mjs` |
 | Real browser UI observations/cancellation during wasm-bindgen-rayon work; native JSPI/chunk fallback | `dev/howfar-browser/browser.spec.mjs` (Chromium + WebKit) |
 | Rust 1.88, fixed no_std+alloc interface, tracker backends, Cortex-M and wasm32 | CI feature/MSRV/target jobs |
@@ -194,6 +194,6 @@ Reproduce with `python3 dev/bench-howfar-build.py`. The script alternates crate
 order and uses a new Cargo target directory for every sample. Normal consumer
 dependency graphs can be inspected with `cargo tree -p howfar --edges normal`.
 
-`cargo bench -p howfar-tracker --bench overhead` measures the opt-in adapter path,
+`cargo bench -p howfar-along --bench overhead` measures the opt-in adapter path,
 including atomic reporting, worker-local batching, and clock reads. There is no
 hidden debouncing or clock read in `Report::advance`; those remain consumer policy.

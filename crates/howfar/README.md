@@ -4,7 +4,7 @@ A tiny interface for reporting completed work. **Zero dependencies, no feature
 flags, `no_std + alloc`, and `#![forbid(unsafe_code)]`.** Rust 1.88+.
 
 Library authors depend on `howfar`. Applications and library tests can opt into
-[`howfar-tracker`](../howfar-tracker/README.md) for counters, weighted phases,
+[`howfar-along`](../howfar-along/README.md) for counters, weighted phases,
 callbacks, snapshots, and profiling. A library's users do not compile that
 machinery just because the library supports progress.
 
@@ -63,7 +63,7 @@ pub fn process(rows: &[u8], stop: impl Stop, progress: impl Report)
 
 Keep the initial check, count the actual final partial batch, and choose checking
 and reporting cadence separately. An API may also accept `impl Stop + Report`;
-consumers can supply `howfar_tracker::Work` to combine their two policies.
+consumers can supply `howfar_along::Work` to combine their two policies.
 
 ## Opt into tracking only where it is used
 
@@ -74,10 +74,10 @@ howfar = "0.1"
 enough = "0.4"
 
 [dev-dependencies]
-howfar-tracker = { version = "0.1", features = ["profile"] }
+howfar-along = { version = "0.1", features = ["profile"] }
 ```
 
-Applications can put `howfar-tracker` in normal dependencies instead. The tracker
+Applications can put `howfar-along` in normal dependencies instead. The tracker
 has the same tree/polling API with std or no_std + alloc; it owns synchronization
 and instrumentation costs. `howfar` always remains the lightweight interface.
 Neither crate contains unsafe code or proc-macro dependencies.

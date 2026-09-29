@@ -6,7 +6,7 @@ members = [
     "crates/enough-tokio",
     "crates/enough-ffi",
     "crates/howfar",
-    "crates/howfar-tracker",
+    "crates/howfar-along",
     "tests/test-basic",
     "tests/test-atomic",
     "tests/test-timeout",
@@ -40,4 +40,4 @@ zenbench = "0.1.6"
 enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }
 howfar = { version = "0.1.0", path = "crates/howfar" }
-howfar-tracker = { path = "crates/howfar-tracker", default-features = false }
+howfar-along = { path = "crates/howfar-along", default-features = false }

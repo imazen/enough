@@ -1,7 +1,7 @@
 //! Test-only browser host using the same worker/Rayon binding pattern as zenpipe.
-use howfar_tracker::poll::ControlHandle;
-use howfar_tracker::profile::{Clock, Profiler, SpanKind};
-use howfar_tracker::{Execution, Observer, Outcome, Part, Phase, Report, Stop, Total};
+use howfar_along::poll::ControlHandle;
+use howfar_along::profile::{Clock, Profiler, SpanKind};
+use howfar_along::{Execution, Observer, Outcome, Part, Phase, Report, Stop, Total};
 use rayon::prelude::*;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -78,7 +78,7 @@ pub fn run(items: u32) -> String {
         }
         std::hint::black_box(value);
         progress.advance(1);
-        Ok::<(), howfar_tracker::StopReason>(())
+        Ok::<(), howfar_along::StopReason>(())
     }); // Rayon joins all in-flight work before returning.
     if result.is_ok() {
         middle.finish().unwrap();

@@ -1,6 +1,6 @@
 use almost_enough::StopToken;
-use howfar_tracker::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
-use howfar_tracker::{
+use howfar_along::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
+use howfar_along::{
     IgnoreProgress, Outcome, Phase, Report, Status, Stop, StopReason, Total, Unstoppable, Work,
 };
 use std::{

@@ -13,7 +13,7 @@ fn public_api_surface_docs_are_current() {
             "enough-tokio",
             "enough-ffi",
             "howfar",
-            "howfar-tracker",
+            "howfar-along",
         ])
         .run();
 }

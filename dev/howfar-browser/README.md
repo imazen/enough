@@ -4,7 +4,7 @@ This isolated application tests `howfar` with zenpipe's binding versions:
 `wasm-bindgen 0.2.123` and `wasm-bindgen-rayon 1.3`, using `no-bundler`, a
 worker-owned Rayon pool and shared Wasm memory. It is excluded from ordinary
 workspace/library builds; none of its browser dependencies become dependencies
-of either library. The fixture opts into `howfar-tracker` with std.
+of either library. The fixture opts into `howfar-along` with std.
 
 ```sh
 rustup toolchain install nightly-2026-09-02 --component rust-src
@@ -20,7 +20,7 @@ npm test
 
 Override `HOWFAR_BINDGEN` if the matching CLI is installed outside PATH. The
 nightly/build-std requirement belongs to this threaded Wasm application;
-`howfar` and `howfar-tracker` support stable Rust 1.88, and `enough` still supports Rust 1.85.
+`howfar` and `howfar-along` support stable Rust 1.88, and `enough` still supports Rust 1.85.
 
 The HTTP server supplies COOP/COEP headers. Tests run in Chromium and Playwright
 WebKit and verify:

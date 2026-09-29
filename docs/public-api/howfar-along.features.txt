@@ -1,4 +1,4 @@
-# howfar-tracker public API — additions from non-default features
+# howfar-along public API — additions from non-default features
 # features: profile,std
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a

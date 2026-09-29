@@ -1,5 +1,5 @@
-use howfar_tracker::ext::ReportExt;
-use howfar_tracker::{IgnoreProgress, Phase, Report, Total};
+use howfar_along::ext::ReportExt;
+use howfar_along::{IgnoreProgress, Phase, Report, Total};
 use std::{hint::black_box, num::NonZeroU64, time::Instant};
 
 fn measure(label: &str, mut f: impl FnMut()) {

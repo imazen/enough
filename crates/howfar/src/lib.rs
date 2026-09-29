@@ -17,7 +17,7 @@
 //! ```
 //!
 //! Use `enough::Stop` independently for cancellation. Applications can opt into
-//! `howfar-tracker` for shared counters, weighted trees, callbacks, and profiling.
+//! `howfar-along` for shared counters, weighted trees, callbacks, and profiling.
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
