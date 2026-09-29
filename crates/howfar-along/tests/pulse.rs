@@ -150,3 +150,88 @@ fn unfinished_steps_cannot_mark_a_parent_successful() {
         Status::Finished(Outcome::Abandoned)
     );
 }
+
+#[test]
+fn steps_can_wrap_a_parallel_middle_stage_without_nested_errors() {
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let mut steps = Steps::new(
+        &pulse,
+        &[
+            PhaseSpec::new("before", 35, Total::Exact(1)),
+            PhaseSpec::new("parallel", 30, Total::Unknown),
+            PhaseSpec::new("after", 35, Total::Exact(1)),
+        ],
+    )
+    .unwrap();
+    steps
+        .run(|stage| {
+            stage.advance(1);
+            Ok::<(), StopReason>(())
+        })
+        .unwrap();
+    steps
+        .run_nested_stoppable(|middle| {
+            let children = middle.split(
+                Execution::ForkJoin,
+                &[
+                    PhaseSpec::new("quick", 1, Total::Exact(1)),
+                    PhaseSpec::new("slow", 1, Total::Exact(100)),
+                ],
+            )?;
+            std::thread::scope(|scope| {
+                for (child, count) in children.iter().zip([1, 100]) {
+                    scope.spawn(move || {
+                        child.check().unwrap();
+                        child.advance(count);
+                        child.finish(Outcome::Succeeded).unwrap();
+                    });
+                }
+            });
+            Ok::<(), RunError<StopReason>>(())
+        })
+        .unwrap();
+    steps
+        .run(|stage| {
+            stage.advance(1);
+            Ok::<(), StopReason>(())
+        })
+        .unwrap();
+    steps.finish().unwrap();
+    let snapshot = observer.snapshot();
+    assert_eq!(snapshot.status, Status::Finished(Outcome::Succeeded));
+    assert_eq!(snapshot.children[1].weight, 30);
+    assert_eq!(snapshot.children[1].children[1].completed, 100);
+}
+
+#[test]
+fn a_nested_plan_error_fails_the_active_stage_and_skips_the_tail() {
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let mut steps = Steps::new(
+        &pulse,
+        &[
+            PhaseSpec::new("invalid branch", 1, Total::Unknown),
+            PhaseSpec::new("later", 1, Total::Exact(1)),
+        ],
+    )
+    .unwrap();
+    let result = steps.run_nested_stoppable::<(), StopReason>(|middle| {
+        middle.split(Execution::ForkJoin, &[])?;
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(RunError::Plan(PlanError::EmptyOrZeroWeight))
+    ));
+    let snapshot = observer.snapshot();
+    assert_eq!(snapshot.status, Status::Finished(Outcome::Failed));
+    assert_eq!(
+        snapshot.children[0].status,
+        Status::Finished(Outcome::Failed)
+    );
+    assert_eq!(
+        snapshot.children[1].status,
+        Status::Finished(Outcome::Skipped)
+    );
+}

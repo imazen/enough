@@ -47,8 +47,10 @@ cancellation. `RunError<E>` separates an operation error from a plan error,
 so a library can use a type alias for its public error. A panic leaves work
 abandoned. `NoPulse` is the zero-sized, non-cancelling choice.
 
-For nested or parallel work, use the underlying `Pulse::split` and `finish`
-methods. Child phases can split into `Sequence`, `ForkJoin`, or `WorkPool`
+For nested or parallel work, call `Steps::run_nested_stoppable` and split its
+stage into children with `Pulse::split`. The closure joins and finishes those
+children; `Steps` finishes the containing stage and keeps errors flat. Child
+phases can split into `Sequence`, `ForkJoin`, or `WorkPool`
 groups. The relative weights of siblings are fixed before their work starts;
 a parallel middle phase can therefore keep 30% of its parent's budget
 regardless of worker count. The returned children can be shared across scoped

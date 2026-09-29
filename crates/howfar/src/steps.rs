@@ -33,14 +33,23 @@ impl<E: core::error::Error + 'static> core::error::Error for RunError<E> {
         }
     }
 }
+impl<E> RunError<RunError<E>> {
+    fn flatten(self) -> RunError<E> {
+        match self {
+            Self::Work(error) => error,
+            Self::Plan(error) => RunError::Plan(error),
+        }
+    }
+}
 
 /// Run the leaf stages of a sequential plan without manual outcome bookkeeping.
 ///
 /// Declare all stages up front. Each `run` call receives the next child as
 /// `&dyn Pulse`; it finishes that child on success. On error it finishes the
 /// active child with the selected outcome, skips later children, and finishes
-/// the parent. A panic leaves unfinished phases abandoned. Use primitive
-/// [`Pulse::split`] for branches that themselves plan children or run in parallel.
+/// the parent. A panic leaves unfinished phases abandoned. Use
+/// [`Self::run_nested_stoppable`] with [`Pulse::split`] for a stage that itself
+/// plans and joins parallel children.
 pub struct Steps<'a> {
     parent: &'a dyn Pulse,
     children: Vec<Box<dyn Pulse + 'a>>,
@@ -63,7 +72,7 @@ impl<'a> Steps<'a> {
         &mut self,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(Outcome::Failed, work)
+        self.run_with(|_| Outcome::Failed, work)
     }
 
     /// Run the next leaf stage when its only operation error is a stop request.
@@ -72,12 +81,30 @@ impl<'a> Steps<'a> {
         &mut self,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(Outcome::Cancelled, work)
+        self.run_with(|_| Outcome::Cancelled, work)
+    }
+
+    /// Run a stage that may itself plan and join child work. The stage should
+    /// finish its children, then let `Steps` finish the stage itself. A nested
+    /// operation error cancels this and later stages; a nested plan error
+    /// marks this stage failed. The returned error stays flat.
+    pub fn run_nested_stoppable<T, E>(
+        &mut self,
+        work: impl FnOnce(&dyn Pulse) -> Result<T, RunError<E>>,
+    ) -> Result<T, RunError<E>> {
+        self.run_with(
+            |error| match error {
+                RunError::Work(_) => Outcome::Cancelled,
+                RunError::Plan(_) => Outcome::Failed,
+            },
+            work,
+        )
+        .map_err(RunError::flatten)
     }
 
     fn run_with<T, E>(
         &mut self,
-        failure: Outcome,
+        outcome_for_error: impl FnOnce(&E) -> Outcome,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
         if self.terminal {
@@ -94,6 +121,7 @@ impl<'a> Steps<'a> {
                 Ok(value)
             }
             Err(error) => {
+                let failure = outcome_for_error(&error);
                 child.finish(failure)?;
                 self.next += 1;
                 for child in &self.children[self.next..] {
