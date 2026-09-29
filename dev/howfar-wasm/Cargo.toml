@@ -1,0 +1,12 @@
+[package]
+name = "howfar-wasm-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+howfar = { path = "../../crates/howfar", default-features = false, features = ["alloc"] }

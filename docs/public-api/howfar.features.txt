@@ -1,0 +1,127 @@
+# howfar public API — additions from non-default features
+# features: alloc,profile,std
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub modules                                 1
+#   pub types (struct/enum/trait/alias)        11
+#   inherent methods                           22
+#   struct fields                              41
+#   enum variants                               5
+#   trait roster entries (type × trait)        26
+#   auto-trait-complete types                   7
+#   auto-trait exceptions                       3
+#
+# per-module pub lines:
+#   (root)                            1
+#   profile                          79
+
+## items (80 lines)
+
+pub mod profile
+pub enum profile::SpanKind
+pub profile::SpanKind::Callback
+pub profile::SpanKind::Queued
+pub profile::SpanKind::Wait
+pub profile::SpanKind::Work
+pub profile::SpanKind::Yield
+pub struct profile::Instrumented<T>
+pub fn profile::Instrumented<T>::inner(&self) -> &T
+pub struct profile::Overlap
+pub profile::Overlap::mean_active_tasks: f64
+pub profile::Overlap::peak_active_tasks: usize
+pub profile::Overlap::single_task_tail: core::time::Duration
+pub profile::Overlap::task_time: core::time::Duration
+pub profile::Overlap::wall: core::time::Duration
+pub struct profile::Profiler
+pub fn profile::Profiler::cancellation_requested(&self)
+pub fn profile::Profiler::metadata(&self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
+pub fn profile::Profiler::new(impl profile::Clock + 'static, usize) -> Self
+pub fn profile::Profiler::operation_returned(&self)
+pub fn profile::Profiler::snapshot(&self) -> profile::Trace
+pub fn profile::Profiler::span(&self, usize, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
+pub fn profile::Profiler::try_snapshot(&self) -> core::option::Option<profile::Trace>
+pub struct profile::SiteStats
+pub profile::SiteStats::checks: u64
+pub profile::SiteStats::column: u32
+pub profile::SiteStats::file: &'static str
+pub profile::SiteStats::line: u32
+pub profile::SiteStats::max_gap_before_check: core::time::Duration
+pub profile::SiteStats::reports: u64
+pub profile::SiteStats::units: u64
+pub struct profile::Span
+pub fn profile::Span::child(&self, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
+pub fn profile::Span::finish(self, Outcome)
+pub fn profile::Span::id(&self) -> usize
+pub fn profile::Span::instrument<T>(&self, T) -> profile::Instrumented<T>
+pub struct profile::SpanRecord
+pub profile::SpanRecord::end: core::time::Duration
+pub profile::SpanRecord::id: usize
+pub profile::SpanRecord::kind: profile::SpanKind
+pub profile::SpanRecord::node: usize
+pub profile::SpanRecord::outcome: Outcome
+pub profile::SpanRecord::parent: core::option::Option<usize>
+pub profile::SpanRecord::start: core::time::Duration
+pub profile::SpanRecord::stats: profile::Stats
+pub profile::SpanRecord::task: alloc::string::String
+pub fn profile::SpanRecord::checks_per_second(&self) -> f64
+pub fn profile::SpanRecord::elapsed(&self) -> core::time::Duration
+pub fn profile::SpanRecord::is_poll_storm(&self, u64, f64) -> bool
+pub struct profile::Stats
+pub profile::Stats::check_time: core::time::Duration
+pub profile::Stats::checks: u64
+pub profile::Stats::clock_regressions: u64
+pub profile::Stats::max_check_gap: core::time::Duration
+pub profile::Stats::overflowed: bool
+pub profile::Stats::reports: u64
+pub profile::Stats::sites: alloc::vec::Vec<profile::SiteStats>
+pub profile::Stats::stop_reason: core::option::Option<enough::reason::StopReason>
+pub profile::Stats::stopped_at: core::option::Option<core::time::Duration>
+pub profile::Stats::unattributed_calls: u64
+pub profile::Stats::units: u64
+pub struct profile::StdClock(_)
+pub fn profile::StdClock::new() -> Self
+pub struct profile::Trace
+pub profile::Trace::active_spans: usize
+pub profile::Trace::cancelled_at: core::option::Option<core::time::Duration>
+pub profile::Trace::dropped_spans: u64
+pub profile::Trace::metadata: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub profile::Trace::observed_at: core::option::Option<core::time::Duration>
+pub profile::Trace::progress: core::option::Option<Snapshot>
+pub profile::Trace::returned_at: core::option::Option<core::time::Duration>
+pub profile::Trace::schema_version: u32
+pub profile::Trace::spans: alloc::vec::Vec<profile::SpanRecord>
+pub fn profile::Trace::cancellation_observation_latency(&self) -> core::option::Option<core::time::Duration>
+pub fn profile::Trace::cancellation_return_latency(&self) -> core::option::Option<core::time::Duration>
+pub fn profile::Trace::overlap(&self, &[usize]) -> core::option::Option<profile::Overlap>
+pub fn profile::Trace::with_progress(self, Snapshot) -> Self
+pub fn profile::Trace::write_json(&self, &mut impl core::fmt::Write) -> core::fmt::Result
+pub trait profile::Clock: core::marker::Send + core::marker::Sync
+pub fn profile::Clock::now(&self) -> core::time::Duration
+
+## trait impls (11 types)
+
+alloc::sync::Arc<C>: profile::Clock
+profile::Instrumented<T>: Clone, Report, enough::Stop
+profile::Overlap: Clone, Debug, PartialEq
+profile::Profiler: Clone
+profile::SiteStats: Clone, Debug
+profile::Span: Drop
+profile::SpanKind: Clone, Copy, Debug, Eq, PartialEq
+profile::SpanRecord: Clone, Debug
+profile::Stats: Clone, Debug, Default
+profile::StdClock: Default, profile::Clock
+profile::Trace: Clone, Debug, Display
+
+## auto traits
+
+7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+profile::Instrumented<T>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+profile::Profiler: !RefUnwindSafe !UnwindSafe
+profile::Span: !RefUnwindSafe !UnwindSafe

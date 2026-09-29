@@ -5,6 +5,7 @@ members = [
     "crates/almost-enough",
     "crates/enough-tokio",
     "crates/enough-ffi",
+    "crates/howfar",
     "tests/test-basic",
     "tests/test-atomic",
     "tests/test-timeout",
@@ -19,7 +20,7 @@ members = [
 # `apidoc/` is the CI-free public-API snapshot runner: excluded so plain
 # `cargo test` and every CI job (incl. --all-features) never compile its
 # dependency tree or run rustdoc. Regenerate via `just api-doc`.
-exclude = ["apidoc", "dev/cancel-latency"]
+exclude = ["apidoc", "dev/cancel-latency", "dev/howfar-wasm", "dev/howfar-browser"]
 
 [workspace.package]
 version = "0.4.4"
@@ -37,3 +38,4 @@ zenbench = "0.1.6"
 # enough-tokio and enough-ffi have independent versioning
 enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }
+howfar = { path = "crates/howfar", default-features = false }

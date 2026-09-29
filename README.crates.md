@@ -177,6 +177,7 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
+| [`howfar`](crates/howfar/README.md) | Progress, weighted phase plans, explicit polling, and optional task profiling (`no_std + alloc`, Rust 1.88) |
 
 Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blob/main/ZERO-DEP.md).
 
