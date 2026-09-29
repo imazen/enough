@@ -62,7 +62,10 @@ for (const cancel of [false, true]) {
       const samples = [];
       const timer = setInterval(() => {
         ticks++;
-        const root = JSON.parse(api.observe()).root;
+        api.trace(); // Exercise the profiler's nonblocking UI path too.
+        const sample = api.observe();
+        if (sample === undefined) return; // Retry a busy metadata read on the next UI turn.
+        const root = JSON.parse(sample).root;
         samples.push(root);
         document.querySelector('#progress').textContent = String(root.fraction);
         if (root.children.length && root.children[1].status === 'Running') {
@@ -83,10 +86,12 @@ for (const cancel of [false, true]) {
         const frozen = api.observe();
         await new Promise(resolve => setTimeout(resolve, 5));
         if (api.observe() !== frozen) throw new Error('terminal snapshot changed');
-        return { snapshot, ticks, sawRunning, requested, sampleCount: samples.length };
+        return { snapshot, trace: JSON.parse(api.trace()), ticks, sawRunning, requested, sampleCount: samples.length };
       } finally { clearInterval(timer); worker.terminate(); }
     }, cancel);
     expect(result.ticks).toBeGreaterThan(0);
+    expect(result.trace.spans).toHaveLength(1);
+    expect(result.trace.spans[0].kind).toBe('Wait');
     expect(result.snapshot.root.status).toBe('Finished');
     expect(result.snapshot.root.children[0].outcome).toBe('Succeeded');
     expect(result.snapshot.root.children[1].execution).toBe('WorkPool');

@@ -1,6 +1,6 @@
-use howfar::{Execution, Part, Phase, Report, Total};
+use howfar_tracker::{Execution, Part, Phase, Report, Total};
 
-fn main() -> Result<(), howfar::PlanError> {
+fn main() -> Result<(), howfar_tracker::PlanError> {
     let mut job = Phase::new("encode", Total::Unknown);
     let observer = job.observer();
     let [mut before, mut middle, mut after] = job.split(

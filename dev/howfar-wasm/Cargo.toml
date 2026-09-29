@@ -9,4 +9,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-howfar = { path = "../../crates/howfar", default-features = false, features = ["alloc"] }
+howfar-tracker = { path = "../../crates/howfar-tracker" }

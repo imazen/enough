@@ -1,0 +1,42 @@
+[package]
+name = "howfar-tracker"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+description = "Cooperative progress, cancellation, and opt-in execution profiling"
+keywords = ["progress", "cancellation", "no_std", "profiling"]
+categories = ["concurrency", "no-std"]
+
+[features]
+default = ["std"]
+std = ["enough/std"]
+profile = ["std"]
+
+[dependencies]
+enough = { workspace = true, features = ["alloc"] }
+howfar.workspace = true
+critical-section = "1.2"
+
+[dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
+almost-enough.workspace = true
+rayon = "1.10"
+tokio = { version = "1.53.1", features = ["rt", "sync"] }
+
+[[example]]
+name = "phases"
+required-features = ["std"]
+
+[[example]]
+name = "profile"
+required-features = ["std", "profile"]
+
+[[bench]]
+name = "overhead"
+harness = false
+required-features = ["std"]
+
+[package.metadata.docs.rs]
+all-features = true

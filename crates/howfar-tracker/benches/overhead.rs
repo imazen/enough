@@ -1,5 +1,5 @@
-use howfar::ext::ReportExt;
-use howfar::{NoProgress, Phase, Report, Total};
+use howfar_tracker::ext::ReportExt;
+use howfar_tracker::{IgnoreProgress, Phase, Report, Total};
 use std::{hint::black_box, num::NonZeroU64, time::Instant};
 
 fn measure(label: &str, mut f: impl FnMut()) {
@@ -20,7 +20,7 @@ fn main() {
     measure("loop/black_box baseline", || {
         black_box(1_u64);
     });
-    measure("NoProgress", || NoProgress.advance(black_box(1)));
+    measure("IgnoreProgress", || IgnoreProgress.advance(black_box(1)));
     let phase = Phase::new("bench", Total::Unknown);
     let progress = phase.progress();
     measure("Progress (uncontended, saturating)", || {

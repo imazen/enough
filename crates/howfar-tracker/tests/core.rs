@@ -1,5 +1,5 @@
-use howfar::ext::{ReportExt, WorkExt};
-use howfar::{NoProgress, Report, Stop, StopReason, Unstoppable, Work};
+use howfar_tracker::ext::{ReportExt, WorkExt};
+use howfar_tracker::{IgnoreProgress, Report, Stop, StopReason, Unstoppable, Work};
 use std::{num::NonZeroU64, sync::Mutex};
 
 #[derive(Default)]
@@ -27,7 +27,7 @@ impl Stop for Log {
 #[test]
 fn completed_work_survives_cancellation_and_preserves_the_call_site() {
     let log = Log::default();
-    let work = Work::new(&log, Some(&log));
+    let work = Work::new(&log, &log);
     let line = line!() + 1;
     assert_eq!(work.step(17), Err(StopReason::Cancelled));
     assert_eq!(
@@ -38,12 +38,12 @@ fn completed_work_survives_cancellation_and_preserves_the_call_site() {
 
 #[test]
 fn absent_sinks_and_policies_are_permanent_no_ops() {
-    let work = Work::new(Unstoppable, NoProgress);
+    let work = Work::new(Unstoppable, IgnoreProgress);
     assert!(!work.may_stop());
     assert!(!work.may_report());
     assert_eq!(std::mem::size_of_val(&work), 0);
     work.step(u64::MAX).unwrap();
-    let report: Option<&dyn Report> = None;
+    let report = IgnoreProgress;
     assert!(!report.may_report());
     report.advance(1);
 }

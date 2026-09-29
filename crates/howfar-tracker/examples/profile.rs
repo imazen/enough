@@ -1,5 +1,5 @@
-use howfar::profile::{Profiler, SpanKind, StdClock};
-use howfar::{Outcome, Phase, Report, Stop, Total, Unstoppable, Work};
+use howfar_tracker::profile::{Profiler, SpanKind, StdClock};
+use howfar_tracker::{Outcome, Phase, Report, Stop, Total, Unstoppable, Work};
 
 fn main() {
     let profiler = Profiler::new(StdClock::new(), 64);

@@ -1,8 +1,8 @@
 #![cfg(feature = "profile")]
-use howfar::ext::WorkExt;
-use howfar::poll::ControlHandle;
-use howfar::profile::{Clock, Profiler, SpanKind};
-use howfar::{NoProgress, Outcome, Report, Stop, StopReason, Unstoppable, Work};
+use howfar_tracker::ext::WorkExt;
+use howfar_tracker::poll::ControlHandle;
+use howfar_tracker::profile::{Clock, Profiler, SpanKind};
+use howfar_tracker::{IgnoreProgress, Outcome, Report, Stop, StopReason, Unstoppable, Work};
 use std::{
     sync::{
         Arc,
@@ -81,7 +81,7 @@ fn check_storms_counts_units_and_original_sites_stay_separate() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 1);
     let span = profiler.span(0, "candidate search", SpanKind::Work);
-    let work = span.instrument(Work::new(Unstoppable, NoProgress));
+    let work = span.instrument(Work::new(Unstoppable, IgnoreProgress));
     let mut checks_line = 0;
     for _ in 0..10_000 {
         checks_line = line!() + 1;
@@ -234,7 +234,7 @@ fn bounded_retention_and_abandonment_are_visible_and_json_escapes_labels() {
     profiler.metadata("key\"\n", "value\t\\\u{0001}😀");
     profiler.metadata("key\"\n", "replacement\t\\\u{0001}😀");
     let first = profiler.span(0, "name\"\n", SpanKind::Work);
-    let first_work = first.instrument(NoProgress);
+    let first_work = first.instrument(IgnoreProgress);
     first_work.advance(u64::MAX);
     first_work.advance(1);
     let second = profiler.span(0, "dropped", SpanKind::Work);
@@ -312,8 +312,8 @@ fn timeout_reason_and_attached_plan_survive_export() {
     let span = profiler.span(0, "deadline", SpanKind::Work);
     assert_eq!(span.instrument(Timeout).check(), Err(StopReason::TimedOut));
     span.finish(Outcome::Cancelled);
-    let mut phase = howfar::Phase::new("job", howfar::Total::Estimated(3));
-    phase.set_total(howfar::Total::Exact(4)).unwrap();
+    let mut phase = howfar_tracker::Phase::new("job", howfar_tracker::Total::Estimated(3));
+    phase.set_total(howfar_tracker::Total::Exact(4)).unwrap();
     let trace = profiler
         .snapshot()
         .with_progress(phase.observer().snapshot());
@@ -336,7 +336,7 @@ fn reporting_does_not_read_the_clock_and_span_finish_is_measured_once() {
     let reads = Arc::new(AtomicU64::new(0));
     let profiler = Profiler::new(CountingClock(reads.clone()), 1);
     let span = profiler.span(0, "clock policy", SpanKind::Work);
-    let work = span.instrument(Work::new(Unstoppable, NoProgress));
+    let work = span.instrument(Work::new(Unstoppable, IgnoreProgress));
     let before = reads.load(Ordering::Relaxed);
     for _ in 0..100 {
         work.advance(1);

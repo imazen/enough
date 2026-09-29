@@ -1,7 +1,7 @@
 //! Executable raw-Wasm proof of synchronous polling through a JSPI suspension.
 //! Deliberately outside the workspace: normal library compilation builds no host glue.
-use howfar::poll::{Control, ControlHandle, PollingStop, SharedPoller};
-use howfar::{Outcome, Phase, Report, Stop, Total, Unstoppable, Work};
+use howfar_tracker::poll::{Control, ControlHandle, PollingStop, SharedPoller};
+use howfar_tracker::{Outcome, Phase, Report, Stop, Total, Unstoppable, Work};
 
 #[link(wasm_import_module = "host")]
 unsafe extern "C" {
@@ -90,7 +90,7 @@ pub extern "C" fn chunks_cancelled() -> u32 {
     CHUNKED.with_borrow(|slot| {
         u32::from(
             slot.as_ref().unwrap().phase.observer().snapshot().status
-                == howfar::Status::Finished(Outcome::Cancelled),
+                == howfar_tracker::Status::Finished(Outcome::Cancelled),
         )
     })
 }

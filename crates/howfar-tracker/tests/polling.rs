@@ -1,8 +1,7 @@
-#![cfg(feature = "alloc")]
 use almost_enough::StopToken;
-use howfar::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
-use howfar::{
-    NoProgress, Outcome, Phase, Report, Status, Stop, StopReason, Total, Unstoppable, Work,
+use howfar_tracker::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
+use howfar_tracker::{
+    IgnoreProgress, Outcome, Phase, Report, Status, Stop, StopReason, Total, Unstoppable, Work,
 };
 use std::{
     cell::RefCell,
@@ -33,6 +32,7 @@ fn local_callbacks_are_thread_affine_mutable_lazy_and_memoized() {
     });
     let saved_first = saved.clone();
     poller.subscribe(move |event| {
+        assert!(event.try_snapshot().is_some());
         *saved_first.borrow_mut() = Some(event.snapshot_owned());
         report.advance(1); // Changes after the first snapshot must not alter this dispatch.
         Control::Yield
@@ -184,7 +184,7 @@ fn polling_stop_survives_all_existing_stop_signature_shapes() {
     fn builder_with_stop(stop: StopToken) {
         stop.check().unwrap();
     }
-    builder_with_stop(StopToken::new(Work::new(hook, NoProgress)));
+    builder_with_stop(StopToken::new(Work::new(hook, IgnoreProgress)));
     assert_eq!(callbacks.load(Ordering::Relaxed), 5);
     poller.control().cancel();
     assert_eq!(owned.check(), Err(StopReason::Cancelled));

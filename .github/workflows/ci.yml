@@ -49,7 +49,7 @@ jobs:
 
       - name: Test existing crates at their MSRV
         if: matrix.rust == '1.85'
-        run: cargo test --workspace --exclude howfar
+        run: cargo test --workspace --exclude howfar --exclude howfar-tracker
 
       - name: Test (no default features)
         run: |
@@ -138,11 +138,12 @@ jobs:
       - name: Build WASM (almost-enough)
         run: cargo build -p almost-enough --target wasm32-unknown-unknown --no-default-features --features alloc
 
-      - name: Build howfar without std (core, alloc, WASM)
+      - name: Build both progress crates without std (alloc, WASM)
         run: |
-          cargo build -p howfar --target thumbv7em-none-eabihf --no-default-features
-          cargo build -p howfar --target thumbv7em-none-eabihf --no-default-features --features alloc
-          cargo build -p howfar --target wasm32-unknown-unknown --no-default-features --features alloc
+          cargo build -p howfar --target thumbv7em-none-eabihf
+          cargo build -p howfar --target wasm32-unknown-unknown
+          cargo build -p howfar-tracker --target thumbv7em-none-eabihf --no-default-features
+          cargo build -p howfar-tracker --target wasm32-unknown-unknown --no-default-features
 
   # ==========================================================================
   # Feature powerset — verify all feature combinations compile
@@ -162,7 +163,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check feature powerset
-        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p howfar
+        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p howfar -p howfar-tracker
 
   # ==========================================================================
   # Semver — catch accidental breaking changes
@@ -208,10 +209,10 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
-      - name: Run Miri (howfar immutable publication and tree snapshots)
+      - name: Run Miri (howfar-tracker metadata replacement and snapshots)
         run: |
-          cargo +nightly miri test -p howfar --no-default-features --features alloc --lib
-          cargo +nightly miri test -p howfar --no-default-features --features alloc --test phases snapshots_during_metadata_publication
+          cargo +nightly miri test -p howfar-tracker --lib
+          cargo +nightly miri test -p howfar-tracker --test phases snapshots_during_metadata_publication
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
@@ -225,9 +226,11 @@ jobs:
           toolchain: '1.88'
       - uses: Swatinem/rust-cache@v2
       - run: |
-          cargo test -p howfar --all-features
-          cargo test -p howfar --no-default-features
-          cargo test -p howfar --no-default-features --features alloc
+          cargo test -p howfar
+          cargo test -p howfar-tracker --all-features
+          cargo test -p howfar-tracker --no-default-features
+      - name: Verify interface boundary and report cold builds
+        run: python3 dev/bench-howfar-build.py --runs 3
 
   howfar-wasm:
     name: howfar WASM host boundaries

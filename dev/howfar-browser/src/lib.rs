@@ -1,16 +1,32 @@
 //! Test-only browser host using the same worker/Rayon binding pattern as zenpipe.
-use howfar::poll::ControlHandle;
-use howfar::{Execution, Observer, Outcome, Part, Phase, Report, Stop, Total};
+use howfar_tracker::poll::ControlHandle;
+use howfar_tracker::profile::{Clock, Profiler, SpanKind};
+use howfar_tracker::{Execution, Observer, Outcome, Part, Phase, Report, Stop, Total};
 use rayon::prelude::*;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use wasm_bindgen::prelude::*;
 
 pub use wasm_bindgen_rayon::init_thread_pool;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = performance, js_name = now)]
+    fn performance_now() -> f64;
+}
+// Only the owner Worker records spans here. UI snapshots never call its clock.
+struct BrowserClock;
+impl Clock for BrowserClock {
+    fn now(&self) -> Duration {
+        Duration::from_secs_f64(performance_now() / 1000.0)
+    }
+}
 
 struct Job {
     phase: Mutex<Option<Phase>>,
     observer: Observer,
     control: ControlHandle,
+    profiler: Profiler,
 }
 static JOB: OnceLock<Job> = OnceLock::new();
 
@@ -22,7 +38,8 @@ pub fn prepare() {
         JOB.set(Job {
             phase: Mutex::new(Some(phase)),
             observer,
-            control: ControlHandle::new()
+            control: ControlHandle::new(),
+            profiler: Profiler::new(BrowserClock, 4)
         })
         .is_ok()
     );
@@ -51,6 +68,7 @@ pub fn run(items: u32) -> String {
     before.finish().unwrap();
     middle.start().unwrap();
     let progress = middle.progress();
+    let join = job.profiler.span(middle.id(), "Rayon join", SpanKind::Wait);
     let result = (0..items).into_par_iter().try_for_each(|item| {
         job.control.check()?;
         // Content-dependent work, counted once per accepted logical item.
@@ -60,7 +78,7 @@ pub fn run(items: u32) -> String {
         }
         std::hint::black_box(value);
         progress.advance(1);
-        Ok::<(), howfar::StopReason>(())
+        Ok::<(), howfar_tracker::StopReason>(())
     }); // Rayon joins all in-flight work before returning.
     if result.is_ok() {
         middle.finish().unwrap();
@@ -72,24 +90,42 @@ pub fn run(items: u32) -> String {
         after.finish_with(Outcome::Cancelled).unwrap();
         root.finish_with(Outcome::Cancelled).unwrap();
     }
-    observe()
+    join.finish(if result.is_ok() {
+        Outcome::Succeeded
+    } else {
+        Outcome::Cancelled
+    });
+    job.profiler.operation_returned();
+    observe().expect("all writers joined")
 }
 
 /// A real UI-thread read of the shared Rust tree while Rayon workers report.
 #[wasm_bindgen]
-pub fn observe() -> String {
+pub fn observe() -> Option<String> {
     let mut json = String::new();
     JOB.get()
         .unwrap()
         .observer
-        .snapshot()
+        .try_snapshot()?
         .write_json(&mut json)
         .unwrap();
-    json
+    Some(json)
 }
 
 /// A real UI-thread write reaching blocking worker code without a message-loop turn.
 #[wasm_bindgen]
 pub fn cancel() {
     JOB.get().unwrap().control.cancel();
+}
+
+/// Optional profiling also uses only a nonblocking read on the UI thread.
+#[wasm_bindgen]
+pub fn trace() -> Option<String> {
+    let mut json = String::new();
+    JOB.get()?
+        .profiler
+        .try_snapshot()?
+        .write_json(&mut json)
+        .unwrap();
+    Some(json)
 }

@@ -1,48 +1,49 @@
 # howfar implementation and validation
 
-The crate is in `crates/howfar`; start with its [README](../crates/howfar/README.md).
-This implements the revised design with a deliberately small core: `Report`,
-`NoProgress`, and `Work<Stop, Report>`. Extensions add `step` and worker-local
-batching. Trees, polling, and profiling are separate layers. Existing `enough`
-and `almost-enough` APIs are unchanged. Downstream codecs were reviewed but have
-not been ported in this change; reporting still requires an explicit seam at
-their completed-work sites.
+## Crate boundary
 
-## Decisions after the synchronization feedback
+* [`howfar`](../crates/howfar/README.md) is the library-author interface: `Report`,
+  `IgnoreProgress`, and pointer forwarding. It has no dependencies, feature flags,
+  timers, or runtime. It always uses no_std + alloc. Its API is the same in every build.
+* [`howfar-tracker`](../crates/howfar-tracker/README.md) is the opt-in consumer/test
+  toolkit: `Work`, batching, weighted trees, snapshots, polling, and profiling.
+  Library tests can use it as a dev-dependency without imposing it on users.
+* Both forbid unsafe code at crate level. No macro generates the core interface
+  or its forwarding implementations; no proc macros are required.
 
-There are **no new runtime dependencies**. Even with every feature enabled,
-`cargo tree -p howfar --edges normal --all-features` contains only `howfar → enough`.
-Rayon, Tokio and almost-enough are development dependencies for host/compatibility
-tests. Browser binding and Playwright dependencies live in an excluded dev fixture.
+Both new crates support Rust 1.88; enough/almost-enough remain on Rust 1.85.
+Existing cancellation APIs are unchanged. No downstream production codec is
+ported here: it must report at its actual completed-work sites.
 
-Counters, cancellation, yield flags, and dispatch claims use `core::sync::atomic`.
-Phase metadata uses immutable publication: a phase's unique owner publishes a
-new immutable version, and readers acquire-load it. Old versions stay allocated
-until the node is dropped. Neither readers nor reporters wait for a preempted
-writer. The small raw-pointer primitive is isolated in `src/sync.rs`, with safety
-comments, drop-count tests, concurrent readers, and strict-provenance Miri checks.
-Published metadata is never modified or reclaimed while a reader can reference it.
+## Safe synchronization
 
-This avoids both OS blocking and a spin-lock fallback in `no_std + alloc` trees.
-It trades bounded-by-job retention for simple reads: plan/total/outcome revisions
-retain previous metadata, including revision-history copies. Do not use metadata
-revisions as a per-item event stream. A new operation/attempt gets a new tree;
-drop old observers when the application's history retention ends.
+The previous custom raw-pointer publication primitive has been removed. Metadata
+now lives in immutable `Arc` values, with a short platform lock protecting only
+handle cloning/replacement. Allocation, tree walks, old-version destruction,
+application callbacks, and clock hooks happen outside that lock. Replaced metadata
+is reclaimed when its last reader drops; retained total revision history remains
+explicit in the current version.
 
-Shared subscribers are configured before dispatch, so their registry needs no
-lock. The dispatch claim is a single nonblocking CAS, not a spin loop; another
-poll returns busy and still observes cancellation. No internal tree/registry lock
-survives into application callbacks or a suspension-enabled host import.
+Reporting and cancellation remain atomic. Shared callback dispatch uses a single
+nonblocking claim, and busy/reentrant calls return immediately. Normal std tracking
+uses standard mutexes for metadata. `Observer::try_snapshot` and
+`PollEvent::try_snapshot` let UI callers skip a busy observation and retry next turn;
+`snapshot` is the blocking native/worker convenience. No spin fallback is supplied. Native no_std-mode tests exercise the critical-section
+backend with its std provider; Miri exercises the standard-mutex backend because
+it does not resolve the upstream critical-section provider's foreign symbols.
 
-The optional profiler uses `std::sync::Mutex`; it does not silently substitute
-spinning on a platform that cannot block. The built-in collector therefore
-requires `std`. `Profiler::try_snapshot()` is the nonblocking UI read path.
-Instrumentation and profiler mutation should run on native threads or browser
-workers. No-std applications can wrap `Stop`/`Report` with their own instrumentation.
+No-std + alloc retains the same tree/polling API via the small `critical-section`
+dependency. Applications provide the HAL/RTOS synchronization implementation and
+must ensure it excludes all participating threads/cores. Entry latency is a
+property of that provider; its critical section encloses only a handle operation.
+See [the upstream provider contract](https://docs.rs/critical-section/1.2.0/critical_section/).
+The tracker depends on howfar, enough, and critical-section. Rayon/Tokio and browser
+bindings are test dependencies; the interface crate depends on none of them.
 
-This follows the scheduling concern in [Spinlocks Considered Harmful](https://matklad.github.io/2020/01/02/spinlocks-considered-harmful.html):
-a short critical section can still be preempted. Making a spin lock a little
-shorter does not remove priority inversion or interrupt deadlock.
+This follows the scheduling concern in
+[Spinlocks Considered Harmful](https://matklad.github.io/2020/01/02/spinlocks-considered-harmful.html):
+a preempted owner must not make UI readers spin. Optional profiling uses standard
+mutexes and supports a nonblocking UI snapshot as well.
 
 ## The existing Wasm/Rayon deployment
 
@@ -62,9 +63,9 @@ Reviewed local files:
 Keep that worker-owned pattern. Share `Progress` among Rayon jobs, and post
 snapshots/notifications to the UI through the host's bounded/coalesced transport.
 Use separate profiling spans for logical tasks/chunks, not `for_each_init`
-instances treated as OS worker IDs. Core progress observation requires no mutex,
-including if a UI and workers share a Wasm memory through correctly initialized
-bindings. The [wasm-bindgen-rayon documentation](https://github.com/RReverser/wasm-bindgen-rayon)
+instances treated as OS worker IDs. UI progress observation uses `Observer::try_snapshot()` and retries a busy
+metadata mutex on a later turn, including when UI and workers share Wasm memory
+through correctly initialized bindings. The [wasm-bindgen-rayon documentation](https://github.com/RReverser/wasm-bindgen-rayon)
 describes the host requirements: shared memory/cross-origin isolation, worker-pool
 initialization, and rebuilding the standard library with Wasm atomics enabled.
 The crate does not configure that application build on the consumer's behalf.
@@ -127,6 +128,13 @@ The standalone [Wasm probe](../dev/howfar-wasm/README.md) executes actual howfar
 callbacks in Wasm under Node 26.7.0. It validates ordinary timer behavior,
 JSPI suspension/resumption/cancellation, and worker-posted progress.
 
+The Wasm target supports all of `core`/`alloc` and a subset of `std`, as described
+in the [Rust target documentation](https://doc.rust-lang.org/rustc/platform-support/wasm32-unknown-unknown.html).
+This tracker uses the supported collections, atomics, and mutex operations. It
+does not spawn Rust OS threads or require filesystem/network APIs. Browser
+profiling supplies a JavaScript `performance.now()` clock instead of `StdClock`;
+the fixture records on one owner Worker and reads traces nonblockingly on the UI.
+
 The [browser fixture](../dev/howfar-browser/README.md) additionally runs in
 Chromium and Playwright WebKit, using zenpipe's wasm-bindgen 0.2.123 and
 wasm-bindgen-rayon 1.3 versions. A worker owns the Rayon pool; a second binding
@@ -141,50 +149,51 @@ wasm-bindgen callback trampolines remain outside this fixture's scope.
 
 | Scenario | Automated evidence |
 | --- | --- |
-| No-op generic paths and existing Stop forwarding | `tests/core.rs`, `tests/polling.rs` |
-| Strided completed work, empty input, partial final batch, overflow | `tests/core.rs`, `tests/phases.rs` |
-| Serial → middle 30% parallel → join → serial, nested/repeated joins | `tests/phases.rs` |
-| Manual threads and asymmetric Rayon work sharing one counter | `tests/phases.rs` |
-| Codec-style geometry, strided preparation, two parallel waves, serial filter, cancellation and joined output | `tests/hosts.rs` |
-| CLI terminal output and Tokio client disconnect cancelling/joining blocking CPU work | `tests/hosts.rs` |
-| Unknown/estimated/exact/zero totals, revisions, overrun, skip/fail/cancel | `tests/phases.rs` |
-| Frozen terminal records, abandoned parents, stale handles and new attempts | `tests/phases.rs` |
-| Metadata publication concurrent with observations | `tests/phases.rs`, strict-provenance Miri |
-| Thread-affine FnMut, arbitrary callback work, memoized/deferred snapshots | `tests/polling.rs` |
-| Cancellation during busy dispatch, recursion, panic recovery, posted delivery | `tests/polling.rs` |
-| StopToken/Option/reference/Arc/builder compatibility and same-check cancellation | `tests/polling.rs` |
-| Per-task entry/exit gaps, storms, original call sites, callback cost | `tests/profiling.rs` |
-| Straggler overlap, nested spans, queue/join/yield/callback classification | `tests/profiling.rs` |
-| Cancellation request → observation → join/cleanup return | `tests/profiling.rs` |
-| Bounded retention, abandoned spans, counter/clock diagnostics, JSON escaping | `tests/profiling.rs` |
+| Featureless interface, ignored/borrowed/owned reporting, original call sites | `crates/howfar/tests/interface.rs` |
+| No-op generic paths and existing Stop forwarding | `crates/howfar-tracker/tests/core.rs`, `crates/howfar-tracker/tests/polling.rs` |
+| Strided completed work, empty input, partial final batch, overflow | `crates/howfar-tracker/tests/core.rs`, `crates/howfar-tracker/tests/phases.rs` |
+| Serial → middle 30% parallel → join → serial, nested/repeated joins | `crates/howfar-tracker/tests/phases.rs` |
+| Manual threads and asymmetric Rayon work sharing one counter | `crates/howfar-tracker/tests/phases.rs` |
+| Codec-style geometry, strided preparation, two parallel waves, serial filter, cancellation and joined output | `crates/howfar-tracker/tests/hosts.rs` |
+| CLI terminal output and Tokio client disconnect cancelling/joining blocking CPU work | `crates/howfar-tracker/tests/hosts.rs` |
+| Unknown/estimated/exact/zero totals, revisions, overrun, skip/fail/cancel | `crates/howfar-tracker/tests/phases.rs` |
+| Frozen terminal records, abandoned parents, stale handles and new attempts | `crates/howfar-tracker/tests/phases.rs` |
+| Metadata replacement concurrent with observations | `crates/howfar-tracker/tests/phases.rs`, strict-provenance Miri |
+| Busy child metadata skips a UI snapshot without blocking reports or cancellation | `crates/howfar-tracker/src/tree.rs` |
+| Thread-affine FnMut, arbitrary callback work, memoized/deferred snapshots | `crates/howfar-tracker/tests/polling.rs` |
+| Cancellation during busy dispatch, recursion, panic recovery, posted delivery | `crates/howfar-tracker/tests/polling.rs` |
+| StopToken/Option/reference/Arc/builder compatibility and same-check cancellation | `crates/howfar-tracker/tests/polling.rs` |
+| Per-task entry/exit gaps, storms, original call sites, callback cost | `crates/howfar-tracker/tests/profiling.rs` |
+| Straggler overlap, nested spans, queue/join/yield/callback classification | `crates/howfar-tracker/tests/profiling.rs` |
+| Cancellation request → observation → join/cleanup return | `crates/howfar-tracker/tests/profiling.rs` |
+| Bounded retention, abandoned spans, counter/clock diagnostics, JSON escaping | `crates/howfar-tracker/tests/profiling.rs` |
 | Actual Wasm timer boundary, JSPI yield and cancel, worker posts | `dev/howfar-wasm/check.mjs` |
 | Real browser UI observations/cancellation during wasm-bindgen-rayon work; native JSPI/chunk fallback | `dev/howfar-browser/browser.spec.mjs` (Chromium + WebKit) |
-| Rust 1.88, core-only, no_std+alloc, Cortex-M and wasm32 | CI feature/MSRV/target jobs |
+| Rust 1.88, fixed no_std+alloc interface, tracker backends, Cortex-M and wasm32 | CI feature/MSRV/target jobs |
 
 Test scopes are explicit; no test suite proves every possible consumer behavior.
 There is no built-in ETA/model fitter or executor. Exported observations support
 those consumers without claiming durations are CPU time or fractions are runtime.
 
-## Local performance observations
+## Cold compilation and reporting cost
 
-Measured with rustc 1.98.1 on the local Linux host, using separate empty Cargo
-target directories, offline, building the library and its only dependency:
+Fresh-target default library builds on the local Linux host (rustc 1.98.1), five
+runs each with warm toolchain/filesystem caches:
 
-| Features | Clean debug build | Unchanged build |
-| --- | ---: | ---: |
-| Core only | 0.125 s | 0.030 s |
-| alloc | 0.295 s | 0.035 s |
-| std | 0.335 s | 0.030 s |
-| All, including profile | 0.422 s | 0.031 s |
+| Crate | Median | Samples (seconds) |
+| --- | ---: | --- |
+| enough | 0.099 s | 0.098, 0.095, 0.102, 0.099, 0.105 |
+| howfar interface | 0.088 s | 0.087, 0.087, 0.088, 0.090, 0.091 |
 
-These include process startup and are observations, not cross-machine promises.
-Excluded dev probes, test dependencies, rustdoc, and downloading toolchains are
-not part of normal consumer compilation.
+The former combined howfar crate took 0.287 s by the same measurement method
+(three-run median). The interface now matches enough's compilation scale without
+compiling the consumer toolkit. These include process startup; they are host
+observations, not timing guarantees on arbitrary CI runners.
 
-`cargo bench -p howfar --bench overhead` is a small smoke benchmark. One local
-run measured 0.24 ns/iteration for both the baseline and `NoProgress`, 2.39 ns
-for an uncontended saturating `Progress::advance`, 0.53 ns per buffered unit with
-batches of 64, and 19.27 ns for `Instant::now`. These are a single host/run, not
-contention results or hard latency guarantees. The counter uses saturating CAS,
-so shared-counter contention can cost more; per-worker batches reduce that cost.
-Clock reads remain a consumer choice, separate from cancellation and accounting.
+Reproduce with `python3 dev/bench-howfar-build.py`. The script alternates crate
+order and uses a new Cargo target directory for every sample. Normal consumer
+dependency graphs can be inspected with `cargo tree -p howfar --edges normal`.
+
+`cargo bench -p howfar-tracker --bench overhead` measures the opt-in adapter path,
+including atomic reporting, worker-local batching, and clock reads. There is no
+hidden debouncing or clock read in `Report::advance`; those remain consumer policy.

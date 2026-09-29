@@ -1,6 +1,6 @@
 use crate::{
     Report,
-    sync::{Counter, Published},
+    sync::{Counter, MetadataCell},
 };
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -145,7 +145,7 @@ struct Node {
     // 0=pending, 1=running, 2=terminal. The outcome lives in the frozen snapshot.
     state: AtomicU8,
     completed: Counter,
-    meta: Published<Metadata>,
+    meta: MetadataCell<Metadata>,
 }
 impl Node {
     fn new(id: usize, parent: Option<usize>, part: Part, next_id: Arc<AtomicUsize>) -> Self {
@@ -160,7 +160,7 @@ impl Node {
             branch: AtomicBool::new(false),
             state: AtomicU8::new(0),
             completed: Counter::new(),
-            meta: Published::new(Metadata {
+            meta: MetadataCell::new(Metadata {
                 units: part.units,
                 total: part.total,
                 revisions: Vec::new(),
@@ -171,9 +171,17 @@ impl Node {
         }
     }
     fn snapshot(&self) -> Snapshot {
-        let meta = self.meta.get();
+        self.snapshot_with(false)
+            .expect("blocking metadata read succeeds")
+    }
+    fn snapshot_with(&self, nonblocking: bool) -> Option<Snapshot> {
+        let meta = if nonblocking {
+            self.meta.try_get()?
+        } else {
+            self.meta.get()
+        };
         if let Some(frozen) = &meta.frozen {
-            return frozen.clone();
+            return Some(frozen.clone());
         }
         let mut result = Snapshot {
             id: self.id,
@@ -195,13 +203,16 @@ impl Node {
             children: Vec::new(),
         };
         let children = meta.children.clone();
-        result.children = children.iter().map(|child| child.snapshot()).collect();
+        result.children = children
+            .iter()
+            .map(|child| child.snapshot_with(nonblocking))
+            .collect::<Option<Vec<_>>>()?;
         if result.status == Status::Pending
             && result.children.iter().any(|c| c.status != Status::Pending)
         {
             result.status = Status::Running;
         }
-        result
+        Some(result)
     }
 }
 
@@ -253,7 +264,7 @@ impl Phase {
     pub fn set_units(&mut self, units: impl Into<String>) -> Result<(), PlanError> {
         self.ensure_unused()?;
         let units = units.into();
-        let mut meta = self.node.meta.get().clone();
+        let mut meta = (*self.node.meta.get()).clone();
         meta.units = units;
         self.node.meta.publish(meta);
         Ok(())
@@ -262,7 +273,7 @@ impl Phase {
     pub fn set_execution(&mut self, execution: Execution) -> Result<(), PlanError> {
         self.ensure_unused()?;
         validate_execution(execution)?;
-        let mut meta = self.node.meta.get().clone();
+        let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
         self.node.meta.publish(meta);
         Ok(())
@@ -274,7 +285,7 @@ impl Phase {
         if self.node.branch.load(Ordering::Relaxed) {
             return Err(PlanError::AlreadyInUse);
         }
-        let mut meta = self.node.meta.get().clone();
+        let mut meta = (*self.node.meta.get()).clone();
         if meta.total != total {
             meta.total = total;
             meta.revisions.push(total);
@@ -285,14 +296,14 @@ impl Phase {
     /// Replace an unused leaf with a fixed weighted group, preserving array destructuring.
     ///
     /// ```
-    /// use howfar::{Execution, Part, Phase, Total};
+    /// use howfar_tracker::{Execution, Part, Phase, Total};
     /// let mut job = Phase::new("encode", Total::Unknown);
     /// let [before, middle, after] = job.split(Execution::Sequence, [
     ///     Part::new("prepare", 35, Total::Exact(1)),
     ///     Part::new("parallel", 30, Total::Unknown),
     ///     Part::new("write", 35, Total::Exact(1)),
     /// ])?;
-    /// # Ok::<(), howfar::PlanError>(())
+    /// # Ok::<(), howfar_tracker::PlanError>(())
     /// ```
     pub fn split<const N: usize>(
         &mut self,
@@ -341,7 +352,7 @@ impl Phase {
                 )),
             })
             .collect();
-        let mut meta = self.node.meta.get().clone();
+        let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
         meta.total = Total::Unknown;
         meta.children = children.iter().map(|p| Arc::clone(&p.node)).collect();
@@ -381,7 +392,7 @@ impl Phase {
         Ok(())
     }
     fn freeze(&mut self, snapshot: Snapshot) {
-        let mut meta = self.node.meta.get().clone();
+        let mut meta = (*self.node.meta.get()).clone();
         meta.frozen = Some(snapshot);
         self.node.meta.publish(meta);
         self.node.state.store(2, Ordering::Release);
@@ -468,6 +479,13 @@ impl Observer {
     /// This allocates and walks the observed tree; sampling cadence belongs to you.
     pub fn snapshot(&self) -> Snapshot {
         self.node.snapshot()
+    }
+    /// Sample without waiting for a contended std mutex. Returns `None` if any
+    /// node is busy; retry on a later UI/event-loop turn. Never spins or retries.
+    /// In no_std builds, the platform critical-section provider still controls
+    /// entry into its critical section. Allocation and tree walks run outside it.
+    pub fn try_snapshot(&self) -> Option<Snapshot> {
+        self.node.snapshot_with(true)
     }
     /// Whether a terminal snapshot has been published, without walking the tree.
     pub fn is_finished(&self) -> bool {
@@ -648,5 +666,38 @@ fn write_total(out: &mut impl core::fmt::Write, total: Total) -> core::fmt::Resu
         Total::Unknown => out.write_str("{\"kind\":\"Unknown\"}"),
         Total::Exact(n) => write!(out, "{{\"kind\":\"Exact\",\"units\":\"{n}\"}}"),
         Total::Estimated(n) => write!(out, "{{\"kind\":\"Estimated\",\"units\":\"{n}\"}}"),
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+    use crate::Stop;
+    use crate::poll::{Control, ControlHandle, LocalPoller};
+
+    #[test]
+    fn busy_child_skips_ui_snapshot_but_reporting_callbacks_and_cancel_still_work() {
+        let mut root = Phase::new("root", Total::Unknown);
+        let [child] = root
+            .split(
+                Execution::Sequence,
+                [Part::new("child", 1, Total::Exact(3))],
+            )
+            .unwrap();
+        let observer = root.observer();
+        let control = ControlHandle::new();
+        let mut poller = LocalPoller::new(observer.clone(), control.clone());
+        poller.subscribe(|event| {
+            assert!(event.try_snapshot().is_none());
+            assert!(!event.snapshot_materialized());
+            Control::Cancel
+        });
+        child.node.meta.with_lock_for_test(|| {
+            child.progress().advance(1);
+            assert!(observer.try_snapshot().is_none());
+            assert!(poller.poll().cancelled);
+            assert!(control.check().is_err());
+        });
+        assert_eq!(observer.try_snapshot().unwrap().children[0].completed, 1);
     }
 }

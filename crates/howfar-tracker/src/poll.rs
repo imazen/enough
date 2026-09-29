@@ -112,6 +112,16 @@ impl<'a> PollEvent<'a> {
     pub fn snapshot(&self) -> &Snapshot {
         self.snapshot_arc().as_ref()
     }
+    /// Lazily sample without waiting for a busy std metadata mutex. UI callbacks
+    /// should use this and retry on their next turn when it returns `None`.
+    /// Successful samples share the same cache as [`Self::snapshot`].
+    pub fn try_snapshot(&self) -> Option<&Snapshot> {
+        if self.snapshot.get().is_none() {
+            let snapshot = Arc::new(self.observer.try_snapshot()?);
+            let _ = self.snapshot.set(snapshot);
+        }
+        self.snapshot.get().map(Arc::as_ref)
+    }
     /// Retain **this** observation for deferred rendering or posted delivery.
     pub fn snapshot_owned(&self) -> Arc<Snapshot> {
         Arc::clone(self.snapshot_arc())

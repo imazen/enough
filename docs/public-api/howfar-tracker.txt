@@ -1,0 +1,194 @@
+# howfar-tracker public API — supported surface (default features)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+#
+# files: howfar-tracker.txt 158 lines (supported surface) | howfar-tracker.features.txt 95 added (features: profile,std) | howfar-tracker.internal.txt 18 lines (18 hidden + 0 excluded-feature)
+
+## summary
+#
+#   pub modules                                 3
+#   pub types (struct/enum/trait/alias)        23
+#   pub consts/statics                          2
+#   inherent methods                           53
+#   struct fields                              20
+#   enum variants                              25
+#   re-exports                                  5
+#   trait roster entries (type × trait)        66
+#   auto-trait-complete types                  14
+#   auto-trait exceptions                       7
+#
+# per-module pub lines:
+#   (root)                           81
+#   ext                               8
+#   poll                             42
+
+## items (131 lines)
+
+pub mod howfar_tracker
+pub use IgnoreProgress
+pub use Report
+pub use Stop
+pub use StopReason
+pub use Unstoppable
+pub mod ext
+pub struct ext::Batch<R: howfar::Report>
+pub fn ext::Batch<R>::advance(&mut self, u64)
+pub fn ext::Batch<R>::flush(&mut self)
+pub fn ext::Batch<R>::pending(&self) -> u64
+pub trait ext::ReportExt: howfar::Report
+pub fn ext::ReportExt::batched(self, core::num::nonzero::NonZeroU64) -> ext::Batch<Self> where Self: core::marker::Sized
+pub trait ext::WorkExt: enough::Stop + howfar::Report
+pub fn ext::WorkExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
+pub mod poll
+pub enum poll::Control
+pub poll::Control::Cancel
+pub poll::Control::Continue
+pub poll::Control::Yield
+pub struct poll::ControlHandle
+pub fn poll::ControlHandle::cancel(&self)
+pub fn poll::ControlHandle::is_cancelled(&self) -> bool
+pub fn poll::ControlHandle::new() -> Self
+pub fn poll::ControlHandle::request_yield(&self)
+pub fn poll::ControlHandle::take_yield(&self) -> bool
+pub fn poll::ControlHandle::yield_requested(&self) -> bool
+pub struct poll::LocalPoller<'a>
+pub fn poll::LocalPoller<'a>::control(&self) -> &poll::ControlHandle
+pub fn poll::LocalPoller<'a>::new(Observer, poll::ControlHandle) -> Self
+pub fn poll::LocalPoller<'a>::poll(&mut self) -> poll::PollOutcome
+pub fn poll::LocalPoller<'a>::subscribe(&mut self, impl core::ops::function::FnMut(&poll::PollEvent<'_>) -> poll::Control + 'a) -> poll::SubscriptionId
+pub fn poll::LocalPoller<'a>::unsubscribe(&mut self, poll::SubscriptionId) -> bool
+pub struct poll::PollEvent<'a>
+pub fn poll::PollEvent<'a>::control(&self) -> &poll::ControlHandle
+pub fn poll::PollEvent<'a>::observer(&self) -> &Observer
+pub fn poll::PollEvent<'a>::snapshot(&self) -> &Snapshot
+pub fn poll::PollEvent<'a>::snapshot_materialized(&self) -> bool
+pub fn poll::PollEvent<'a>::snapshot_owned(&self) -> alloc::sync::Arc<Snapshot>
+pub fn poll::PollEvent<'a>::try_snapshot(&self) -> core::option::Option<&Snapshot>
+pub struct poll::PollOutcome
+pub poll::PollOutcome::busy: bool
+pub poll::PollOutcome::cancelled: bool
+pub poll::PollOutcome::dispatched: bool
+pub poll::PollOutcome::yield_requested: bool
+pub fn poll::PollOutcome::check(self) -> core::result::Result<(), enough::reason::StopReason>
+pub struct poll::PollingStop<S>
+pub fn poll::PollingStop<S>::new(S, poll::SharedPoller) -> Self
+pub fn poll::PollingStop<S>::poller(&self) -> &poll::SharedPoller
+pub struct poll::SharedPoller
+pub fn poll::SharedPoller::builder(Observer, poll::ControlHandle) -> poll::SharedPollerBuilder
+pub fn poll::SharedPoller::control(&self) -> &poll::ControlHandle
+pub fn poll::SharedPoller::new(Observer, poll::ControlHandle, impl core::ops::function::Fn(&poll::PollEvent<'_>) -> poll::Control + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn poll::SharedPoller::try_poll(&self) -> poll::PollOutcome
+pub struct poll::SharedPollerBuilder
+pub fn poll::SharedPollerBuilder::build(self) -> poll::SharedPoller
+pub fn poll::SharedPollerBuilder::subscribe(&mut self, impl core::ops::function::Fn(&poll::PollEvent<'_>) -> poll::Control + core::marker::Send + core::marker::Sync + 'static) -> &mut Self
+pub struct poll::SubscriptionId(_)
+pub enum Execution
+pub Execution::ForkJoin
+pub Execution::Sequence
+pub Execution::Unspecified
+pub Execution::WorkPool
+pub Execution::WorkPool::max_parallelism: usize
+pub enum Outcome
+pub Outcome::Abandoned
+pub Outcome::Cancelled
+pub Outcome::Failed
+pub Outcome::Skipped
+pub Outcome::Succeeded
+pub enum PlanError
+pub PlanError::AlreadyInUse
+pub PlanError::EmptyOrZeroWeight
+pub PlanError::Finished
+pub PlanError::Overflow
+pub PlanError::UnfinishedChildren
+pub PlanError::UnsuccessfulChildren
+pub PlanError::ZeroParallelism
+pub enum Status
+pub Status::Finished(Outcome)
+pub Status::Pending
+pub Status::Running
+pub enum Total
+pub Total::Estimated(u64)
+pub Total::Exact(u64)
+pub Total::Unknown
+pub struct Observer
+pub fn Observer::is_finished(&self) -> bool
+pub fn Observer::snapshot(&self) -> Snapshot
+pub fn Observer::try_snapshot(&self) -> core::option::Option<Snapshot>
+pub struct Part
+pub fn Part::execution(self, Execution) -> Self
+pub fn Part::new(impl core::convert::Into<alloc::string::String>, u64, Total) -> Self
+pub fn Part::units(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct Phase
+pub fn Phase::finish(&mut self) -> core::result::Result<(), PlanError>
+pub fn Phase::finish_with(&mut self, Outcome) -> core::result::Result<(), PlanError>
+pub fn Phase::id(&self) -> usize
+pub fn Phase::new(impl core::convert::Into<alloc::string::String>, Total) -> Self
+pub fn Phase::observer(&self) -> Observer
+pub fn Phase::progress(&self) -> Progress
+pub fn Phase::set_execution(&mut self, Execution) -> core::result::Result<(), PlanError>
+pub fn Phase::set_total(&mut self, Total) -> core::result::Result<(), PlanError>
+pub fn Phase::set_units(&mut self, impl core::convert::Into<alloc::string::String>) -> core::result::Result<(), PlanError>
+pub fn Phase::split<const N: usize>(&mut self, Execution, [Part; N]) -> core::result::Result<[Phase; N], PlanError>
+pub fn Phase::split_vec(&mut self, Execution, alloc::vec::Vec<Part>) -> core::result::Result<alloc::vec::Vec<Phase>, PlanError>
+pub fn Phase::start(&mut self) -> core::result::Result<(), PlanError>
+pub struct Progress
+pub struct Snapshot
+pub Snapshot::children: alloc::vec::Vec<Snapshot>
+pub Snapshot::completed: u64
+pub Snapshot::execution: Execution
+pub Snapshot::id: usize
+pub Snapshot::initial_total: Total
+pub Snapshot::name: alloc::string::String
+pub Snapshot::overflowed: bool
+pub Snapshot::parent: core::option::Option<usize>
+pub Snapshot::status: Status
+pub Snapshot::total: Total
+pub Snapshot::total_revisions: alloc::vec::Vec<Total>
+pub Snapshot::units: alloc::string::String
+pub Snapshot::weight: u64
+pub const fn Snapshot::counter_max() -> u64
+pub fn Snapshot::fraction(&self) -> core::option::Option<f64>
+pub fn Snapshot::overrun(&self) -> bool
+pub fn Snapshot::unresolved_fraction(&self) -> f64
+pub fn Snapshot::write_json(&self, &mut impl core::fmt::Write) -> core::fmt::Result
+pub struct Work<S, R>
+pub Work::progress: R
+pub Work::stop: S
+pub const fn Work<S, R>::new(S, R) -> Self
+
+## trait impls (19 types)
+
+Execution: Clone, Copy, Debug, Default, Eq, PartialEq
+Observer: Clone
+Outcome: Clone, Copy, Debug, Eq, PartialEq
+Part: Clone, Debug
+Phase: Drop
+PlanError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
+Progress: Clone, howfar::Report
+Snapshot: Clone, Debug, PartialEq
+Status: Clone, Copy, Debug, Eq, PartialEq
+T: ext::ReportExt, ext::WorkExt
+Total: Clone, Copy, Debug, Eq, PartialEq
+Work<S, R>: Clone, Copy, Debug, enough::Stop, howfar::Report
+ext::Batch<R>: Drop
+poll::Control: Clone, Copy, Debug, Eq, PartialEq
+poll::ControlHandle: Clone, Default, enough::Stop
+poll::PollOutcome: Clone, Copy, Debug, Eq, PartialEq
+poll::PollingStop<S>: Clone, enough::Stop
+poll::SharedPoller: Clone
+poll::SubscriptionId: Clone, Copy, Debug, Eq, PartialEq
+
+## auto traits
+
+14 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+Work<S, R>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+ext::Batch<R>: !Freeze !RefUnwindSafe !Unpin !UnwindSafe
+poll::LocalPoller<'a>: !RefUnwindSafe !Send !Sync !UnwindSafe
+poll::PollEvent<'a>: !Freeze !RefUnwindSafe !Sync
+poll::PollingStop<S>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+poll::SharedPoller: !RefUnwindSafe !UnwindSafe
+poll::SharedPollerBuilder: !RefUnwindSafe !UnwindSafe

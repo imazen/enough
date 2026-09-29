@@ -15,6 +15,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "critical-section"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -85,18 +91,24 @@ dependencies = [
 [[package]]
 name = "howfar"
 version = "0.1.0"
-dependencies = [
- "enough",
-]
 
 [[package]]
 name = "howfar-browser-probe"
 version = "0.0.0"
 dependencies = [
- "howfar",
+ "howfar-tracker",
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-rayon",
+]
+
+[[package]]
+name = "howfar-tracker"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "enough",
+ "howfar",
 ]
 
 [[package]]

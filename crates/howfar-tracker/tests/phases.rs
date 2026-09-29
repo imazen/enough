@@ -1,6 +1,5 @@
-#![cfg(feature = "alloc")]
-use howfar::ext::ReportExt;
-use howfar::{Execution, Outcome, Part, Phase, PlanError, Report, Snapshot, Status, Total};
+use howfar_tracker::ext::ReportExt;
+use howfar_tracker::{Execution, Outcome, Part, Phase, PlanError, Report, Snapshot, Status, Total};
 use rayon::prelude::*;
 use std::{
     num::NonZeroU64,
@@ -307,8 +306,8 @@ fn snapshots_during_metadata_publication_keep_each_revision_coherent() {
 fn sharing_contract_and_owned_trait_objects() {
     fn shared<T: Send + Sync>() {}
     shared::<Phase>();
-    shared::<howfar::Progress>();
-    shared::<howfar::Observer>();
+    shared::<howfar_tracker::Progress>();
+    shared::<howfar_tracker::Observer>();
     let phase = Phase::new("erased", Total::Exact(5));
     let boxed: Box<dyn Report> = Box::new(phase.progress());
     let arc: Arc<dyn Report> = Arc::new(phase.progress());

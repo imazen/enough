@@ -23,7 +23,7 @@ use core::{
 };
 
 /// A monotonic clock in a single shared epoch. Reads happen only in instrumented code.
-/// Embedded/browser hosts can supply their own clock without depending on `std`.
+/// Browser hosts supply a host clock; the collector still requires `std`.
 pub trait Clock: Send + Sync {
     /// Elapsed time in the clock's epoch.
     fn now(&self) -> Duration;
