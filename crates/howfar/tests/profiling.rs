@@ -129,13 +129,7 @@ fn check_storms_counts_units_and_original_sites_stay_separate() {
         .find(|s| s.line == step_line)
         .unwrap();
     assert_eq!((step.checks, step.reports), (1, 1));
-    assert!(
-        record
-            .stats
-            .sites
-            .iter()
-            .all(|s| s.file.ends_with("tests/profiling.rs"))
-    );
+    assert!(record.stats.sites.iter().all(|s| s.file == file!()));
 }
 
 #[test]
