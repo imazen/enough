@@ -68,6 +68,15 @@ at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.
 `check()` does not report completed work, and `advance()` does not poll or call
 subscribers. The caller chooses both cadences.
 
+## Thread tests
+
+`cargo test -p howfar --test pulse_threads` starts four OS threads sharing one
+`&dyn Pulse`. It verifies that their asymmetric reports add up and that a
+cancellation request becomes visible to every worker. The tracker integration
+tests (`cargo test -p howfar-along --test pulse`) cover the same shared phase
+inside a serial → parallel → serial plan, including a live snapshot, and a
+Rayon pool whose chunks all report to one logical phase.
+
 ## Count only
 
 Algorithms that need no phase structure can continue to accept `impl Report`.

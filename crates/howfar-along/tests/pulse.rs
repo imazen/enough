@@ -50,7 +50,7 @@ fn nested_operation(pulse: &dyn Pulse) -> Result<(), StopReason> {
 }
 
 #[test]
-fn one_dyn_pulse_carries_nested_parallel_progress_and_cancellation() {
+fn one_dyn_pulse_carries_nested_parallel_progress() {
     let phase = Phase::new("job", Total::Unknown);
     let pulse = PulseTree::new(phase, &Unstoppable);
     let observer = pulse.observer();
