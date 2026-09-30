@@ -19,6 +19,7 @@ use core::{
 
 /// A subscriber's requested action. Cancellation wins over a pending yield.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Control {
     /// Continue processing.
     Continue,
@@ -146,6 +147,7 @@ impl<'a> PollEvent<'a> {
 
 /// Dispatch result; busy workers still observe cancellation and yield requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PollOutcome {
     /// Cancellation has been latched.
     pub cancelled: bool,

@@ -6,6 +6,7 @@ use enough::{Stop, StopReason};
 
 /// The denominator for completed work in one phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Total {
     /// A known count. Exceeding it is visible to observers.
     Exact(u64),
@@ -15,8 +16,9 @@ pub enum Total {
     Unknown,
 }
 
-/// How child phases relate in execution; planning does not schedule work.
+/// How work in a phase (or its child phases) is scheduled; planning does not schedule it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Execution {
     /// No scheduling relationship is asserted.
     #[default]
@@ -34,6 +36,7 @@ pub enum Execution {
 
 /// Explicit terminal result, independent of reaching a count total.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Outcome {
     /// All required work completed successfully.
     Succeeded,
@@ -49,6 +52,7 @@ pub enum Outcome {
 
 /// Invalid phase plan or lifecycle transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PlanError {
     /// A partition needs at least one child and positive weights.
     EmptyOrZeroWeight,
@@ -90,7 +94,10 @@ impl core::error::Error for PlanError {}
 ///
 /// Weights are relative to siblings, so `[35, 30, 35]` reserves exactly 30%
 /// for the middle phase. Declare every sibling before starting any of them.
+/// Construct this with [`Self::new`]; its fields remain readable, while future
+/// planning options can be added without changing library authors' code.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct PhaseSpec<'a> {
     /// Human-readable phase name.
     pub name: &'a str,
@@ -119,7 +126,7 @@ impl<'a> PhaseSpec<'a> {
         self.units = units;
         self
     }
-    /// Describe how this phase will schedule its own children.
+    /// Describe this phase's scheduling, including workers sharing one phase.
     pub const fn execution(mut self, execution: Execution) -> Self {
         self.execution = execution;
         self

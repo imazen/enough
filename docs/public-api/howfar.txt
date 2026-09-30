@@ -30,19 +30,19 @@
 pub mod howfar
 pub use Stop
 pub use StopReason
-pub enum Execution
+#[non_exhaustive] pub enum Execution
 pub Execution::ForkJoin
 pub Execution::Sequence
 pub Execution::Unspecified
 pub Execution::WorkPool
 pub Execution::WorkPool::max_parallelism: usize
-pub enum Outcome
+#[non_exhaustive] pub enum Outcome
 pub Outcome::Abandoned
 pub Outcome::Cancelled
 pub Outcome::Failed
 pub Outcome::Skipped
 pub Outcome::Succeeded
-pub enum PlanError
+#[non_exhaustive] pub enum PlanError
 pub PlanError::AlreadyInUse
 pub PlanError::Busy
 pub PlanError::EmptyOrZeroWeight
@@ -55,13 +55,13 @@ pub PlanError::ZeroParallelism
 pub enum RunError<E>
 pub RunError::Plan(PlanError)
 pub RunError::Work(E)
-pub enum Total
+#[non_exhaustive] pub enum Total
 pub Total::Estimated(u64)
 pub Total::Exact(u64)
 pub Total::Unknown
 pub struct IgnoreProgress
 pub struct NoPulse
-pub struct PhaseSpec<'a>
+#[non_exhaustive] pub struct PhaseSpec<'a>
 pub PhaseSpec::execution: Execution
 pub PhaseSpec::name: &'a str
 pub PhaseSpec::total: Total

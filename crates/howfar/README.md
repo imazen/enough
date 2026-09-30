@@ -55,6 +55,11 @@ groups. The relative weights of siblings are fixed before their work starts;
 a parallel middle phase can therefore keep 30% of its parent's budget
 regardless of worker count. The returned children can be shared across scoped
 threads, then finished after their workers join.
+When workers contribute to one logical count, share the same `&dyn Pulse`
+between them and finish that phase after the join; there is no need to create
+one child per thread. Use separate children when each task needs its own total,
+status, or weight. `PhaseSpec` is built with `new` and its fields stay readable;
+it is non-exhaustive so future planning options will not break library authors.
 
 `Pulse` extends `Stop` and `Report`, so the same `&dyn Pulse` also works
 at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.

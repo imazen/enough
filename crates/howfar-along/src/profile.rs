@@ -59,6 +59,7 @@ impl Clock for StdClock {
 
 /// What a span measures. Work spans are distinct from waiting and callback overhead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpanKind {
     /// Logical work execution (may still include nested waits/callbacks).
     Work,
@@ -74,6 +75,7 @@ pub enum SpanKind {
 
 /// Counts attributed to an actual library/application call site.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SiteStats {
     /// Source file from `#[track_caller]`.
     pub file: &'static str,
@@ -93,6 +95,7 @@ pub struct SiteStats {
 
 /// Per-task checkpoint evidence. Boundary gaps are included even with zero checks.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct Stats {
     /// Number of checks (saturated).
     pub checks: u64,
@@ -120,6 +123,7 @@ pub struct Stats {
 
 /// One completed execution span. IDs refer to this profiler run, not OS threads.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SpanRecord {
     /// Stable run-local span ID.
     pub id: usize,
@@ -477,6 +481,7 @@ impl<T: Report> Report for Instrumented<T> {
 
 /// A versioned, owned run record; serializable without a framework dependency.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Trace {
     /// Version of the JSON schema.
     pub schema_version: u32,
@@ -500,6 +505,7 @@ pub struct Trace {
 
 /// Measured overlap of selected *independent* work spans, not inferred CPU utilization.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Overlap {
     /// First start to last finish (including any gaps).
     pub wall: Duration,

@@ -51,7 +51,7 @@ pub fn ext::ReportExt::batched(self, core::num::nonzero::NonZeroU64) -> ext::Bat
 pub trait ext::WorkExt: enough::Stop + howfar::Report
 pub fn ext::WorkExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub mod poll
-pub enum poll::Control
+#[non_exhaustive] pub enum poll::Control
 pub poll::Control::Cancel
 pub poll::Control::Continue
 pub poll::Control::Yield
@@ -75,7 +75,7 @@ pub fn poll::PollEvent<'a>::snapshot(&self) -> &Snapshot
 pub fn poll::PollEvent<'a>::snapshot_materialized(&self) -> bool
 pub fn poll::PollEvent<'a>::snapshot_owned(&self) -> alloc::sync::Arc<Snapshot>
 pub fn poll::PollEvent<'a>::try_snapshot(&self) -> core::option::Option<&Snapshot>
-pub struct poll::PollOutcome
+#[non_exhaustive] pub struct poll::PollOutcome
 pub poll::PollOutcome::busy: bool
 pub poll::PollOutcome::cancelled: bool
 pub poll::PollOutcome::dispatched: bool
@@ -93,7 +93,7 @@ pub struct poll::SharedPollerBuilder
 pub fn poll::SharedPollerBuilder::build(self) -> poll::SharedPoller
 pub fn poll::SharedPollerBuilder::subscribe(&mut self, impl core::ops::function::Fn(&poll::PollEvent<'_>) -> poll::Control + core::marker::Send + core::marker::Sync + 'static) -> &mut Self
 pub struct poll::SubscriptionId(_)
-pub enum Status
+#[non_exhaustive] pub enum Status
 pub Status::Finished(howfar::pulse::Outcome)
 pub Status::Pending
 pub Status::Running
@@ -122,7 +122,7 @@ pub struct Progress
 pub struct PulseTree<'a>
 pub fn PulseTree<'a>::new(Phase, &'a dyn enough::Stop) -> Self
 pub fn PulseTree<'a>::observer(&self) -> Observer
-pub struct Snapshot
+#[non_exhaustive] pub struct Snapshot
 pub Snapshot::children: alloc::vec::Vec<Snapshot>
 pub Snapshot::completed: u64
 pub Snapshot::execution: howfar::pulse::Execution

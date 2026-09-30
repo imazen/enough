@@ -25,7 +25,7 @@
 ## items (80 lines)
 
 pub mod profile
-pub enum profile::SpanKind
+#[non_exhaustive] pub enum profile::SpanKind
 pub profile::SpanKind::Callback
 pub profile::SpanKind::Queued
 pub profile::SpanKind::Wait
@@ -33,7 +33,7 @@ pub profile::SpanKind::Work
 pub profile::SpanKind::Yield
 pub struct profile::Instrumented<T>
 pub fn profile::Instrumented<T>::inner(&self) -> &T
-pub struct profile::Overlap
+#[non_exhaustive] pub struct profile::Overlap
 pub profile::Overlap::mean_active_tasks: f64
 pub profile::Overlap::peak_active_tasks: usize
 pub profile::Overlap::single_task_tail: core::time::Duration
@@ -47,7 +47,7 @@ pub fn profile::Profiler::operation_returned(&self)
 pub fn profile::Profiler::snapshot(&self) -> profile::Trace
 pub fn profile::Profiler::span(&self, usize, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
 pub fn profile::Profiler::try_snapshot(&self) -> core::option::Option<profile::Trace>
-pub struct profile::SiteStats
+#[non_exhaustive] pub struct profile::SiteStats
 pub profile::SiteStats::checks: u64
 pub profile::SiteStats::column: u32
 pub profile::SiteStats::file: &'static str
@@ -60,7 +60,7 @@ pub fn profile::Span::child(&self, impl core::convert::Into<alloc::string::Strin
 pub fn profile::Span::finish(self, howfar::pulse::Outcome)
 pub fn profile::Span::id(&self) -> usize
 pub fn profile::Span::instrument<T>(&self, T) -> profile::Instrumented<T>
-pub struct profile::SpanRecord
+#[non_exhaustive] pub struct profile::SpanRecord
 pub profile::SpanRecord::end: core::time::Duration
 pub profile::SpanRecord::id: usize
 pub profile::SpanRecord::kind: profile::SpanKind
@@ -73,7 +73,7 @@ pub profile::SpanRecord::task: alloc::string::String
 pub fn profile::SpanRecord::checks_per_second(&self) -> f64
 pub fn profile::SpanRecord::elapsed(&self) -> core::time::Duration
 pub fn profile::SpanRecord::is_poll_storm(&self, u64, f64) -> bool
-pub struct profile::Stats
+#[non_exhaustive] pub struct profile::Stats
 pub profile::Stats::check_time: core::time::Duration
 pub profile::Stats::checks: u64
 pub profile::Stats::clock_regressions: u64
@@ -87,7 +87,7 @@ pub profile::Stats::unattributed_calls: u64
 pub profile::Stats::units: u64
 pub struct profile::StdClock(_)
 pub fn profile::StdClock::new() -> Self
-pub struct profile::Trace
+#[non_exhaustive] pub struct profile::Trace
 pub profile::Trace::active_spans: usize
 pub profile::Trace::cancelled_at: core::option::Option<core::time::Duration>
 pub profile::Trace::dropped_spans: u64

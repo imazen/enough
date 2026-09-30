@@ -9,6 +9,7 @@ pub use howfar::{Execution, Outcome, PlanError, Total};
 
 /// Lifecycle state, independent of the counted fraction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Status {
     /// Work has not started.
     Pending,
@@ -427,6 +428,7 @@ impl Observer {
 
 /// Owned observation. Count fractions describe weighted work, never elapsed runtime or ETA.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Snapshot {
     /// Stable identifier within this job (root = 0).
     pub id: usize,
@@ -491,6 +493,7 @@ impl Snapshot {
             Execution::Sequence => ("Sequence", None),
             Execution::ForkJoin => ("ForkJoin", None),
             Execution::WorkPool { max_parallelism } => ("WorkPool", Some(max_parallelism)),
+            _ => ("Other", None),
         };
         write!(out, "],\"execution\":\"{execution}\",\"max_parallelism\":")?;
         match capacity {
@@ -598,6 +601,7 @@ fn write_total(out: &mut impl core::fmt::Write, total: Total) -> core::fmt::Resu
         Total::Unknown => out.write_str("{\"kind\":\"Unknown\"}"),
         Total::Exact(n) => write!(out, "{{\"kind\":\"Exact\",\"units\":\"{n}\"}}"),
         Total::Estimated(n) => write!(out, "{{\"kind\":\"Estimated\",\"units\":\"{n}\"}}"),
+        _ => out.write_str("{\"kind\":\"Other\"}"),
     }
 }
 

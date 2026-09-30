@@ -1,6 +1,7 @@
 use enough::{Stop, StopReason, Unstoppable};
 use howfar::{Execution, Outcome, PhaseSpec, Pulse, Report, RunError, Steps, Total};
 use howfar_along::{Phase, PlanError, PulseTree, Status};
+use std::sync::Barrier;
 
 fn nested_operation(pulse: &dyn Pulse) -> Result<(), StopReason> {
     pulse.check()?;
@@ -58,6 +59,124 @@ fn one_dyn_pulse_carries_nested_parallel_progress_and_cancellation() {
     assert_eq!(snapshot.status, Status::Finished(Outcome::Succeeded));
     assert_eq!(snapshot.fraction(), Some(1.0));
     assert_eq!(snapshot.children[1].children[1].completed, 100);
+}
+
+#[test]
+fn scoped_workers_share_one_dyn_pulse_in_a_serial_parallel_serial_plan() {
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let [before, middle, after] = pulse
+        .split(
+            Execution::Sequence,
+            &[
+                PhaseSpec::new("before", 35, Total::Exact(1)),
+                PhaseSpec::new("middle", 30, Total::Exact(11))
+                    .units("blocks")
+                    .execution(Execution::WorkPool { max_parallelism: 4 }),
+                PhaseSpec::new("after", 35, Total::Exact(1)),
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap_or_else(|_| panic!("three children"));
+    before.advance(1);
+    before.finish(Outcome::Succeeded).unwrap();
+
+    let shared: &dyn Pulse = middle.as_ref();
+    let start = Barrier::new(5);
+    let reported = Barrier::new(5);
+    let release = Barrier::new(5);
+    std::thread::scope(|scope| {
+        for count in [1, 2, 3, 5] {
+            let (start, reported, release) = (&start, &reported, &release);
+            scope.spawn(move || {
+                start.wait();
+                shared.check().unwrap();
+                shared.advance(1);
+                reported.wait();
+                release.wait();
+                shared.advance(count - 1);
+                shared.check().unwrap();
+            });
+        }
+        start.wait();
+        reported.wait();
+        let live = observer.snapshot();
+        release.wait();
+        assert_eq!(
+            live.children[0].status,
+            Status::Finished(Outcome::Succeeded)
+        );
+        assert_eq!(live.children[1].completed, 4);
+        assert_eq!(live.children[1].status, Status::Running);
+        assert_eq!(live.children[1].total, Total::Exact(11));
+        assert_eq!(
+            live.children[1].execution,
+            Execution::WorkPool { max_parallelism: 4 }
+        );
+        assert!(live.children[1].children.is_empty());
+        assert_eq!(live.children[2].status, Status::Pending);
+    });
+    assert_eq!(observer.snapshot().children[1].completed, 11);
+    middle.finish(Outcome::Succeeded).unwrap();
+    after.advance(1);
+    after.finish(Outcome::Succeeded).unwrap();
+    pulse.finish(Outcome::Succeeded).unwrap();
+    let final_state = observer.snapshot();
+    assert_eq!(final_state.status, Status::Finished(Outcome::Succeeded));
+    assert_eq!(final_state.fraction(), Some(1.0));
+    assert_eq!(final_state.children[1].completed, 11);
+}
+
+#[test]
+fn rayon_chunks_share_one_dyn_pulse_without_a_child_per_worker() {
+    use rayon::prelude::*;
+
+    let pulse = PulseTree::new(Phase::new("encode", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let mut steps = Steps::new(
+        &pulse,
+        &[
+            PhaseSpec::new("prepare", 35, Total::Exact(1)),
+            PhaseSpec::new("encode chunks", 30, Total::Exact(16))
+                .execution(Execution::WorkPool { max_parallelism: 4 }),
+            PhaseSpec::new("write", 35, Total::Exact(1)),
+        ],
+    )
+    .unwrap();
+    steps
+        .run_stoppable(|stage| {
+            stage.advance(1);
+            Ok::<(), StopReason>(())
+        })
+        .unwrap();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    steps
+        .run_stoppable(|stage| {
+            pool.install(|| {
+                [1_u64, 4, 2, 9].par_iter().try_for_each(|&units| {
+                    stage.check()?;
+                    stage.advance(units);
+                    Ok::<(), StopReason>(())
+                })
+            })
+        })
+        .unwrap();
+    steps
+        .run_stoppable(|stage| {
+            stage.advance(1);
+            Ok::<(), StopReason>(())
+        })
+        .unwrap();
+    steps.finish().unwrap();
+    let final_state = observer.snapshot();
+    assert_eq!(final_state.children.len(), 3);
+    assert_eq!(final_state.children[1].completed, 16);
+    assert_eq!(final_state.children[1].total, Total::Exact(16));
+    assert_eq!(final_state.fraction(), Some(1.0));
 }
 
 #[test]
