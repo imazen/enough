@@ -107,7 +107,7 @@ pub struct PhaseSpec<'a> {
     pub total: Total,
     /// Name of a counted unit, such as `rows` or `superblocks`.
     pub units: &'a str,
-    /// Scheduling relationship of this phase's own children.
+    /// Scheduling of this phase's work, including shared workers or children.
     pub execution: Execution,
 }
 impl<'a> PhaseSpec<'a> {

@@ -47,19 +47,18 @@ cancellation. `RunError<E>` separates an operation error from a plan error,
 so a library can use a type alias for its public error. A panic leaves work
 abandoned. `NoPulse` is the zero-sized, non-cancelling choice.
 
-For nested or parallel work, call `Steps::run_nested_stoppable` and split its
-stage into children with `Pulse::split`. The closure joins and finishes those
-children; `Steps` finishes the containing stage and keeps errors flat. Child
-phases can split into `Sequence`, `ForkJoin`, or `WorkPool`
-groups. The relative weights of siblings are fixed before their work starts;
-a parallel middle phase can therefore keep 30% of its parent's budget
-regardless of worker count. The returned children can be shared across scoped
-threads, then finished after their workers join.
-When workers contribute to one logical count, share the same `&dyn Pulse`
-between them and finish that phase after the join; there is no need to create
-one child per thread. Use separate children when each task needs its own total,
-status, or weight. `PhaseSpec` is built with `new` and its fields stay readable;
-it is non-exhaustive so future planning options will not break library authors.
+For parallel work with one logical count, use ordinary `run_stoppable` and pass
+its `&dyn Pulse` to every worker. Join the workers before returning from the
+closure; `Steps` then finishes the phase. Give workers separate child phases
+only when they need their own totals, statuses, or weights. In that case, use
+`run_nested_stoppable` and `Pulse::split`; finish and join the children before
+returning. `Steps` finishes the containing stage and keeps errors flat.
+
+Child phases can split into `Sequence`, `ForkJoin`, or `WorkPool` groups. The
+relative weights of siblings are fixed before work starts, so a parallel
+middle phase can keep 30% of its parent's budget regardless of worker count.
+`PhaseSpec` is built with `new` and its fields stay readable; it is
+non-exhaustive so future planning options will not break library authors.
 
 `Pulse` extends `Stop` and `Report`, so the same `&dyn Pulse` also works
 at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.

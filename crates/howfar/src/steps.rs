@@ -48,8 +48,9 @@ impl<E> RunError<RunError<E>> {
 /// `&dyn Pulse`; it finishes that child on success. On error it finishes the
 /// active child with the selected outcome, skips later children, and finishes
 /// the parent. A panic leaves unfinished phases abandoned. Use
-/// [`Self::run_nested_stoppable`] with [`Pulse::split`] for a stage that itself
-/// plans and joins parallel children.
+/// Share the stage's `&dyn Pulse` among workers that count one logical phase;
+/// join them before the closure returns. Use [`Self::run_nested_stoppable`]
+/// with [`Pulse::split`] when workers need separate child phases.
 pub struct Steps<'a> {
     parent: &'a dyn Pulse,
     children: Vec<Box<dyn Pulse + 'a>>,
