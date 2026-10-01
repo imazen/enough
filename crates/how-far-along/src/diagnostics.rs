@@ -9,11 +9,15 @@
 use crate::{
     Execution, Observer, Outcome, PhaseSpec, PlanError, Pulse, Report, Snapshot, Status, Stop,
     StopReason,
-    profile::{Instrumented, Profiler, SourceSite, Span, SpanKind, Trace},
+    profile::{Instrumented, Profiler, SourceSite, Span, SpanKind, SpanRecord, Trace},
     sync::Mutex,
 };
-use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
-use core::{fmt, time::Duration};
+use alloc::{boxed::Box, format, string::String, sync::Arc, vec, vec::Vec};
+use core::{
+    fmt,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 /// Thresholds for a diagnostic pass. Edit fields after [`Default::default`].
 #[derive(Clone, Debug)]
@@ -37,6 +41,10 @@ pub struct Options {
     pub minimum_stage_wall: Duration,
     /// Minimum absolute difference between planned and measured child shares.
     pub weight_difference: f64,
+    /// A sequential stage measured below this share of the stages' total wall
+    /// time is too small to calibrate from one run: it keeps its declared
+    /// weight and cannot by itself trigger weight advice.
+    pub negligible_stage_share: f64,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -50,6 +58,7 @@ impl Default for Options {
             minimum_calls: 100,
             minimum_stage_wall: Duration::from_millis(30),
             weight_difference: 0.15,
+            negligible_stage_share: 0.02,
         }
     }
 }
@@ -125,9 +134,16 @@ impl PulseRef<'_> {
 
 /// Dev-only wrapper around a library's ordinary `&dyn Pulse` call.
 ///
-/// Child phases get separate lazy spans with their actual progress-tree node
-/// IDs. A phase shared by workers still has aggregate timing; instrument each
+/// Child phases get separate spans with their actual progress-tree node IDs.
+/// A span starts at the first check or report. A stage of a *sequential* split
+/// instead starts when the previous stage finished (the first one when the
+/// plan was made) and always gets a span when it succeeds, so work before its
+/// first checkpoint, or a stage with no checkpoint at all, is still timed.
+/// A phase shared by workers still has aggregate timing; instrument each
 /// worker separately when its own long tail matters.
+///
+/// `may_stop` and `may_report` are `true` even over a no-op pulse, so a library
+/// that skips checkpoints behind them still shows its real call sites.
 pub struct DiagnosticPulse<'a> {
     inner: PulseRef<'a>,
     observer: Observer,
@@ -135,6 +151,12 @@ pub struct DiagnosticPulse<'a> {
     node: usize,
     name: String,
     span: Mutex<Option<Span>>,
+    /// Sequential stage: shared cell holding when this stage was entered.
+    entered: Option<Arc<Mutex<Duration>>>,
+    /// Sequential stage: shared cell the next stage reads as its entry time.
+    exited: Option<Arc<Mutex<Duration>>>,
+    /// A container stage's time belongs to its children's spans.
+    has_children: AtomicBool,
 }
 impl<'a> DiagnosticPulse<'a> {
     /// Wrap a pulse and its matching observer without changing library code.
@@ -147,14 +169,26 @@ impl<'a> DiagnosticPulse<'a> {
             node: snapshot.id,
             name: snapshot.name,
             span: Mutex::new(None),
+            entered: None,
+            exited: None,
+            has_children: AtomicBool::new(false),
+        }
+    }
+    fn start_span(&self) -> Span {
+        match &self.entered {
+            Some(entered) => {
+                let at = *entered.lock();
+                self.profiler
+                    .span_from(self.node, self.name.clone(), SpanKind::Work, at)
+            }
+            None => self
+                .profiler
+                .span(self.node, self.name.clone(), SpanKind::Work),
         }
     }
     fn meter(&self) -> Instrumented<&dyn Pulse> {
         let mut owner = self.span.lock();
-        let span = owner.get_or_insert_with(|| {
-            self.profiler
-                .span(self.node, self.name.clone(), SpanKind::Work)
-        });
+        let span = owner.get_or_insert_with(|| self.start_span());
         span.instrument(self.inner.as_pulse())
     }
 }
@@ -181,7 +215,7 @@ impl Stop for DiagnosticPulse<'_> {
         self.meter().check()
     }
     fn may_stop(&self) -> bool {
-        self.inner.as_pulse().may_stop()
+        true
     }
 }
 impl Report for DiagnosticPulse<'_> {
@@ -190,7 +224,7 @@ impl Report for DiagnosticPulse<'_> {
         self.meter().advance(completed);
     }
     fn may_report(&self) -> bool {
-        self.inner.as_pulse().may_report()
+        true
     }
 }
 impl Pulse for DiagnosticPulse<'_> {
@@ -200,8 +234,18 @@ impl Pulse for DiagnosticPulse<'_> {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Box<dyn Pulse + '_>>, PlanError> {
         let children = self.inner.as_pulse().split(execution, parts)?;
+        self.has_children.store(true, Ordering::Relaxed);
         let snapshot = self.observer.snapshot();
         let nodes = find_node(&snapshot, self.node).map(|node| &node.children);
+        // cells[i] is stage i's entry and stage i-1's exit.
+        let cells: Vec<_> = if execution == Execution::Sequence {
+            let planned = self.profiler.now();
+            (0..=children.len())
+                .map(|_| Arc::new(Mutex::new(planned)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(children
             .into_iter()
             .enumerate()
@@ -213,14 +257,31 @@ impl Pulse for DiagnosticPulse<'_> {
                     node: nodes.and_then(|n| n.get(index)).map_or(self.node, |n| n.id),
                     name: parts[index].name.into(),
                     span: Mutex::new(None),
+                    entered: cells.get(index).cloned(),
+                    exited: cells.get(index + 1).cloned(),
+                    has_children: AtomicBool::new(false),
                 }) as Box<dyn Pulse>
             })
             .collect())
     }
     fn finish(&self, outcome: Outcome) -> Result<(), PlanError> {
         self.inner.as_pulse().finish(outcome)?;
-        if let Some(span) = self.span.lock().take() {
+        let mut owner = self.span.lock();
+        if owner.is_none()
+            && outcome == Outcome::Succeeded
+            && self.entered.is_some()
+            && !self.has_children.load(Ordering::Relaxed)
+        {
+            // A leaf stage with no checkpoint still occupied wall time.
+            *owner = Some(self.start_span());
+        }
+        if let Some(span) = owner.take() {
             span.finish(outcome);
+        }
+        drop(owner);
+        if let Some(exited) = &self.exited {
+            // Read after the span closed so the next stage never starts before this one ends.
+            *exited.lock() = self.profiler.now();
         }
         Ok(())
     }
@@ -280,10 +341,27 @@ impl Trace {
                     || "task exit".into(),
                     |s| format!("{}:{}:{}", s.file, s.line, s.column),
                 );
+                let cover = covering_span(
+                    self,
+                    span,
+                    span.stats.max_check_gap_start,
+                    span.stats.max_check_gap,
+                );
+                let covered =
+                    cover.is_some_and(|c| c.stats.max_check_gap <= options.stop_gap_target);
                 findings.push(Finding {
                     kind: Kind::StopGap,
-                    evidence: format!("task {:?}: {:.2} ms without a check before {ending}", span.task, ms(span.stats.max_check_gap)),
-                    advice: "Add a cheap check() in the long-running section; keep the stop-only cadence independent of reporting.".into(),
+                    evidence: format!(
+                        "task {:?}: {:.2} ms without a check before {ending}{}",
+                        span.task,
+                        ms(span.stats.max_check_gap),
+                        cover_note(cover)
+                    ),
+                    advice: if covered {
+                        "This task's own checkpoints are sparse here, but the other task above checked at the target cadence throughout the interval. If it is the work inside this stage (for example an encoder holding its own Stop), cancellation is already covered and this is a measurement seam, not a latency problem. Otherwise add a cheap check() in the long-running section.".into()
+                    } else {
+                        "Add a cheap check() in the long-running section; keep the stop-only cadence independent of reporting.".into()
+                    },
                     sample_code: None,
                 });
             }
@@ -291,14 +369,27 @@ impl Trace {
                 && let Some(gap) = &span.stats.max_report_gap
                 && gap.duration > options.report_gap_target
             {
+                let own = gap.checks > 0 && gap.max_check_gap <= options.stop_gap_target;
+                let cover = if own {
+                    None
+                } else {
+                    covering_span(self, span, gap.start, gap.duration)
+                };
+                let covered =
+                    cover.is_some_and(|c| c.stats.max_check_gap <= options.stop_gap_target);
                 findings.push(Finding {
                     kind: Kind::ReportGap,
                     evidence: format!(
-                        "task {:?}: {:.2} ms between {} and {}",
+                        "task {:?}: {:.2} ms between {} and {}; stop checks inside it: {}, longest stop gap {:.2} ms{}",
                         span.task, ms(gap.duration),
-                        location(gap.from, "task entry"), location(gap.to, "task exit")
+                        location(gap.from, "task entry"), location(gap.to, "task exit"),
+                        gap.checks, ms(gap.max_check_gap), cover_note(cover)
                     ),
-                    advice: "Consider reporting completed units inside this interval. Use step(n) when the value also checks cancellation; visible UI smoothness still depends on the consumer's polling cadence.".into(),
+                    advice: if own || covered {
+                        "Cancellation is checked at the target cadence inside this interval, so this is a progress-granularity seam rather than missing cancellation checks; more stop checks would not help. Finer progress needs a smaller reportable unit: sub-phases, an Estimated total, or a report from inside the long operation. Visible UI smoothness also depends on the consumer's polling cadence.".into()
+                    } else {
+                        "No stop check at the target cadence was recorded inside this interval either. Consider reporting completed units and checking cancellation here; step(n) does both.".into()
+                    },
                     sample_code: None,
                 });
             }
@@ -359,6 +450,45 @@ impl Trace {
         }
         findings
     }
+}
+
+/// Another work span that ran across nearly all of `[start, start + len]` and
+/// recorded checks, such as an encoder's own `Stop` instrumented from the same
+/// profiler. Checks happen at that task's cadence, not necessarily this task's.
+fn covering_span<'a>(
+    trace: &'a Trace,
+    owner: &SpanRecord,
+    start: Duration,
+    len: Duration,
+) -> Option<&'a SpanRecord> {
+    if len.is_zero() {
+        return None;
+    }
+    let end = start.saturating_add(len);
+    trace
+        .spans
+        .iter()
+        .filter(|s| {
+            s.id != owner.id
+                && s.kind == SpanKind::Work
+                && s.stats.checks > 0
+                && !s.stats.overflowed
+                && s.stats.clock_regressions == 0
+        })
+        .map(|s| (s, s.end.min(end).saturating_sub(s.start.max(start))))
+        .filter(|(_, overlap)| overlap.as_nanos() * 10 >= len.as_nanos() * 9)
+        .min_by_key(|(s, _)| s.stats.max_check_gap)
+        .map(|(s, _)| s)
+}
+fn cover_note(cover: Option<&SpanRecord>) -> String {
+    cover.map_or_else(String::new, |c| {
+        format!(
+            "; task {:?} also ran across it with {} checks (longest gap {:.2} ms over its whole run)",
+            c.task,
+            c.stats.checks,
+            ms(c.stats.max_check_gap)
+        )
+    })
 }
 
 struct CallbackGroup<'a> {
@@ -444,6 +574,46 @@ fn phase_spec_code(child: &Snapshot, weight: u64) -> String {
     code
 }
 
+/// Whole-percent weights summing to 100 with every weight positive
+/// (`PhaseSpec` rejects zero), distributing rounding by largest remainder.
+fn percent_weights(shares: &[f64]) -> Vec<u64> {
+    let mut weights: Vec<u64> = shares
+        .iter()
+        .map(|share| (share * 100.0).floor().max(1.0) as u64)
+        .collect();
+    let mut assigned = weights.iter().sum::<u64>();
+    let mut order: Vec<usize> = (0..weights.len()).collect();
+    order.sort_unstable_by(|&a, &b| {
+        (shares[b] * 100.0 - (shares[b] * 100.0).floor())
+            .total_cmp(&(shares[a] * 100.0 - (shares[a] * 100.0).floor()))
+    });
+    while assigned < 100 {
+        for &index in &order {
+            if assigned == 100 {
+                break;
+            }
+            weights[index] += 1;
+            assigned += 1;
+        }
+    }
+    while assigned > 100 {
+        let before = assigned;
+        for &index in order.iter().rev() {
+            if assigned == 100 {
+                break;
+            }
+            if weights[index] > 1 {
+                weights[index] -= 1;
+                assigned -= 1;
+            }
+        }
+        if assigned == before {
+            break; // More than 100 stages of weight 1; leave them positive.
+        }
+    }
+    weights
+}
+
 fn stage_findings(
     trace: &Trace,
     parent: &Snapshot,
@@ -497,45 +667,62 @@ fn stage_findings(
                     .iter()
                     .map(|d| d.as_secs_f64() / total.as_secs_f64())
                     .collect();
-                let biggest_difference = parent
+                let declared: Vec<f64> = parent
                     .children
                     .iter()
-                    .zip(&shares)
-                    .map(|(child, share)| (child.weight as f64 / weight_sum as f64 - share).abs())
+                    .map(|child| child.weight as f64 / weight_sum as f64)
+                    .collect();
+                // A stage this small is dominated by clock and scheduling noise
+                // and may be input-dependent (a flush that is trivial for this
+                // input). It keeps its declared weight instead of being
+                // calibrated to a near-zero share, unless the plan gave it
+                // most of the bar, which a negligible stage cannot justify.
+                let frozen: Vec<bool> = shares
+                    .iter()
+                    .zip(&declared)
+                    .map(|(share, planned)| {
+                        *share < options.negligible_stage_share && *planned <= 0.5
+                    })
+                    .collect();
+                let frozen_mass: f64 = declared
+                    .iter()
+                    .zip(&frozen)
+                    .filter_map(|(planned, frozen)| frozen.then_some(*planned))
+                    .sum();
+                let free_measured: f64 = shares
+                    .iter()
+                    .zip(&frozen)
+                    .filter_map(|(share, frozen)| (!frozen).then_some(*share))
+                    .sum();
+                let candidate: Vec<f64> = (0..shares.len())
+                    .map(|i| {
+                        if frozen[i] {
+                            declared[i]
+                        } else {
+                            (1.0 - frozen_mass) * shares[i] / free_measured
+                        }
+                    })
+                    .collect();
+                let biggest_difference = (0..shares.len())
+                    .filter(|i| !frozen[*i])
+                    .map(|i| (declared[i] - candidate[i]).abs())
                     .fold(0.0_f64, f64::max);
-                if biggest_difference >= options.weight_difference {
-                    // Round measured percentages while keeping every weight
-                    // positive (PhaseSpec rejects zero).
-                    let mut weights: Vec<u64> = shares
+                if free_measured > 0.0 && biggest_difference >= options.weight_difference {
+                    let weights = percent_weights(&candidate);
+                    let held: Vec<_> = parent
+                        .children
                         .iter()
-                        .map(|share| (share * 100.0).floor().max(1.0) as u64)
+                        .zip(&frozen)
+                        .filter_map(|(child, frozen)| frozen.then_some(child.name.as_str()))
                         .collect();
-                    let mut assigned = weights.iter().sum::<u64>();
-                    let mut order: Vec<usize> = (0..weights.len()).collect();
-                    order.sort_unstable_by(|&a, &b| {
-                        (shares[b] * 100.0 - (shares[b] * 100.0).floor())
-                            .total_cmp(&(shares[a] * 100.0 - (shares[a] * 100.0).floor()))
-                    });
-                    while assigned < 100 {
-                        for &index in &order {
-                            if assigned == 100 {
-                                break;
-                            }
-                            weights[index] += 1;
-                            assigned += 1;
-                        }
-                    }
-                    while assigned > 100 {
-                        for &index in order.iter().rev() {
-                            if assigned == 100 {
-                                break;
-                            }
-                            if weights[index] > 1 {
-                                weights[index] -= 1;
-                                assigned -= 1;
-                            }
-                        }
-                    }
+                    let note = if held.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; {held:?} measured under {:.1}% of the run, too small to calibrate, so it keeps its declared share",
+                            options.negligible_stage_share * 100.0
+                        )
+                    };
                     let mut code = String::from("[\n");
                     for (child, weight) in parent.children.iter().zip(&weights) {
                         code.push_str(&format!("    {},\n", phase_spec_code(child, *weight)));
@@ -543,7 +730,7 @@ fn stage_findings(
                     code.push(']');
                     findings.push(Finding {
                         kind: Kind::StageWeights,
-                        evidence: format!("sequential stage {:?}: planned {:?}; measured wall-time candidate {:?} from one run",
+                        evidence: format!("sequential stage {:?}: planned {:?}; measured wall-time candidate {:?} from one run{note}",
                             parent.name, parent.children.iter().map(|c| c.weight).collect::<Vec<_>>(), weights),
                         advice: "Repeat across representative inputs before changing weights. Wall time includes waits and may shift with hardware, scheduling, or configuration.".into(),
                         sample_code: Some(code),

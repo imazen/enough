@@ -372,3 +372,265 @@ fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
             .contains("PhaseSpec::new(\"middle\", 70, Total::Unknown)")
     );
 }
+
+fn ms(n: u64) -> Duration {
+    Duration::from_millis(n)
+}
+
+/// Run sequential `(name, weight, end_ms)` stages whose only checkpoint is a
+/// `step` at the end, as a library that works first and reports afterwards does.
+fn staged(stages: &[(&'static str, u64, u64)]) -> how_far_along::profile::Trace {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 16);
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let observer = pulse.observer();
+    let measured = DiagnosticPulse::new(&pulse, observer.clone(), &profiler);
+    let specs: Vec<_> = stages
+        .iter()
+        .map(|(name, weight, _)| PhaseSpec::new(name, *weight, Total::Exact(1)))
+        .collect();
+    let mut steps = Steps::new(&measured, &specs).unwrap();
+    for (_, _, end) in stages {
+        steps
+            .run_stoppable(|stage| {
+                clock.set(*end);
+                stage.step(1)
+            })
+            .unwrap();
+    }
+    steps.finish().unwrap();
+    profiler.snapshot().with_progress(observer.snapshot())
+}
+
+#[test]
+fn a_sequential_stage_is_timed_from_the_previous_stage_not_its_first_checkpoint() {
+    // "flush" does 40 ms of work and only then calls step(1): its first
+    // checkpoint is at 130 ms, but the stage was entered at 90 ms.
+    let trace = staged(&[("frames", 9, 90), ("flush", 1, 130)]);
+    assert_eq!(trace.spans[0].start, ms(0));
+    assert_eq!(trace.spans[1].start, ms(90));
+    assert_eq!(trace.spans[1].elapsed(), ms(40));
+    let findings = trace.diagnose(&Options::default());
+    let gap = findings
+        .iter()
+        .find(|f| f.kind == Kind::StopGap && f.evidence.contains("flush"))
+        .expect("pre-checkpoint work is a stop gap");
+    assert!(gap.evidence.contains("40.00 ms"));
+}
+
+#[test]
+fn a_succeeded_leaf_stage_without_any_checkpoint_still_has_a_span() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 4);
+    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
+    let measured = DiagnosticPulse::new(&pulse, pulse.observer(), &profiler);
+    let mut steps = Steps::new(&measured, &[PhaseSpec::new("opaque", 1, Total::Exact(1))]).unwrap();
+    steps
+        .run_stoppable(|_| {
+            clock.set(25);
+            Ok::<_, StopReason>(())
+        })
+        .unwrap();
+    steps.finish().unwrap();
+    let trace = profiler.snapshot();
+    assert_eq!(trace.spans.len(), 1);
+    assert_eq!(trace.spans[0].elapsed(), ms(25));
+    assert!(
+        trace
+            .diagnose(&Options::default())
+            .iter()
+            .any(|f| f.kind == Kind::StopGap && f.evidence.contains("25.00 ms"))
+    );
+}
+
+#[test]
+fn a_near_zero_stage_keeps_its_declared_weight_instead_of_driving_advice() {
+    let mut options = Options::default();
+    options.weight_difference = 0.05;
+    // flush is 0.1% of the run: the old 99/1 candidate was noise-driven.
+    let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1001)]);
+    assert_eq!(trace.spans[1].elapsed(), ms(1));
+    assert!(
+        !trace
+            .diagnose(&options)
+            .iter()
+            .any(|f| f.kind == Kind::StageWeights)
+    );
+    // Disabling the floor restores the noise-driven candidate.
+    options.negligible_stage_share = 0.0;
+    assert!(
+        trace
+            .diagnose(&options)
+            .iter()
+            .any(|f| f.kind == Kind::StageWeights)
+    );
+    options.negligible_stage_share = Options::default().negligible_stage_share;
+    // The same stage, measured at a calibratable share, is still advised on.
+    let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1500)]);
+    assert!(
+        trace
+            .diagnose(&options)
+            .iter()
+            .any(|f| f.kind == Kind::StageWeights)
+    );
+}
+
+#[test]
+fn other_stages_are_recalibrated_around_a_held_negligible_stage() {
+    let trace = staged(&[("a", 40, 100), ("b", 50, 1090), ("c", 10, 1100)]);
+    let finding = trace
+        .diagnose(&Options::default())
+        .into_iter()
+        .find(|f| f.kind == Kind::StageWeights)
+        .unwrap();
+    assert!(finding.evidence.contains("keeps its declared share"));
+    let code = finding.sample_code.unwrap();
+    assert!(code.contains("PhaseSpec::new(\"c\", 10, Total::Exact(1))"));
+    assert!(code.contains("PhaseSpec::new(\"b\", 82, Total::Exact(1))"));
+}
+
+#[test]
+fn a_negligible_stage_that_owns_most_of_the_bar_is_still_reported() {
+    let trace = staged(&[("work", 10, 1000), ("tail", 90, 1001)]);
+    assert!(
+        trace
+            .diagnose(&Options::default())
+            .iter()
+            .any(|f| f.kind == Kind::StageWeights)
+    );
+}
+
+#[test]
+fn a_report_gap_with_frequent_checks_inside_is_a_progress_seam_not_missing_cancellation() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 2);
+    let span = profiler.span(0, "frame", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    for at in (5..=85).step_by(5) {
+        clock.set(at);
+        work.check().unwrap();
+    }
+    work.advance(1);
+    span.finish(how_far_along::Outcome::Succeeded);
+    let findings = profiler.snapshot().diagnose(&Options::default());
+    let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
+    assert!(report.evidence.contains("85.00 ms"));
+    assert!(report.evidence.contains("stop checks inside it: 17"));
+    assert!(report.evidence.contains("longest stop gap 5.00 ms"));
+    assert!(report.advice.contains("progress-granularity seam"));
+    assert!(!findings.iter().any(|f| f.kind == Kind::StopGap));
+}
+
+#[test]
+fn a_report_gap_with_no_checks_inside_is_also_a_cancellation_gap() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 2);
+    let span = profiler.span(0, "frame", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    clock.set(85);
+    work.advance(1);
+    span.finish(how_far_along::Outcome::Succeeded);
+    let findings = profiler.snapshot().diagnose(&Options::default());
+    let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
+    assert!(report.evidence.contains("stop checks inside it: 0"));
+    assert!(report.advice.contains("No stop check"));
+    assert!(findings.iter().any(|f| f.kind == Kind::StopGap));
+}
+
+#[test]
+fn checks_recorded_by_a_separate_span_on_the_same_profiler_cover_a_coarse_stage_gap() {
+    // The library encodes a frame with its own 'static Stop, so the progress
+    // pulse never sees those checks. Instrument that Stop from the same profiler.
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 4);
+    let stage = profiler.span(0, "encode frames", SpanKind::Work);
+    let stage_pulse = stage.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    stage_pulse.check().unwrap();
+    clock.set(1);
+    let inner = profiler.span(99, "raw frame encode", SpanKind::Work);
+    let inner_stop = inner.instrument(Unstoppable);
+    for at in (3..=83).step_by(2) {
+        clock.set(at);
+        inner_stop.check().unwrap();
+    }
+    clock.set(84);
+    inner.finish(how_far_along::Outcome::Succeeded);
+    clock.set(85);
+    stage_pulse.advance(1);
+    stage.finish(how_far_along::Outcome::Succeeded);
+    let findings = profiler.snapshot().diagnose(&Options::default());
+    let stop = findings
+        .iter()
+        .find(|f| f.kind == Kind::StopGap && f.evidence.contains("encode frames"))
+        .unwrap();
+    assert!(stop.evidence.contains("raw frame encode"));
+    assert!(stop.advice.contains("already covered"));
+    let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
+    assert!(report.advice.contains("progress-granularity seam"));
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.kind == Kind::StopGap && f.evidence.contains("raw frame encode\": "))
+    );
+}
+
+#[test]
+fn a_task_that_does_not_cover_the_interval_is_not_credited() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 4);
+    let stage = profiler.span(0, "encode frames", SpanKind::Work);
+    let stage_pulse = stage.instrument(Unstoppable);
+    stage_pulse.check().unwrap();
+    let brief = profiler.span(99, "brief", SpanKind::Work);
+    let brief_stop = brief.instrument(Unstoppable);
+    clock.set(2);
+    brief_stop.check().unwrap();
+    brief.finish(how_far_along::Outcome::Succeeded);
+    clock.set(85);
+    stage_pulse.check().unwrap();
+    stage.finish(how_far_along::Outcome::Succeeded);
+    let findings = profiler.snapshot().diagnose(&Options::default());
+    let stop = findings.iter().find(|f| f.kind == Kind::StopGap).unwrap();
+    assert!(!stop.evidence.contains("brief"));
+    assert!(!stop.advice.contains("already covered"));
+}
+
+#[test]
+fn diagnostic_pulse_keeps_checkpoints_visible_over_a_no_op_pulse() {
+    let profiler = Profiler::new(ManualClock::default(), 1);
+    let phase = Phase::new("job", Total::Unknown);
+    let measured = DiagnosticPulse::new(&how_far::NoPulse, phase.observer(), &profiler);
+    assert!(measured.may_stop());
+    assert!(measured.may_report());
+}
+
+#[test]
+fn a_stop_adapter_keeps_the_library_call_site() {
+    // A library that owns a `'static` Stop from another trait version needs a
+    // small adapter around an Instrumented value. Stop::check is declared
+    // #[track_caller], so the adapter needs no attribute of its own.
+    struct Adapter(how_far_along::profile::Instrumented<Unstoppable>);
+    impl Stop for Adapter {
+        fn check(&self) -> Result<(), StopReason> {
+            self.0.check()
+        }
+    }
+    fn library_loop(stop: &dyn Stop) -> (u32, u32) {
+        let first = line!() + 1;
+        stop.check().unwrap();
+        let second = line!() + 1;
+        stop.check().unwrap();
+        (first, second)
+    }
+    let profiler = Profiler::new(ManualClock::default(), 1);
+    let span = profiler.span(0, "adapter", SpanKind::Work);
+    let (first, second) = library_loop(&Adapter(span.instrument(Unstoppable)));
+    span.finish(how_far_along::Outcome::Succeeded);
+    let lines: Vec<_> = profiler.snapshot().spans[0]
+        .stats
+        .sites
+        .iter()
+        .map(|s| s.line)
+        .collect();
+    assert_eq!(lines, [first, second]);
+}

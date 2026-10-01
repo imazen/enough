@@ -121,8 +121,14 @@ impl SourceSite {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReportGap {
+    /// Start of the interval in the profiler's epoch.
+    pub start: Duration,
     /// Elapsed time between the endpoints.
     pub duration: Duration,
+    /// Stop checks recorded by this task inside the interval.
+    pub checks: u64,
+    /// Longest stop-check gap inside the interval, including both boundaries.
+    pub max_check_gap: Duration,
     /// Previous report site, or span entry.
     pub from: Option<SourceSite>,
     /// Next report site, or span exit.
@@ -143,6 +149,9 @@ pub struct Stats {
     pub overflowed: bool,
     /// Entry-to-first-check, check-to-check, or last-check-to-exit maximum.
     pub max_check_gap: Duration,
+    /// Start of the longest check gap, in the profiler's epoch. Collected only with `diagnostics`.
+    #[cfg(feature = "diagnostics")]
+    pub max_check_gap_start: Duration,
     /// Longest entry/report/exit gap. Collected only with `diagnostics` enabled.
     #[cfg(feature = "diagnostics")]
     pub max_report_gap: Option<ReportGap>,
@@ -261,7 +270,24 @@ impl Profiler {
     }
     /// Begin an independent task span. Use one for each asymmetric task or sampled chunk.
     pub fn span(&self, node: usize, task: impl Into<String>, kind: SpanKind) -> Span {
-        self.start_span(None, node, task.into(), kind)
+        self.start_span(None, node, task.into(), kind, None)
+    }
+    /// Current offset in this profiler's clock epoch.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn now(&self) -> Duration {
+        self.inner.clock.now()
+    }
+    /// Begin a span whose entry is known to precede its first checkpoint, for
+    /// example a sequential stage entered when the previous stage finished.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn span_from(
+        &self,
+        node: usize,
+        task: impl Into<String>,
+        kind: SpanKind,
+        start: Duration,
+    ) -> Span {
+        self.start_span(None, node, task.into(), kind, Some(start))
     }
     /// Time one subscriber invocation, including any lazily built snapshot.
     /// A panic records an abandoned callback span and then resumes unwinding.
@@ -278,13 +304,21 @@ impl Profiler {
         result
     }
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
-    fn start_span(&self, parent: Option<usize>, node: usize, task: String, kind: SpanKind) -> Span {
+    fn start_span(
+        &self,
+        parent: Option<usize>,
+        node: usize,
+        task: String,
+        kind: SpanKind,
+        entered: Option<Duration>,
+    ) -> Span {
         let id = self
             .inner
             .next_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .expect("span identifiers exhausted");
-        let start = self.inner.clock.now();
+        let now = self.inner.clock.now();
+        let start = entered.map_or(now, |at| at.min(now));
         self.inner.active.fetch_add(1, Ordering::Relaxed);
         Span {
             finished: false,
@@ -303,6 +337,8 @@ impl Profiler {
                     last_report: start,
                     #[cfg(feature = "diagnostics")]
                     last_report_site: None,
+                    #[cfg(feature = "diagnostics")]
+                    window: Window::new(start),
                     closed: false,
                 }),
             }),
@@ -353,7 +389,39 @@ struct SpanState {
     last_report: Duration,
     #[cfg(feature = "diagnostics")]
     last_report_site: Option<SourceSite>,
+    /// Stop-check evidence since the previous report, to tell a progress-granularity
+    /// seam from missing cancellation checks.
+    #[cfg(feature = "diagnostics")]
+    window: Window,
     closed: bool,
+}
+#[cfg(feature = "diagnostics")]
+struct Window {
+    last_check: Duration,
+    checks: u64,
+    max_gap: Duration,
+}
+#[cfg(feature = "diagnostics")]
+impl Window {
+    fn new(at: Duration) -> Self {
+        Self {
+            last_check: at,
+            checks: 0,
+            max_gap: Duration::ZERO,
+        }
+    }
+    fn check(&mut self, at: Duration) {
+        self.max_gap = self.max_gap.max(at.saturating_sub(self.last_check));
+        self.last_check = self.last_check.max(at);
+        self.checks = self.checks.saturating_add(1);
+    }
+    /// Close the interval ending at `end`, then begin the next one there.
+    fn close(&mut self, end: Duration) -> (u64, Duration) {
+        let gap = self.max_gap.max(end.saturating_sub(self.last_check));
+        let checks = self.checks;
+        *self = Self::new(end);
+        (checks, gap)
+    }
 }
 struct SpanInner {
     profiler: Profiler,
@@ -378,9 +446,14 @@ impl SpanInner {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
+            #[cfg(feature = "diagnostics")]
+            if gap > state.stats.max_check_gap {
+                state.stats.max_check_gap_start = state.last_check;
+            }
             state.stats.max_check_gap = state.stats.max_check_gap.max(gap);
             #[cfg(feature = "diagnostics")]
             {
+                let (window_checks, window_gap) = state.window.close(end);
                 let report_gap = end.checked_sub(state.last_report).unwrap_or_else(|| {
                     state.stats.clock_regressions += 1;
                     Duration::ZERO
@@ -392,7 +465,10 @@ impl SpanInner {
                     .is_none_or(|old| report_gap > old.duration)
                 {
                     state.stats.max_report_gap = Some(ReportGap {
+                        start: state.last_report,
                         duration: report_gap,
+                        checks: window_checks,
+                        max_check_gap: window_gap,
                         from: state.last_report_site,
                         to: None,
                     });
@@ -436,7 +512,7 @@ impl Span {
     pub fn child(&self, task: impl Into<String>, kind: SpanKind) -> Span {
         self.inner
             .profiler
-            .start_span(Some(self.id()), self.inner.node, task.into(), kind)
+            .start_span(Some(self.id()), self.inner.node, task.into(), kind, None)
     }
     /// Attach independent check/report instrumentation to this task's value.
     /// A shared aggregate meter cannot reveal each worker's unpolled tail;
@@ -517,6 +593,13 @@ impl<T: Stop> Stop for Instrumented<T> {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
+            #[cfg(feature = "diagnostics")]
+            {
+                if gap > state.stats.max_check_gap {
+                    state.stats.max_check_gap_start = state.last_check;
+                }
+                state.window.check(start);
+            }
             state.last_check = start;
             let elapsed = end.checked_sub(start).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
@@ -555,6 +638,7 @@ impl<T: Report> Report for Instrumented<T> {
         #[cfg(feature = "diagnostics")]
         {
             let at = SourceSite::from_location(Location::caller());
+            let (window_checks, window_gap) = state.window.close(now);
             let gap = now.checked_sub(state.last_report).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
@@ -566,7 +650,10 @@ impl<T: Report> Report for Instrumented<T> {
                 .is_none_or(|old| gap > old.duration)
             {
                 state.stats.max_report_gap = Some(ReportGap {
+                    start: state.last_report,
                     duration: gap,
+                    checks: window_checks,
+                    max_check_gap: window_gap,
                     from: state.last_report_site,
                     to: Some(at),
                 });

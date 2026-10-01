@@ -12,7 +12,7 @@
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)        17
 #   inherent methods                           25
-#   struct fields                              61
+#   struct fields                              66
 #   enum variants                              13
 #   trait roster entries (type × trait)        47
 #   auto-trait-complete types                  12
@@ -20,10 +20,10 @@
 #
 # per-module pub lines:
 #   (root)                            2
-#   diagnostics                      26
-#   profile                          90
+#   diagnostics                      27
+#   profile                          94
 
-## items (118 lines)
+## items (123 lines)
 
 pub mod diagnostics
 #[non_exhaustive] pub enum diagnostics::Kind
@@ -48,6 +48,7 @@ pub diagnostics::Options::callback_interval_target: core::time::Duration
 pub diagnostics::Options::check_calls_per_second: f64
 pub diagnostics::Options::minimum_calls: u64
 pub diagnostics::Options::minimum_stage_wall: core::time::Duration
+pub diagnostics::Options::negligible_stage_share: f64
 pub diagnostics::Options::report_calls_per_second: f64
 pub diagnostics::Options::report_gap_target: core::time::Duration
 pub diagnostics::Options::stop_gap_target: core::time::Duration
@@ -77,8 +78,11 @@ pub fn profile::Profiler::snapshot(&self) -> profile::Trace
 pub fn profile::Profiler::span(&self, usize, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
 pub fn profile::Profiler::try_snapshot(&self) -> core::option::Option<profile::Trace>
 #[non_exhaustive] pub struct profile::ReportGap
+pub profile::ReportGap::checks: u64
 pub profile::ReportGap::duration: core::time::Duration
 pub profile::ReportGap::from: core::option::Option<profile::SourceSite>
+pub profile::ReportGap::max_check_gap: core::time::Duration
+pub profile::ReportGap::start: core::time::Duration
 pub profile::ReportGap::to: core::option::Option<profile::SourceSite>
 #[non_exhaustive] pub struct profile::SiteStats
 pub profile::SiteStats::checks: u64
@@ -115,6 +119,7 @@ pub profile::Stats::check_time: core::time::Duration
 pub profile::Stats::checks: u64
 pub profile::Stats::clock_regressions: u64
 pub profile::Stats::max_check_gap: core::time::Duration
+pub profile::Stats::max_check_gap_start: core::time::Duration
 pub profile::Stats::max_report_gap: core::option::Option<profile::ReportGap>
 pub profile::Stats::overflowed: bool
 pub profile::Stats::reports: u64

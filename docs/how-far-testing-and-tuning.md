@@ -35,18 +35,53 @@ for finding in trace.diagnose(&Options::default()) {
 }
 ```
 
-`DiagnosticPulse` makes a span for each child phase when it first checks or
-reports, and finishes it when the phase finishes. It can identify the two
-source lines around the longest reporting gap. For a phase shared by several
-workers, this span is an aggregate: one busy worker can hide another worker's
-long tail. Add a separate `profiler.span(node_id, "chunk", SpanKind::Work)` and
-`span.instrument(stop_or_progress)` inside each logical worker when that
-distinction matters. Finish spans after their tasks finish and join workers
-before taking the final snapshot. Set the profiler capacity high enough to
-retain every relevant span; incomplete coverage is reported. A phase with no
-check or report never starts an automatic span, and time before its first
-checkpoint is unknown. Wrap that work explicitly when diagnosing an opaque
-startup section.
+`DiagnosticPulse` makes a span for each child phase. A stage of a sequential
+split (`Steps`) is timed from when the previous stage finished, or from the plan
+for the first stage, and gets a span even if it never checks or reports, so a
+stage that works first and calls `step` afterwards is not measured as instant.
+Other phases start at their first check or report; time before it is unknown.
+Time between stages counts toward the next stage. For a phase shared by
+several workers, the span is an aggregate: one busy worker can hide another
+worker's long tail. Add a separate `profiler.span(node_id, "chunk",
+SpanKind::Work)` and `span.instrument(stop_or_progress)` inside each logical
+worker when that distinction matters. Finish spans after their tasks finish and
+join workers before taking the final snapshot. Set the profiler capacity high
+enough to retain every relevant span; incomplete coverage is reported.
+`DiagnosticPulse` reports `may_stop()`/`may_report()` as `true` even over
+`NoPulse`, so a library that skips checkpoints behind them still shows them.
+
+## Is a slow gap a progress seam or missing cancellation checks?
+
+They are separate measurements. A `ReportGap` says how long progress stayed
+silent; it also says how many stop checks the same task made inside that
+interval and the longest stop gap there. If checks are frequent, the finding
+calls it a progress-granularity seam: a unit (a frame, a tile) is the smallest
+thing the library reports, and more checks would not help. If no checks fall
+inside, the same interval is a cancellation gap too, and a `StopGap` finding
+names the line it ends at.
+
+A library often holds its own `'static` stop token (for example an encoder
+built with `with_stop`), so a borrowed `&dyn Pulse` never sees checks made deep
+inside one unit. Then the stage looks sparse even though the encoder checks
+often. Instrument that token from the **same profiler**:
+
+```rust
+let inner = profiler.span(node_id, "raw frame encode", SpanKind::Work);
+let encoder = Encoder::new().with_stop(Adapter(inner.instrument(Unstoppable)));
+// ... encode one frame, then:
+inner.finish(Outcome::Succeeded);
+```
+
+A work span that ran across at least 90% of a gap and made checks is named in
+the `StopGap`/`ReportGap` evidence with its checks and longest gap, and the
+advice says cancellation there may already be covered. A separate `Profiler`
+has its own clock epoch and cannot be correlated. `Adapter` bridges a `Stop`
+trait from a different `enough` version to `how_far::Stop` in a few lines:
+`fn check(&self) -> Result<(), E> { how_far::Stop::check(&self.0).map_err(..) }`.
+`Stop::check` is `#[track_caller]`, so the adapter keeps the library's call
+sites without an attribute of its own. Time before a library's first
+checkpoint cannot be seen by an inner span either; cover opaque setup with a
+span of its own.
 
 The same profiler works for a library using only `enough::Stop`. In a test,
 create a work span, pass `span.instrument(stop)` to the library, finish the
@@ -82,9 +117,14 @@ when diagnosing missing polls.
 When a completed sequential plan has instrumented spans for every child,
 diagnostics compares their wall times with the declared relative weights and
 prints a `PhaseSpec::new(...)` sketch. Treat it as a candidate from this run.
-Repeat across representative inputs, hardware and configurations before
-changing the library's stable phase weights. Fork/join, incomplete traces,
-failed stages and overlapping spans do not produce weight advice.
+A stage measured under `Options::negligible_stage_share` (2% by default) is too
+small to calibrate from one run, and may be input-dependent (a flush that is
+trivial for this input but not for another). It keeps its declared weight, the
+other stages are rescaled around it, and it cannot trigger advice by itself.
+A negligible stage that the plan gave more than half the bar is still
+reported. Repeat across representative inputs, hardware and configurations
+before changing the library's stable phase weights. Fork/join, incomplete
+traces, failed stages and overlapping spans do not produce weight advice.
 
 Run the focused checks with:
 
