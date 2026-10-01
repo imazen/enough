@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: howfar.txt 73 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
+# files: howfar.txt 74 lines (supported surface) | howfar.features.txt 0 added (features: none) | howfar.internal.txt 11 lines (11 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,7 +14,7 @@
 #   pub types (struct/enum/trait/alias)        11
 #   pub consts/statics                          3
 #   free functions                              2
-#   inherent methods                            9
+#   inherent methods                           10
 #   struct fields                               6
 #   enum variants                              23
 #   re-exports                                  2
@@ -23,9 +23,9 @@
 #   auto-trait exceptions                       2
 #
 # per-module pub lines:
-#   (root)                           57
+#   (root)                           58
 
-## items (57 lines)
+## items (58 lines)
 
 pub mod howfar
 pub use Stop
@@ -74,6 +74,7 @@ pub struct Steps<'a>
 pub fn Steps<'a>::finish(self) -> core::result::Result<(), PlanError>
 pub fn Steps<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
 pub fn Steps<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Steps<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Steps<'a>::run_nested_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
 pub fn Steps<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub trait Pulse: enough::Stop + Report

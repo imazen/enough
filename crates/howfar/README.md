@@ -43,7 +43,9 @@ process(&[1, 2, 3], &howfar::NoPulse).unwrap();
 `Steps` runs declared leaf phases in order. It marks a successful phase finished;
 on a stop request, it marks that phase cancelled and later phases skipped.
 Use `run` instead of `run_stoppable` when an error means failure rather than
-cancellation. `RunError<E>` separates an operation error from a plan error,
+cancellation. When both are possible, `run_classified` marks only errors the
+library identifies as stops as cancelled; other errors mark the stage failed.
+`RunError<E>` separates an operation error from a plan error,
 so a library can use a type alias for its public error. A panic leaves work
 abandoned. `NoPulse` is the zero-sized, non-cancelling choice.
 

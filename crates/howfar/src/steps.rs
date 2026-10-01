@@ -85,6 +85,27 @@ impl<'a> Steps<'a> {
         self.run_with(|_| Outcome::Cancelled, work)
     }
 
+    /// Run the next stage when its operation can either stop cooperatively or
+    /// fail for another reason. Return `true` from `is_cancelled` only for a
+    /// stop error; other errors mark the stage `Failed`. Later stages are
+    /// skipped in either case. The classifier runs only when `work` fails.
+    pub fn run_classified<T, E>(
+        &mut self,
+        is_cancelled: impl FnOnce(&E) -> bool,
+        work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
+    ) -> Result<T, RunError<E>> {
+        self.run_with(
+            |error| {
+                if is_cancelled(error) {
+                    Outcome::Cancelled
+                } else {
+                    Outcome::Failed
+                }
+            },
+            work,
+        )
+    }
+
     /// Run a stage that may itself plan and join child work. The stage should
     /// finish its children, then let `Steps` finish the stage itself. A nested
     /// operation error cancels this and later stages; a nested plan error

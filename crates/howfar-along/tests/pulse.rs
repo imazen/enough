@@ -259,6 +259,49 @@ fn steps_finish_success_and_classify_stop_or_work_failure() {
 }
 
 #[test]
+fn mixed_stage_errors_keep_cancellation_distinct_from_codec_failure() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum WorkError {
+        Stopped,
+        InvalidFrame,
+    }
+
+    for (error, expected) in [
+        (WorkError::Stopped, Outcome::Cancelled),
+        (WorkError::InvalidFrame, Outcome::Failed),
+    ] {
+        let pulse = PulseTree::new(Phase::new("encode", Total::Unknown), &Unstoppable);
+        let observer = pulse.observer();
+        let mut stages = Steps::new(
+            &pulse,
+            &[
+                PhaseSpec::new("frames", 9, Total::Exact(2)),
+                PhaseSpec::new("flush", 1, Total::Exact(1)),
+            ],
+        )
+        .unwrap();
+        assert!(matches!(
+            stages.run_classified(
+                |error| matches!(error, WorkError::Stopped),
+                |stage| {
+                    stage.advance(1);
+                    Err::<(), _>(error)
+                }
+            ),
+            Err(RunError::Work(found)) if found == error
+        ));
+        let snapshot = observer.snapshot();
+        assert_eq!(snapshot.status, Status::Finished(expected));
+        assert_eq!(snapshot.children[0].completed, 1);
+        assert_eq!(snapshot.children[0].status, Status::Finished(expected));
+        assert_eq!(
+            snapshot.children[1].status,
+            Status::Finished(Outcome::Skipped)
+        );
+    }
+}
+
+#[test]
 fn unfinished_steps_cannot_mark_a_parent_successful() {
     let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
     let observer = pulse.observer();
