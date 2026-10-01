@@ -188,6 +188,9 @@ jobs:
       - name: Check semver (almost-enough)
         run: cargo semver-checks -p almost-enough
 
+      # how-far and how-far-along have no published baseline yet; add
+      # `cargo semver-checks -p how-far -p how-far-along` after their first release.
+
   # ==========================================================================
   # Miri — check unsafe code soundness (enough-ffi)
   # ==========================================================================

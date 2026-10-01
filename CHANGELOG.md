@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+<!-- Breaks that will ship together in one leading-digit bump. None queued. -->
+
 ### Added
 
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the

@@ -52,7 +52,7 @@ pub PlanError::Overflow
 pub PlanError::UnfinishedChildren
 pub PlanError::UnsuccessfulChildren
 pub PlanError::ZeroParallelism
-pub enum RunError<E>
+#[non_exhaustive] pub enum RunError<E>
 pub RunError::Plan(PlanError)
 pub RunError::Work(E)
 #[non_exhaustive] pub enum Total

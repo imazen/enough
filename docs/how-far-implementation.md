@@ -22,6 +22,38 @@ Both new crates support Rust 1.88; enough/almost-enough remain on Rust 1.85.
 Existing cancellation APIs are unchanged. No downstream production codec is
 ported here: it must report at its actual completed-work sites.
 
+## API evolution
+
+Rules that keep `how-far` and `how-far-along` additive after release:
+
+- **Data types** (`Options`, `Finding`, `Snapshot`, `Trace`, `SpanRecord`,
+  `Stats`, ...) are `#[non_exhaustive]` with public, read-mostly fields. Fields
+  may be added; none is renamed, retyped or removed within a compatible
+  release. Build `Options` and `PhaseSpec` through `Default`/constructors.
+  Public fields hold plain values (`Duration`, `u64`, `String`), not types we
+  might swap. When a representation may need to change, expose a method and
+  keep the field private.
+- **Enums** (`Kind`, `Outcome`, `Total`, `Execution`, `PlanError`, `RunError`,
+  ...) are `#[non_exhaustive]`. Match what you handle and keep a wildcard arm.
+- **Traits** (`Pulse`, `Clock`, `enough::Stop`, `Report`) stay open because
+  wrappers implement them. New methods get default bodies; a new *required*
+  method is a breaking change.
+- **Features** only add items and fields. A feature never removes or retypes
+  anything, so Cargo's feature unification cannot break a dependent crate.
+- **Finding text** is for people. Only `Kind` is a contract; `evidence`,
+  `advice` and `sample_code` are reworded freely.
+- **JSON** (`Trace::write_json`, `Snapshot::write_json`) gains keys but loses
+  none, and `schema_version` moves only when a key is removed or its meaning
+  changes. Readers must ignore unknown keys.
+- **One copy of the shared traits.** `how-far` re-exports `enough::Stop`, so
+  every crate in a build must resolve to the same `enough`. Keep `enough` tiny
+  and stable; if a breaking release is ever unavoidable, publish it with a
+  semver-trick re-export so the old and new major versions keep the same trait.
+- The `docs/public-api/*.txt` snapshots (`just api-doc`) show every surface
+  change in review. Published crates are checked with `cargo semver-checks`
+  in CI; add `how-far` and `how-far-along` to that job after their first
+  release. Queue any break in `CHANGELOG.md` instead of shipping it alone.
+
 ## Safe synchronization
 
 The previous custom raw-pointer publication primitive has been removed. Metadata
