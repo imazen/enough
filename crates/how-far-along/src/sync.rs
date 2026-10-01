@@ -175,6 +175,12 @@ impl Counter {
     pub(crate) fn overflowed(&self) -> bool {
         self.overflow.load(Ordering::Relaxed)
     }
+    /// Take `source`'s current count and overflow flag.
+    pub(crate) fn copy_from(&self, source: &Counter) {
+        self.value
+            .store(source.value.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.overflow.store(source.overflowed(), Ordering::Relaxed);
+    }
     #[allow(clippy::unnecessary_cast)] // AtomicCount is target-dependent.
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     pub(crate) fn add(&self, n: u64) {

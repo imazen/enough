@@ -52,7 +52,33 @@ struct Metadata {
     revisions: Vec<Total>,
     execution: Execution,
     children: Vec<Arc<Node>>,
+    /// A snapshot taken at the outcome, kept only when the subtree could still
+    /// change afterwards (see [`Phase::seal`]).
     frozen: Option<Snapshot>,
+}
+
+/// Outcomes as stored in [`Node::outcome`]; `UNKNOWN` is an outcome this
+/// version cannot name, which is kept in a frozen snapshot instead.
+const UNKNOWN: u8 = u8::MAX;
+fn encode(outcome: Outcome) -> u8 {
+    match outcome {
+        Outcome::Succeeded => 0,
+        Outcome::Skipped => 1,
+        Outcome::Cancelled => 2,
+        Outcome::Failed => 3,
+        Outcome::Abandoned => 4,
+        _ => UNKNOWN,
+    }
+}
+fn decode(code: u8) -> Option<Outcome> {
+    match code {
+        0 => Some(Outcome::Succeeded),
+        1 => Some(Outcome::Skipped),
+        2 => Some(Outcome::Cancelled),
+        3 => Some(Outcome::Failed),
+        4 => Some(Outcome::Abandoned),
+        _ => None,
+    }
 }
 struct Node {
     id: NodeId,
@@ -63,9 +89,13 @@ struct Node {
     next_id: Arc<AtomicUsize>,
     issued: AtomicBool,
     branch: AtomicBool,
-    // 0=pending, 1=running, 2=terminal. The outcome lives in the frozen snapshot.
+    // 0=pending, 1=running, 2=terminal. `outcome` and `final_count` are
+    // written before the state becomes terminal.
     state: AtomicU8,
+    outcome: AtomicU8,
     completed: Counter,
+    /// The count at the outcome; a report racing with the finish is not shown.
+    final_count: Counter,
     meta: MetadataCell<Metadata>,
 }
 impl Node {
@@ -85,7 +115,9 @@ impl Node {
             issued: AtomicBool::new(false),
             branch: AtomicBool::new(false),
             state: AtomicU8::new(0),
+            outcome: AtomicU8::new(UNKNOWN),
             completed: Counter::new(),
+            final_count: Counter::new(),
             meta: MetadataCell::new(Metadata {
                 units: spec.units.to_string(),
                 total: spec.total,
@@ -101,6 +133,9 @@ impl Node {
             .expect("blocking metadata read succeeds")
     }
     fn snapshot_with(&self, nonblocking: bool) -> Option<Snapshot> {
+        // The state first: a terminal state guarantees the metadata read next
+        // includes any frozen snapshot.
+        let state = self.state.load(Ordering::Acquire);
         let meta = if nonblocking {
             self.meta.try_get()?
         } else {
@@ -109,6 +144,17 @@ impl Node {
         if let Some(frozen) = &meta.frozen {
             return Some(frozen.clone());
         }
+        let (status, counter) = match state {
+            0 => (Status::Pending, &self.completed),
+            1 => (Status::Running, &self.completed),
+            // Without a frozen snapshot, a terminal outcome is always encoded.
+            _ => (
+                Status::Finished(
+                    decode(self.outcome.load(Ordering::Relaxed)).unwrap_or(Outcome::Abandoned),
+                ),
+                &self.final_count,
+            ),
+        };
         let mut result = Snapshot {
             id: self.id,
             parent: self.parent,
@@ -119,26 +165,38 @@ impl Node {
             initial_total: self.initial_total,
             total_revisions: meta.revisions.clone(),
             execution: meta.execution,
-            status: if self.state.load(Ordering::Acquire) == 0 {
-                Status::Pending
-            } else {
-                Status::Running
-            },
-            completed: self.completed.get(),
-            overflowed: self.completed.overflowed(),
+            status,
+            completed: counter.get(),
+            overflowed: counter.overflowed(),
             children: Vec::new(),
         };
         let children = meta.children.clone();
         result.children = Vec::with_capacity(children.len());
         for child in &children {
             let child = child.snapshot_with(nonblocking)?;
-            if child.status != Status::Pending {
+            if result.status == Status::Pending && child.status != Status::Pending {
                 // A pending branch whose child has started is running.
                 result.status = Status::Running;
             }
             result.children.push(child);
         }
         Some(result)
+    }
+    /// The outcome, once there is one.
+    fn outcome(&self) -> Option<Outcome> {
+        if self.state.load(Ordering::Acquire) != 2 {
+            return None;
+        }
+        if let Some(outcome) = decode(self.outcome.load(Ordering::Relaxed)) {
+            return Some(outcome);
+        }
+        match &self.meta.get().frozen {
+            Some(Snapshot {
+                status: Status::Finished(outcome),
+                ..
+            }) => Some(*outcome),
+            _ => Some(Outcome::Abandoned),
+        }
     }
 }
 
@@ -310,7 +368,7 @@ impl Phase {
     pub fn finish(&mut self) -> Result<(), PlanError> {
         self.finish_with(Outcome::Succeeded)
     }
-    /// Record a terminal outcome and freeze this subtree's snapshot.
+    /// Record a terminal outcome. The subtree's snapshot stops changing.
     ///
     /// Every child must have finished first, and `Succeeded` or `Skipped` also
     /// requires every child to have succeeded or been skipped. A failed call
@@ -318,30 +376,42 @@ impl Phase {
     /// `Cancelled` records how the work ended; it does not request a stop.
     pub fn finish_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
-        let mut snapshot = self.node.snapshot();
-        for child in &snapshot.children {
-            if !matches!(child.status, Status::Finished(_)) {
-                return Err(PlanError::UnfinishedChildren);
+        let mut unsuccessful = false;
+        for child in &self.node.meta.get().children {
+            match child.outcome() {
+                None => return Err(PlanError::UnfinishedChildren),
+                Some(Outcome::Succeeded | Outcome::Skipped) => {}
+                Some(_) => unsuccessful = true,
             }
         }
-        if matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
-            for child in &snapshot.children {
-                if !matches!(
-                    child.status,
-                    Status::Finished(Outcome::Succeeded | Outcome::Skipped)
-                ) {
-                    return Err(PlanError::UnsuccessfulChildren);
-                }
-            }
+        if unsuccessful && matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
+            return Err(PlanError::UnsuccessfulChildren);
         }
-        snapshot.status = Status::Finished(outcome);
-        self.freeze(snapshot);
+        self.seal(outcome);
         Ok(())
     }
-    fn freeze(&mut self, snapshot: Snapshot) {
-        let mut meta = (*self.node.meta.get()).clone();
-        meta.frozen = Some(snapshot);
-        self.node.meta.publish(meta);
+    /// Make `outcome` terminal. When every child has finished, the subtree can
+    /// no longer change, so atomics suffice and nothing is allocated. A phase
+    /// dropped while a child runs keeps a snapshot taken now, so its view does
+    /// not follow the orphaned child; so does an outcome this version cannot
+    /// encode.
+    fn seal(&mut self, outcome: Outcome) {
+        let code = encode(outcome);
+        let mut running_child = false;
+        for child in &self.node.meta.get().children {
+            if child.state.load(Ordering::Acquire) != 2 {
+                running_child = true;
+            }
+        }
+        if code == UNKNOWN || running_child {
+            let mut snapshot = self.node.snapshot();
+            snapshot.status = Status::Finished(outcome);
+            let mut meta = (*self.node.meta.get()).clone();
+            meta.frozen = Some(snapshot);
+            self.node.meta.publish(meta);
+        }
+        self.node.final_count.copy_from(&self.node.completed);
+        self.node.outcome.store(code, Ordering::Relaxed);
         self.node.state.store(2, Ordering::Release);
     }
     fn ensure_live(&self) -> Result<(), PlanError> {
@@ -366,9 +436,7 @@ impl Phase {
 impl Drop for Phase {
     fn drop(&mut self) {
         if self.node.state.load(Ordering::Acquire) != 2 {
-            let mut snapshot = self.node.snapshot();
-            snapshot.status = Status::Finished(Outcome::Abandoned);
-            self.freeze(snapshot);
+            self.seal(Outcome::Abandoned);
         }
     }
 }
@@ -661,6 +729,19 @@ mod tests {
     use crate::Stop;
     use crate::poll::LocalPoller;
     use almost_enough::Stopper;
+
+    #[test]
+    fn a_report_racing_with_the_finish_is_not_shown() {
+        let mut leaf = Phase::new("leaf", Total::Exact(3));
+        leaf.reporter().advance(2);
+        leaf.finish().unwrap();
+        // A report that passed the state check just before the finish lands
+        // after it; the finished snapshot keeps the count at the outcome.
+        leaf.node.completed.add(5);
+        let snapshot = leaf.observer().snapshot();
+        assert_eq!(snapshot.completed, 2);
+        assert_eq!(snapshot.status, Status::Finished(Outcome::Succeeded));
+    }
 
     #[test]
     fn a_busy_child_skips_ui_snapshots_while_reports_callbacks_and_cancellation_continue() {
