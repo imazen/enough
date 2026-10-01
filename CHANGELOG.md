@@ -15,7 +15,10 @@
   once-only, so libraries built on `Stages` can call one another;
   `Pulse::handle` gives `'static` code an owned stop and counter; and
   `ProgressExt::live` plus `how_far::prelude` make a hot loop's checkpoints
-  free when nobody listens (a967c21, c421c45, fc36c54).
+  free when nobody listens (a967c21, c421c45, fc36c54). Code taking
+  `&dyn Pulse` compiles once whatever pulse is passed, a `Stages::run_*` call
+  site adds 81 lines of IR to the caller's crate, and CI guards both
+  (ecf2e72).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span
