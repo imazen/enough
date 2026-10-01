@@ -202,10 +202,13 @@ impl Pulse for TreePulse {
             .compare_exchange(UNPLANNED, SPLIT, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| PlanError::AlreadyInUse)?;
         match self.with_owner(|phase| phase.split_vec(execution, parts)) {
-            Ok(Ok(children)) => Ok(children
-                .into_iter()
-                .map(|child| Child::new(TreePulse::new(child, Arc::clone(&self.stop))))
-                .collect()),
+            Ok(Ok(phases)) => {
+                let mut children = Vec::with_capacity(phases.len());
+                for phase in phases {
+                    children.push(Child::new(TreePulse::new(phase, Arc::clone(&self.stop))));
+                }
+                Ok(children)
+            }
             Ok(Err(error)) | Err(error) => {
                 self.activity.store(UNPLANNED, Ordering::Release);
                 Err(error)

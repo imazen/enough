@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Guard how-far's build cost: its shape, its own compile, and what callers instantiate.
+"""Guard the build cost of how-far and how-far-along.
 
 Fails the run if how-far gains features, a build script or a dependency other
-than `enough`, or if one `Stages::run_*` call site adds more than
---ir-budget lines of how-far's unoptimized LLVM IR to the caller's crate.
+than `enough`; if one `Stages::run_*` call site adds more than --ir-budget
+lines of how-far's unoptimized LLVM IR to the caller's crate; or if
+how-far-along's own unoptimized IR, with default features or with
+`diagnostics`, grows past its budget.
 
 With `perf`, also reports rustc instructions (as rustc-perf does; they do not
-depend on machine load): how-far's own compile against an empty no_std crate,
-and one `Stages::run_stoppable` call site against a plain function call, for
-check, debug and release builds.
+depend on machine load): how-far and how-far-along against an empty no_std
+crate, and one `Stages::run_stoppable` call site against a plain function
+call, for check, debug and release builds.
 """
 import argparse
 import json
@@ -24,6 +26,8 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--runs", type=int, default=3, help="perf samples per measurement")
 parser.add_argument("--ir-budget", type=int, default=120, help="IR lines per call site")
+parser.add_argument("--along-budget", type=int, nargs=2, default=[18_000, 55_000],
+                    metavar=("STD", "DIAGNOSTICS"), help="how-far-along IR lines")
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 
@@ -77,6 +81,9 @@ PROBES = {
     f"stages{SMALL}": probe(SMALL, True), f"stages{LARGE}": probe(LARGE, True),
 }
 PROFILES = {"check": ["check"], "debug": ["build"], "release": ["build", "--release"]}
+# how-far-along feature sets, each built in its own workspace so cargo does
+# not unify their features.
+ALONG = {"std": "", "diagnostics": ', features = ["diagnostics"]'}
 
 
 def perf_instructions(argv, cwd):
@@ -99,19 +106,31 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
     (tmp / "Cargo.toml").write_text(
         "[workspace]\nresolver = \"3\"\nmembers = [" + ", ".join(f'"{n}"' for n in PROBES) + "]\n")
     env = dict(os.environ, CARGO_TARGET_DIR=str(tmp / "target"), CARGO_INCREMENTAL="0")
+    for name, features in ALONG.items():
+        (tmp / "along" / name / "src").mkdir(parents=True)
+        (tmp / "along" / name / "src" / "lib.rs").write_text("")
+        (tmp / "along" / name / "Cargo.toml").write_text(
+            f'[package]\nname = "along-{name}"\nversion = "0.0.0"\nedition = "2024"\n[dependencies]\n'
+            f'how-far-along = {{ path = "{root}/crates/how-far-along"{features} }}\n[workspace]\n')
     commands = {}
     for profile, cargo_args in PROFILES.items():
-        log = subprocess.run(["cargo", *cargo_args, "--offline", "-v", "--color=never", "--workspace"],
-                             cwd=tmp, env=env, capture_output=True, text=True, check=True).stderr
-        for line in log.splitlines():
-            if "Running `" in line and "--crate-name" in line:
-                argv = shlex.split(line.split("Running `", 1)[1].rstrip("`"))
-                argv = [a for a in argv if not a.startswith("--json") and a != "--error-format=json"]
-                commands[profile, argv[argv.index("--crate-name") + 1]] = argv
+        for cwd, tag in [(tmp, ""), *((tmp / "along" / name, f"/{name}") for name in ALONG)]:
+            log = subprocess.run(["cargo", *cargo_args, "--offline", "-v", "--color=never", "--workspace"],
+                                 cwd=cwd, env=env, capture_output=True, text=True, check=True).stderr
+            for line in log.splitlines():
+                if "Running `" in line and "--crate-name" in line:
+                    argv = shlex.split(line.split("Running `", 1)[1].rstrip("`"))
+                    argv = [a for a in argv if not a.startswith("--json") and a != "--error-format=json"]
+                    crate = argv[argv.index("--crate-name") + 1]
+                    if crate == "how_far_along":
+                        commands[profile, crate + tag] = argv
+                    elif not tag:  # how-far as a library sees it: enough without std.
+                        commands[profile, crate] = argv
 
-    def ir_lines(name):
+    def ir_lines(name, only_how_far=True):
+        """Unoptimized IR lines, without debug-info records, of a debug build."""
         argv = [a for a in commands["debug", name] if not a.startswith("--emit")]
-        out = tmp / "ir" / name
+        out = tmp / "ir" / name.replace("/", "-")
         out.mkdir(parents=True)
         argv[argv.index("--out-dir") + 1] = str(out)
         subprocess.run([*argv, "--emit=llvm-ir"], cwd=tmp, env=env, check=True, capture_output=True)
@@ -120,18 +139,22 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
             sum(1 for line in body.splitlines()[1:] if line.strip() and not line.lstrip().startswith("#dbg"))
             for symbol, body in ((m.group(1), m.group(0)) for m in
                                  re.finditer(r"^define [^\n]*?@(\S+?)\(.*?\n}\n", ir, re.S | re.M))
-            if "7how_far" in symbol)
+            if not only_how_far or "7how_far" in symbol)
 
     per_site = (ir_lines(f"stages{LARGE}") - ir_lines(f"stages{SMALL}")) / (LARGE - SMALL)
     print(f"how-far IR per Stages::run_stoppable call site: {per_site:.0f} lines "
           f"(budget {args.ir_budget})")
     assert per_site <= args.ir_budget, "Stages::run_* instantiates too much code per call site"
+    for name, budget in zip(ALONG, args.along_budget):
+        lines = ir_lines(f"how_far_along/{name}", only_how_far=False)
+        print(f"how-far-along IR, {name}: {lines} lines (budget {budget})")
+        assert lines <= budget, f"how-far-along with {name} compiles to more code than its budget"
 
     if shutil.which("perf") is None:
         print("perf not found; skipping instruction counts")
         raise SystemExit(0)
     try:
-        crates = ["how_far", *PROBES]
+        crates = ["how_far", *PROBES, *(f"how_far_along/{name}" for name in ALONG)]
         samples = {(p, c): [] for p in PROFILES for c in crates}
         for _ in range(args.runs):
             for key in samples:
@@ -144,6 +167,8 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
     rows = {
         "empty no_std crate": lambda p: m[p, "empty"],
         "how-far": lambda p: m[p, "how_far"],
+        "how-far-along (std)": lambda p: m[p, "how_far_along/std"],
+        "how-far-along (diagnostics)": lambda p: m[p, "how_far_along/diagnostics"],
         "plain function call, per call site": lambda p:
             (m[p, f"plain{LARGE}"] - m[p, f"plain{SMALL}"]) / (LARGE - SMALL),
         "Stages::run_stoppable, per call site": lambda p:

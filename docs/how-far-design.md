@@ -174,12 +174,27 @@ instantiates, once per distinct type argument:
   `split_array` is compiled per pulse type and length, with its panic kept out
   of line.
 
+Libraries keep that property by staying non-generic inside too. A helper
+generic over `R: Report`, called with both `NoReport` and `&dyn Pulse`, is
+compiled twice; taking `&dyn Report` compiles it once and costs an indirect
+call per reported batch. zenresize's first adoption doubled its row loop that
+way; see [the validation notes](how-far-validation.md#in-a-real-library).
+
 If a stage's closure panics, nothing is recorded during the unwind: that
 would put a drop of the stage into every call site's copy. The stage stays in
 the `Stages` and is recorded as abandoned, with every later stage, when the
 `Stages` drops. A caller that catches the panic and calls a `run` method
 again gets `PlanError::Finished`; the stage is then recorded as abandoned and
 the rest as skipped.
+
+`how-far-along` is compiled by applications and tests, not by libraries,
+and is larger. Its tree code and its cold analysis code (`Trace::diagnose`,
+`Trace::overlap`) use loops rather than iterator adapters, and every sort
+goes through one small merge sort over indices: the standard library's sorts
+compile to thousands of lines per element type and comparator. `Instrumented`
+records through one non-generic function, so instrumenting another type adds
+a few lines. With `diagnostics`, these cut its release build by half. The
+JSON writers stay generic: only callers that export JSON instantiate them.
 
 The derives are deliberate. `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`, and
 `Default` together are about a quarter of `how-far`'s own check time, and the
