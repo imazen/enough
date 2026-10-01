@@ -171,6 +171,12 @@ above, the no-observer path matched a monomorphized loop. The
 [results, method, and raw output](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
 are committed.
 
+At compile time, `how-far` has no build script, proc macros, or features, and
+depends only on `enough`. Code that takes `&dyn Pulse` compiles once, whatever
+pulse its callers pass, and each `Stages::run_*` call adds only a few lines to
+the caller's crate; CI fails if that grows. See the
+[build cost](https://github.com/imazen/enough/blob/main/docs/how-far-validation.md#build-cost).
+
 ## No-op and count-only use
 
 `NoPulse` never stops, discards reports, and still validates plans, so

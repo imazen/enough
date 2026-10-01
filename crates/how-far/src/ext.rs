@@ -1,7 +1,6 @@
 //! Checkpoint helpers for every value that checks and counts.
 
 use crate::{Child, Execution, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason};
-use alloc::vec::Vec;
 
 /// Checkpoints for anything that both checks cancellation and counts work,
 /// including `&dyn Pulse`, [`Child`], and
@@ -48,7 +47,11 @@ pub trait ProgressExt: Stop + Report {
     /// ```
     #[inline]
     fn live(&self) -> Option<&Self> {
-        (self.may_stop() || self.may_report()).then_some(self)
+        if self.may_stop() || self.may_report() {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     /// [`Pulse::split`] into exactly `N` children, returned as an array.
@@ -76,12 +79,19 @@ pub trait ProgressExt: Stop + Report {
     where
         Self: Pulse,
     {
-        let children = self.split(execution, &parts)?;
-        let found = children.len();
-        Ok(children.try_into().unwrap_or_else(|_: Vec<Child<'_>>| {
-            panic!("Pulse::split returned {found} children for {N} parts")
-        }))
+        match self.split(execution, &parts)?.try_into() {
+            Ok(children) => Ok(children),
+            Err(children) => wrong_child_count(children.len(), N),
+        }
     }
 }
 
 impl<T: Stop + Report + ?Sized> ProgressExt for T {}
+
+/// Kept out of `split_array`, which is instantiated for every pulse type and
+/// length it is called with.
+#[cold]
+#[inline(never)]
+fn wrong_child_count(found: usize, parts: usize) -> ! {
+    panic!("Pulse::split returned {found} children for {parts} parts")
+}

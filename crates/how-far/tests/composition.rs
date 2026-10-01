@@ -328,6 +328,51 @@ fn a_stage_that_cannot_finish_reports_a_plan_error_and_skips_the_rest() {
 }
 
 #[test]
+fn a_panicking_stage_is_abandoned_with_every_later_stage() {
+    let (log, stop) = recorder();
+    let root = Recorder::root(&log, &stop);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut stages = Stages::new(
+            &root,
+            &[
+                PhaseSpec::new("decode", 1, Total::Exact(1)),
+                PhaseSpec::new("encode", 1, Total::Exact(1)),
+            ],
+        )
+        .unwrap();
+        let _ = stages.run_stoppable(|_| -> Result<(), StopReason> { panic!("decoder bug") });
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(outcome(&log, "job/decode"), Some(Outcome::Abandoned));
+    assert_eq!(outcome(&log, "job/encode"), Some(Outcome::Abandoned));
+}
+
+#[test]
+fn after_a_caught_panic_the_plan_is_over() {
+    let (log, stop) = recorder();
+    let root = Recorder::root(&log, &stop);
+    let mut stages = Stages::new(
+        &root,
+        &[
+            PhaseSpec::new("first", 1, Total::Exact(1)),
+            PhaseSpec::new("second", 1, Total::Exact(1)),
+        ],
+    )
+    .unwrap();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        stages.run(|_| -> Result<(), StopReason> { panic!("bug in first") })
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(
+        stages.run_stoppable(|stage| stage.step(1)),
+        Err(RunError::Plan(PlanError::Finished))
+    );
+    assert_eq!(outcome(&log, "job/first"), Some(Outcome::Abandoned));
+    assert_eq!(outcome(&log, "job/second"), Some(Outcome::Skipped));
+    assert_eq!(stages.finish(), Err(PlanError::Finished));
+}
+
+#[test]
 fn dropping_a_child_unfinished_records_abandonment() {
     let (log, stop) = recorder();
     let root = Recorder::root(&log, &stop);

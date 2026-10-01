@@ -1,7 +1,7 @@
 //! Running a sequential plan.
 
 use crate::{Child, Execution, Outcome, PhaseSpec, PlanError, Pulse};
-use alloc::vec::IntoIter;
+use alloc::collections::VecDeque;
 use core::fmt;
 
 /// An operation error, or an error applying the progress plan.
@@ -56,7 +56,11 @@ impl<E> RunError<RunError<E>> {
 /// hands its closure the next stage as `&dyn Pulse`, then finishes that stage:
 /// `Succeeded` if the closure returned `Ok`, otherwise the outcome its error
 /// maps to. After an error, every later stage is finished as `Skipped`, and
-/// the original error is returned unchanged.
+/// the original error is returned unchanged. If the closure panics, the stage
+/// and every later one are recorded as abandoned when `Stages` is dropped. A
+/// caller that catches the panic and calls a `run` method again gets
+/// `PlanError::Finished`: that stage is recorded as abandoned and the rest as
+/// skipped.
 ///
 /// `Stages` never finishes the pulse it was given. That pulse belongs to the
 /// caller, which finishes it: an application finishes the root, and an outer
@@ -104,24 +108,32 @@ impl<E> RunError<RunError<E>> {
 /// before the closure returns. When workers need their own totals or outcomes,
 /// split the stage and use [`run_nested`](Self::run_nested).
 pub struct Stages<'a> {
-    stages: IntoIter<Child<'a>>,
+    /// The stages that have not finished, in declared order.
+    pending: VecDeque<Child<'a>>,
+    /// The front stage was handed to work that has not returned.
+    running: bool,
     stopped: bool,
 }
 
 impl fmt::Debug for Stages<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Stages")
-            .field("remaining", &self.stages.len())
+            .field("remaining", &self.pending.len())
             .field("stopped", &self.stopped)
             .finish()
     }
 }
 
+// Each `run` method is instantiated once per closure, in the caller's crate,
+// so it only fetches the stage, calls the closure and hands the result on.
+// The bookkeeping is in `next_stage` and `end_stage`, which are compiled once
+// here, and in `complete`, which is shared by calls with the same types.
 impl<'a> Stages<'a> {
     /// Split `parent` into sequential stages, before any of their work starts.
     pub fn new(parent: &'a dyn Pulse, parts: &[PhaseSpec<'_>]) -> Result<Self, PlanError> {
         Ok(Self {
-            stages: parent.split(Execution::Sequence, parts)?.into_iter(),
+            pending: parent.split(Execution::Sequence, parts)?.into(),
+            running: false,
             stopped: false,
         })
     }
@@ -131,7 +143,11 @@ impl<'a> Stages<'a> {
         &mut self,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(|_| Outcome::Failed, work)
+        let result = match self.next_stage() {
+            Ok(stage) => work(stage),
+            Err(error) => return Err(RunError::Plan(error)),
+        };
+        self.complete(result, Outcome::Failed)
     }
 
     /// Run the next stage whose only errors are stop requests. Any error from
@@ -140,7 +156,11 @@ impl<'a> Stages<'a> {
         &mut self,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(|_| Outcome::Cancelled, work)
+        let result = match self.next_stage() {
+            Ok(stage) => work(stage),
+            Err(error) => return Err(RunError::Plan(error)),
+        };
+        self.complete(result, Outcome::Cancelled)
     }
 
     /// Run the next stage, marking it `Cancelled` for errors `is_stop`
@@ -153,16 +173,15 @@ impl<'a> Stages<'a> {
         is_stop: impl FnOnce(&E) -> bool,
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(
-            |error| {
-                if is_stop(error) {
-                    Outcome::Cancelled
-                } else {
-                    Outcome::Failed
-                }
-            },
-            work,
-        )
+        let result = match self.next_stage() {
+            Ok(stage) => work(stage),
+            Err(error) => return Err(RunError::Plan(error)),
+        };
+        let on_error = match &result {
+            Err(error) if is_stop(error) => Outcome::Cancelled,
+            _ => Outcome::Failed,
+        };
+        self.complete(result, on_error)
     }
 
     /// Run the next stage when `work` plans it, so `?` works on both its plan
@@ -176,51 +195,72 @@ impl<'a> Stages<'a> {
         is_stop: impl FnOnce(&E) -> bool,
         work: impl FnOnce(&dyn Pulse) -> Result<T, RunError<E>>,
     ) -> Result<T, RunError<E>> {
-        self.run_with(
-            |error| match error {
-                RunError::Work(error) if is_stop(error) => Outcome::Cancelled,
-                _ => Outcome::Failed,
-            },
-            work,
-        )
-        .map_err(RunError::flatten)
+        let result = match self.next_stage() {
+            Ok(stage) => work(stage),
+            Err(error) => return Err(RunError::Plan(error)),
+        };
+        let on_error = match &result {
+            Err(RunError::Work(error)) if is_stop(error) => Outcome::Cancelled,
+            _ => Outcome::Failed,
+        };
+        match self.complete(result, on_error) {
+            Ok(value) => Ok(value),
+            Err(error) => Err(error.flatten()),
+        }
     }
 
-    fn run_with<T, E>(
+    /// Finish the current stage as `Succeeded`, or as `on_error` if `result`
+    /// is an error. A stage that cannot record an error outcome is recorded
+    /// as abandoned, and the work error stays the one the caller sees.
+    #[inline(never)]
+    fn complete<T, E>(
         &mut self,
-        outcome_for: impl FnOnce(&E) -> Outcome,
-        work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
+        result: Result<T, E>,
+        on_error: Outcome,
     ) -> Result<T, RunError<E>> {
-        if self.stopped {
-            return Err(RunError::Plan(PlanError::Finished));
-        }
-        let stage = self
-            .stages
-            .next()
-            .ok_or(RunError::Plan(PlanError::NoMoreStages))?;
-        match work(&stage) {
-            Ok(value) => match stage.finish(Outcome::Succeeded) {
+        match result {
+            Ok(value) => match self.end_stage(Outcome::Succeeded) {
                 Ok(()) => Ok(value),
-                Err(error) => {
-                    self.skip_rest();
-                    Err(RunError::Plan(error))
-                }
+                Err(error) => Err(RunError::Plan(error)),
             },
             Err(error) => {
-                // A stage that cannot record its outcome is recorded as
-                // abandoned; the work error stays the one the caller sees.
-                let _ = stage.finish(outcome_for(&error));
-                self.skip_rest();
+                let _ = self.end_stage(on_error);
                 Err(RunError::Work(error))
             }
         }
     }
 
-    fn skip_rest(&mut self) {
-        self.stopped = true;
-        for stage in self.stages.by_ref() {
-            let _ = stage.finish(Outcome::Skipped);
+    fn next_stage(&mut self) -> Result<&dyn Pulse, PlanError> {
+        if self.running {
+            // The last stage's work panicked and the caller caught the panic.
+            let _ = self.end_stage(Outcome::Abandoned);
         }
+        match self.pending.front() {
+            _ if self.stopped => Err(PlanError::Finished),
+            Some(stage) => {
+                self.running = true;
+                Ok(stage)
+            }
+            None => Err(PlanError::NoMoreStages),
+        }
+    }
+
+    /// Finish the current stage. After anything but success, finish the rest
+    /// as `Skipped`.
+    #[inline(never)]
+    fn end_stage(&mut self, outcome: Outcome) -> Result<(), PlanError> {
+        self.running = false;
+        let Some(stage) = self.pending.pop_front() else {
+            return Err(PlanError::NoMoreStages);
+        };
+        let finished = stage.finish(outcome);
+        if finished.is_err() || outcome != Outcome::Succeeded {
+            self.stopped = true;
+            while let Some(stage) = self.pending.pop_front() {
+                let _ = stage.finish(Outcome::Skipped);
+            }
+        }
+        finished
     }
 
     /// Confirm that every declared stage ran. Remaining stages are recorded as
@@ -228,7 +268,7 @@ impl<'a> Stages<'a> {
     pub fn finish(self) -> Result<(), PlanError> {
         if self.stopped {
             Err(PlanError::Finished)
-        } else if self.stages.len() != 0 {
+        } else if !self.pending.is_empty() {
             Err(PlanError::UnfinishedChildren)
         } else {
             Ok(())

@@ -364,7 +364,7 @@ impl Pulse for NoPulse {
         Ok(children)
     }
     fn handle(&self) -> PulseHandle {
-        PulseHandle::default()
+        ProgressWithStop::new(None, None)
     }
 }
 
