@@ -25,7 +25,10 @@
 use crate::{
     Child, ChildPulse, Execution, NodeId, Observer, Outcome, PhaseSpec, PlanError,
     ProgressWithStop, Pulse, PulseHandle, PulseTree, Report, Snapshot, Status, Stop, StopReason,
-    profile::{Instrumented, Profiler, SourceSite, Span, SpanKind, SpanRecord, Trace},
+    profile::{
+        Instrumented, Profiler, SiteStats, SourceSite, Span, SpanInner, SpanKind, SpanRecord,
+        Trace, advanced, checked, sorted_indices,
+    },
     sync::Mutex,
 };
 use alloc::{boxed::Box, format, string::String, sync::Arc, vec, vec::Vec};
@@ -134,7 +137,10 @@ fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 fn location(site: Option<SourceSite>, boundary: &str) -> String {
-    site.map_or_else(|| boundary.into(), |site| format!("{site}"))
+    match site {
+        Some(site) => format!("{site}"),
+        None => boundary.into(),
+    }
 }
 
 /// Measures a library's checkpoints without changing its signature.
@@ -254,11 +260,16 @@ impl Meter {
         }
     }
 
-    fn instrument<T>(&self, value: T) -> Instrumented<T> {
+    /// This phase's span, started at its first checkpoint.
+    fn span(&self) -> Arc<SpanInner> {
         let mut owner = self.span.lock();
-        owner
-            .get_or_insert_with(|| self.start_span())
-            .instrument(value)
+        let span = match owner.take() {
+            Some(span) => span,
+            None => self.start_span(),
+        };
+        let shared = span.shared();
+        *owner = Some(span);
+        shared
     }
 
     fn split<'s>(
@@ -270,44 +281,46 @@ impl Meter {
         let children = inner.split(execution, parts)?;
         self.has_children.store(true, Ordering::Relaxed);
         let snapshot = self.observer.snapshot();
-        let nodes = find_node(&snapshot, self.node).map(|node| &node.children);
-        // cells[i] is stage i's entry and stage i-1's exit.
-        let cells: Vec<_> = if execution == Execution::Sequence {
-            let planned = self.profiler.now();
-            (0..=children.len())
-                .map(|_| Arc::new(Mutex::new(planned)))
-                .collect()
-        } else {
-            Vec::new()
+        let nodes = match find_node(&snapshot, self.node) {
+            Some(node) => &node.children[..],
+            None => &[],
         };
-        Ok(children
-            .into_iter()
-            .enumerate()
-            .map(|(index, child)| {
-                Child::new(DiagnosticChild {
-                    inner: child,
-                    meter: Meter {
-                        observer: self.observer.clone(),
-                        profiler: self.profiler.clone(),
-                        node: nodes
-                            .and_then(|nodes| nodes.get(index))
-                            .map_or(self.node, |node| node.id),
-                        name: parts[index].name.into(),
-                        span: Mutex::new(None),
-                        entered: cells.get(index).cloned(),
-                        exited: cells.get(index + 1).cloned(),
-                        has_children: AtomicBool::new(false),
+        // cells[i] is stage i's entry and stage i-1's exit.
+        let mut cells = Vec::new();
+        if execution == Execution::Sequence {
+            let planned = self.profiler.now();
+            for _ in 0..=children.len() {
+                cells.push(Arc::new(Mutex::new(planned)));
+            }
+        }
+        let mut measured = Vec::with_capacity(children.len());
+        for (index, child) in children.into_iter().enumerate() {
+            measured.push(Child::new(DiagnosticChild {
+                inner: child,
+                meter: Meter {
+                    observer: self.observer.clone(),
+                    profiler: self.profiler.clone(),
+                    node: match nodes.get(index) {
+                        Some(node) => node.id,
+                        None => self.node,
                     },
-                })
-            })
-            .collect())
+                    name: parts[index].name.into(),
+                    span: Mutex::new(None),
+                    entered: cells.get(index).cloned(),
+                    exited: cells.get(index + 1).cloned(),
+                    has_children: AtomicBool::new(false),
+                },
+            }));
+        }
+        Ok(measured)
     }
 
     fn handle(&self, inner: &dyn Pulse) -> PulseHandle {
         let handle = inner.handle();
+        let span = self.span();
         ProgressWithStop::new(
-            Some(Arc::new(self.instrument(handle.stop)) as Arc<dyn Stop>),
-            Some(Arc::new(self.instrument(handle.report)) as Arc<dyn Report>),
+            Some(Arc::new(Instrumented::new(handle.stop, Arc::clone(&span))) as Arc<dyn Stop>),
+            Some(Arc::new(Instrumented::new(handle.report, span)) as Arc<dyn Report>),
         )
     }
 
@@ -334,27 +347,20 @@ impl Meter {
 
 fn find_node(snapshot: &Snapshot, id: NodeId) -> Option<&Snapshot> {
     if snapshot.id == id {
-        Some(snapshot)
-    } else {
-        snapshot
-            .children
-            .iter()
-            .find_map(|child| find_node(child, id))
+        return Some(snapshot);
     }
-}
-
-fn contains_node(snapshot: &Snapshot, id: NodeId) -> bool {
-    snapshot.id == id
-        || snapshot
-            .children
-            .iter()
-            .any(|child| contains_node(child, id))
+    for child in &snapshot.children {
+        if let Some(found) = find_node(child, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 impl Stop for DiagnosticPulse {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        self.meter.instrument(&self.tree).check()
+        checked(&self.meter.span(), &self.tree)
     }
     fn may_stop(&self) -> bool {
         true
@@ -364,7 +370,7 @@ impl Stop for DiagnosticPulse {
 impl Report for DiagnosticPulse {
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.meter.instrument(&self.tree).advance(completed);
+        advanced(&self.meter.span(), &self.tree, completed);
     }
     fn may_report(&self) -> bool {
         true
@@ -393,7 +399,7 @@ struct DiagnosticChild<'a> {
 impl Stop for DiagnosticChild<'_> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        self.meter.instrument(&self.inner).check()
+        checked(&self.meter.span(), &self.inner)
     }
     fn may_stop(&self) -> bool {
         true
@@ -403,7 +409,7 @@ impl Stop for DiagnosticChild<'_> {
 impl Report for DiagnosticChild<'_> {
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.meter.instrument(&self.inner).advance(completed);
+        advanced(&self.meter.span(), &self.inner, completed);
     }
     fn may_report(&self) -> bool {
         true
@@ -480,24 +486,27 @@ impl Trace {
             if span.stats.max_check_gap > options.stop_gap_target
                 && span.elapsed() >= options.stop_gap_target
             {
-                let site = span
-                    .stats
-                    .sites
-                    .iter()
-                    .max_by_key(|s| s.max_gap_before_check)
-                    .filter(|s| s.max_gap_before_check == span.stats.max_check_gap);
-                let ending = site.map_or_else(
-                    || "task exit".into(),
-                    |s| format!("{}:{}:{}", s.file, s.line, s.column),
-                );
+                // The last site with the longest gap before a check, as
+                // `max_by_key` would pick; the gap may instead end at exit.
+                let mut longest: Option<&SiteStats> = None;
+                for site in &span.stats.sites {
+                    if longest.is_none_or(|l| site.max_gap_before_check >= l.max_gap_before_check) {
+                        longest = Some(site);
+                    }
+                }
+                let ending = match longest {
+                    Some(s) if s.max_gap_before_check == span.stats.max_check_gap => {
+                        format!("{}:{}:{}", s.file, s.line, s.column)
+                    }
+                    _ => "task exit".into(),
+                };
                 let cover = covering_span(
                     self,
                     span,
                     span.stats.max_check_gap_start,
                     span.stats.max_check_gap,
                 );
-                let covered =
-                    cover.is_some_and(|c| c.stats.max_check_gap <= options.stop_gap_target);
+                let covered = covers(cover, options);
                 findings.push(Finding {
                     kind: Kind::StopGap,
                     evidence: format!(
@@ -524,8 +533,7 @@ impl Trace {
                 } else {
                     covering_span(self, span, gap.start, gap.duration)
                 };
-                let covered =
-                    cover.is_some_and(|c| c.stats.max_check_gap <= options.stop_gap_target);
+                let covered = covers(cover, options);
                 findings.push(Finding {
                     kind: Kind::ReportGap,
                     evidence: format!(
@@ -544,7 +552,7 @@ impl Trace {
             }
             let seconds = span.elapsed().as_secs_f64();
             if seconds > 0.0 {
-                for (kind, threshold, advice) in [
+                for &(kind, threshold, advice) in &[
                     (
                         Kind::CheckFrequency,
                         options.check_calls_per_second,
@@ -556,18 +564,16 @@ impl Trace {
                         "Consider batching reports per worker while keeping cancellation checks at their current cadence.",
                     ),
                 ] {
-                    let mut sites: Vec<_> = span.stats.sites.iter().collect();
-                    sites.sort_unstable_by_key(|s| {
-                        core::cmp::Reverse(match kind {
-                            Kind::CheckFrequency => s.checks,
-                            _ => s.reports,
-                        })
-                    });
-                    for site in sites.into_iter().take(3) {
-                        let calls = match kind {
-                            Kind::CheckFrequency => site.checks,
-                            _ => site.reports,
-                        };
+                    let sites = &span.stats.sites;
+                    let calls = |index: usize| match kind {
+                        Kind::CheckFrequency => sites[index].checks,
+                        _ => sites[index].reports,
+                    };
+                    // Busiest first; ties in recorded order.
+                    let order = sorted_indices(sites.len(), &|a, b| calls(b).cmp(&calls(a)));
+                    for &index in &order[..order.len().min(3)] {
+                        let site = &sites[index];
+                        let calls = calls(index);
                         if calls < options.minimum_calls || (calls as f64 / seconds) <= threshold {
                             continue;
                         }
@@ -604,6 +610,7 @@ impl Trace {
 /// Another work span that ran across nearly all of `[start, start + len]` and
 /// recorded checks, such as an encoder's own `Stop` instrumented from the same
 /// profiler. Checks happen at that task's cadence, not necessarily this task's.
+/// Among several, the first with the shortest longest gap.
 fn covering_span<'a>(
     trace: &'a Trace,
     owner: &SpanRecord,
@@ -614,30 +621,42 @@ fn covering_span<'a>(
         return None;
     }
     let end = start.saturating_add(len);
-    trace
-        .spans
-        .iter()
-        .filter(|s| {
-            s.id != owner.id
-                && s.kind == SpanKind::Work
-                && s.stats.checks > 0
-                && !s.stats.overflowed
-                && s.stats.clock_regressions == 0
-        })
-        .map(|s| (s, s.end.min(end).saturating_sub(s.start.max(start))))
-        .filter(|(_, overlap)| overlap.as_nanos() * 10 >= len.as_nanos() * 9)
-        .min_by_key(|(s, _)| s.stats.max_check_gap)
-        .map(|(s, _)| s)
+    let mut best: Option<&SpanRecord> = None;
+    for s in &trace.spans {
+        if s.id == owner.id
+            || s.kind != SpanKind::Work
+            || s.stats.checks == 0
+            || s.stats.overflowed
+            || s.stats.clock_regressions != 0
+        {
+            continue;
+        }
+        let overlap = s.end.min(end).saturating_sub(s.start.max(start));
+        if overlap.as_nanos() * 10 >= len.as_nanos() * 9
+            && best.is_none_or(|b| s.stats.max_check_gap < b.stats.max_check_gap)
+        {
+            best = Some(s);
+        }
+    }
+    best
+}
+/// Whether a covering span checked at the target cadence throughout its run.
+fn covers(cover: Option<&SpanRecord>, options: &Options) -> bool {
+    match cover {
+        Some(c) => c.stats.max_check_gap <= options.stop_gap_target,
+        None => false,
+    }
 }
 fn cover_note(cover: Option<&SpanRecord>) -> String {
-    cover.map_or_else(String::new, |c| {
-        format!(
+    match cover {
+        Some(c) => format!(
             "; task {:?} also ran across it with {} checks (longest gap {:.2} ms over its whole run)",
             c.task,
             c.stats.checks,
             ms(c.stats.max_check_gap)
-        )
-    })
+        ),
+        None => String::new(),
+    }
 }
 
 struct CallbackGroup<'a> {
@@ -648,32 +667,34 @@ struct CallbackGroup<'a> {
 
 fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Finding>) {
     let mut groups: Vec<CallbackGroup<'_>> = Vec::new();
-    for span in &trace.spans {
+    'spans: for span in &trace.spans {
         if span.kind != SpanKind::Callback || span.stats.clock_regressions != 0 {
             continue;
         }
-        if let Some(group) = groups
-            .iter_mut()
-            .find(|group| group.node == span.node && group.task == span.task)
-        {
-            group.samples.push((span.start, span.elapsed()));
-        } else {
-            groups.push(CallbackGroup {
-                node: span.node,
-                task: &span.task,
-                samples: vec![(span.start, span.elapsed())],
+        let sample = (span.start, span.elapsed());
+        for group in &mut groups {
+            if group.node == span.node && group.task == span.task {
+                group.samples.push(sample);
+                continue 'spans;
+            }
+        }
+        groups.push(CallbackGroup {
+            node: span.node,
+            task: &span.task,
+            samples: vec![sample],
+        });
+    }
+    for CallbackGroup { task, samples, .. } in &groups {
+        let by_start = sorted_indices(samples.len(), &|a, b| samples[a].0.cmp(&samples[b].0));
+        let mut interval: Option<Duration> = None;
+        for pair in by_start.windows(2) {
+            let gap = samples[pair[1]].0.saturating_sub(samples[pair[0]].0);
+            interval = Some(match interval {
+                Some(longest) => longest.max(gap),
+                None => gap,
             });
         }
-    }
-    for CallbackGroup {
-        task, mut samples, ..
-    } in groups
-    {
-        samples.sort_unstable_by_key(|(start, _)| *start);
-        if let Some(interval) = samples
-            .windows(2)
-            .map(|pair| pair[1].0.saturating_sub(pair[0].0))
-            .max()
+        if let Some(interval) = interval
             && interval > options.callback_interval_target
         {
             findings.push(Finding {
@@ -684,17 +705,19 @@ fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Findin
                 sample_code: None,
             });
         }
-        let mut durations: Vec<_> = samples.iter().map(|(_, duration)| *duration).collect();
-        durations.sort_unstable();
-        let maximum = *durations.last().unwrap();
+        let by_duration = sorted_indices(samples.len(), &|a, b| samples[a].1.cmp(&samples[b].1));
+        let Some(&longest) = by_duration.last() else {
+            continue;
+        };
+        let maximum = samples[longest].1;
         if maximum <= options.callback_budget {
             continue;
         }
-        let p95 = durations[((durations.len() * 95).div_ceil(100)).saturating_sub(1)];
+        let p95 = samples[by_duration[((samples.len() * 95).div_ceil(100)).saturating_sub(1)]].1;
         findings.push(Finding {
             kind: Kind::CallbackDuration,
             evidence: format!("callback {:?}: max {:.2} ms, p95 {:.2} ms across {} retained calls (budget {:.2} ms)",
-                task, ms(maximum), ms(p95), durations.len(), ms(options.callback_budget)),
+                task, ms(maximum), ms(p95), samples.len(), ms(options.callback_budget)),
             advice: "Keep subscriber work below the budget: defer rendering/I/O or post a coalesced notification to the owner thread. Time snapshot construction inside the callback if it happens there.".into(),
             sample_code: None,
         });
@@ -728,16 +751,16 @@ fn phase_spec_code(child: &Snapshot, weight: u64) -> String {
 /// Whole-percent weights summing to 100 with every weight positive
 /// (`PhaseSpec` rejects zero), distributing rounding by largest remainder.
 fn percent_weights(shares: &[f64]) -> Vec<u64> {
-    let mut weights: Vec<u64> = shares
-        .iter()
-        .map(|share| (share * 100.0).floor().max(1.0) as u64)
-        .collect();
-    let mut assigned = weights.iter().sum::<u64>();
-    let mut order: Vec<usize> = (0..weights.len()).collect();
-    order.sort_unstable_by(|&a, &b| {
-        (shares[b] * 100.0 - (shares[b] * 100.0).floor())
-            .total_cmp(&(shares[a] * 100.0 - (shares[a] * 100.0).floor()))
-    });
+    let mut weights = Vec::with_capacity(shares.len());
+    let mut assigned = 0_u64;
+    for share in shares {
+        let weight = (share * 100.0).floor().max(1.0) as u64;
+        weights.push(weight);
+        assigned += weight;
+    }
+    let remainder = |i: usize| shares[i] * 100.0 - (shares[i] * 100.0).floor();
+    // Largest remainder first; ties in declared order.
+    let order = sorted_indices(shares.len(), &|a, b| remainder(b).total_cmp(&remainder(a)));
     while assigned < 100 {
         for &index in &order {
             if assigned == 100 {
@@ -771,126 +794,135 @@ fn stage_findings(
     options: &Options,
     findings: &mut Vec<Finding>,
 ) {
-    if parent.execution == Execution::Sequence
-        && parent.children.len() >= 2
-        && parent.children.len() <= 100
-        && parent
-            .children
-            .iter()
-            .all(|c| c.status == Status::Finished(Outcome::Succeeded))
-    {
-        let times: Option<Vec<(Duration, Duration)>> = parent
-            .children
-            .iter()
-            .map(|child| {
-                let mut spans = trace.spans.iter().filter(|s| {
-                    s.node.is_some_and(|node| contains_node(child, node))
-                        && s.kind == SpanKind::Work
-                        && s.stats.clock_regressions == 0
-                        && s.outcome == Outcome::Succeeded
-                });
-                let first = spans.next()?;
-                let mut start = first.start;
-                let mut end = first.end;
-                for span in spans {
-                    start = start.min(span.start);
-                    end = end.max(span.end);
-                }
-                Some((start, end))
-            })
-            .collect();
-        if let Some(times) = times {
-            let sequential = times.windows(2).all(|pair| pair[0].1 <= pair[1].0);
-            let durations: Vec<_> = times
-                .iter()
-                .map(|(start, end)| end.saturating_sub(*start))
-                .collect();
-            let total = durations
-                .iter()
-                .fold(Duration::ZERO, |sum, d| sum.saturating_add(*d));
-            let weight_sum: u64 = parent.children.iter().map(|c| c.weight).sum();
-            if sequential
-                && total >= options.minimum_stage_wall
-                && weight_sum > 0
-                && durations.iter().all(|d| !d.is_zero())
-            {
-                let shares: Vec<f64> = durations
-                    .iter()
-                    .map(|d| d.as_secs_f64() / total.as_secs_f64())
-                    .collect();
-                let declared: Vec<f64> = parent
-                    .children
-                    .iter()
-                    .map(|child| child.weight as f64 / weight_sum as f64)
-                    .collect();
-                // A stage this small is dominated by clock and scheduling noise
-                // and may be input-dependent (a flush that is trivial for this
-                // input). It keeps its declared weight instead of being
-                // calibrated to a near-zero share, unless the plan gave it
-                // most of the bar, which a negligible stage cannot justify.
-                let frozen: Vec<bool> = shares
-                    .iter()
-                    .zip(&declared)
-                    .map(|(share, planned)| {
-                        *share < options.negligible_stage_share && *planned <= 0.5
-                    })
-                    .collect();
-                let frozen_mass: f64 = declared
-                    .iter()
-                    .zip(&frozen)
-                    .filter_map(|(planned, frozen)| frozen.then_some(*planned))
-                    .sum();
-                let free_measured: f64 = shares
-                    .iter()
-                    .zip(&frozen)
-                    .filter_map(|(share, frozen)| (!frozen).then_some(*share))
-                    .sum();
-                let candidate: Vec<f64> = (0..shares.len())
-                    .map(|i| {
-                        if frozen[i] {
-                            declared[i]
-                        } else {
-                            (1.0 - frozen_mass) * shares[i] / free_measured
-                        }
-                    })
-                    .collect();
-                let biggest_difference = (0..shares.len())
-                    .filter(|i| !frozen[*i])
-                    .map(|i| (declared[i] - candidate[i]).abs())
-                    .fold(0.0_f64, f64::max);
-                if free_measured > 0.0 && biggest_difference >= options.weight_difference {
-                    let weights = percent_weights(&candidate);
-                    let held: Vec<_> = parent
-                        .children
-                        .iter()
-                        .zip(&frozen)
-                        .filter_map(|(child, frozen)| frozen.then_some(child.name.as_str()))
-                        .collect();
-                    let note = if held.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            "; {held:?} measured under {:.1}% of the run, too small to calibrate, so it keeps its declared share",
-                            options.negligible_stage_share * 100.0
-                        )
-                    };
-                    let mut code = String::from("[\n");
-                    for (child, weight) in parent.children.iter().zip(&weights) {
-                        code.push_str(&format!("    {},\n", phase_spec_code(child, *weight)));
-                    }
-                    code.push(']');
-                    findings.push(Finding {
-                        kind: Kind::StageWeights,
-                        evidence: format!("sequential stage {:?}: planned {:?}; measured wall-time candidate {:?} from one run{note}",
-                            parent.name, parent.children.iter().map(|c| c.weight).collect::<Vec<_>>(), weights),
-                        advice: "Repeat across representative inputs before changing weights. Wall time includes waits and may shift with hardware, scheduling, or configuration.".into(),
-                        sample_code: Some(code),
-                    });
-                }
-            }
-        }
+    if let Some(finding) = stage_weight_finding(trace, parent, options) {
+        findings.push(finding);
     }
     for child in &parent.children {
         stage_findings(trace, child, options, findings);
     }
+}
+
+/// Weight advice for a sequence whose stages all succeeded, from one run's
+/// wall time.
+fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> Option<Finding> {
+    let children = &parent.children;
+    if parent.execution != Execution::Sequence || children.len() < 2 || children.len() > 100 {
+        return None;
+    }
+    for child in children {
+        if child.status != Status::Finished(Outcome::Succeeded) {
+            return None;
+        }
+    }
+    let mut durations = Vec::with_capacity(children.len());
+    let mut previous_end: Option<Duration> = None;
+    let mut sequential = true;
+    let mut total = Duration::ZERO;
+    let mut weight_sum = 0_u64;
+    for child in children {
+        let (start, end) = stage_time(trace, child)?;
+        if previous_end.is_some_and(|previous| previous > start) {
+            sequential = false;
+        }
+        previous_end = Some(end);
+        let duration = end.saturating_sub(start);
+        if duration.is_zero() {
+            return None;
+        }
+        durations.push(duration);
+        total = total.saturating_add(duration);
+        weight_sum += child.weight;
+    }
+    if !sequential || total < options.minimum_stage_wall || weight_sum == 0 {
+        return None;
+    }
+    let mut shares = Vec::with_capacity(children.len());
+    let mut declared = Vec::with_capacity(children.len());
+    let mut frozen = Vec::with_capacity(children.len());
+    let mut frozen_mass = 0.0;
+    let mut free_measured = 0.0;
+    for (child, duration) in children.iter().zip(&durations) {
+        let share = duration.as_secs_f64() / total.as_secs_f64();
+        let planned = child.weight as f64 / weight_sum as f64;
+        // A stage this small is dominated by clock and scheduling noise and
+        // may be input-dependent (a flush that is trivial for this input). It
+        // keeps its declared weight instead of being calibrated to a
+        // near-zero share, unless the plan gave it most of the bar, which a
+        // negligible stage cannot justify.
+        let hold = share < options.negligible_stage_share && planned <= 0.5;
+        if hold {
+            frozen_mass += planned;
+        } else {
+            free_measured += share;
+        }
+        shares.push(share);
+        declared.push(planned);
+        frozen.push(hold);
+    }
+    let mut candidate = Vec::with_capacity(children.len());
+    let mut biggest_difference = 0.0_f64;
+    for i in 0..shares.len() {
+        if frozen[i] {
+            candidate.push(declared[i]);
+        } else {
+            let value = (1.0 - frozen_mass) * shares[i] / free_measured;
+            biggest_difference = biggest_difference.max((declared[i] - value).abs());
+            candidate.push(value);
+        }
+    }
+    let advise = free_measured > 0.0 && biggest_difference >= options.weight_difference;
+    if !advise {
+        return None;
+    }
+    let weights = percent_weights(&candidate);
+    let mut held = Vec::new();
+    let mut planned = Vec::with_capacity(children.len());
+    let mut code = String::from("[\n");
+    for (i, child) in children.iter().enumerate() {
+        if frozen[i] {
+            held.push(child.name.as_str());
+        }
+        planned.push(child.weight);
+        code.push_str(&format!("    {},\n", phase_spec_code(child, weights[i])));
+    }
+    code.push(']');
+    let note = if held.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {held:?} measured under {:.1}% of the run, too small to calibrate, so it keeps its declared share",
+            options.negligible_stage_share * 100.0
+        )
+    };
+    Some(Finding {
+        kind: Kind::StageWeights,
+        evidence: format!(
+            "sequential stage {:?}: planned {planned:?}; measured wall-time candidate {weights:?} from one run{note}",
+            parent.name
+        ),
+        advice: "Repeat across representative inputs before changing weights. Wall time includes waits and may shift with hardware, scheduling, or configuration.".into(),
+        sample_code: Some(code),
+    })
+}
+
+/// When a stage ran: from its spans' earliest start to their latest end.
+fn stage_time(trace: &Trace, stage: &Snapshot) -> Option<(Duration, Duration)> {
+    let mut time: Option<(Duration, Duration)> = None;
+    for span in &trace.spans {
+        let Some(node) = span.node else {
+            continue;
+        };
+        if span.kind != SpanKind::Work
+            || span.stats.clock_regressions != 0
+            || span.outcome != Outcome::Succeeded
+            || find_node(stage, node).is_none()
+        {
+            continue;
+        }
+        time = Some(match time {
+            Some((start, end)) => (start.min(span.start), end.max(span.end)),
+            None => (span.start, span.end),
+        });
+    }
+    time
 }

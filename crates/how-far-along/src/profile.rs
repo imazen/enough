@@ -409,7 +409,10 @@ impl Profiler {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .expect("span identifiers exhausted");
         let now = self.inner.clock.now();
-        let start = entered.map_or(now, |at| at.min(now));
+        let start = match entered {
+            Some(at) => at.min(now),
+            None => now,
+        };
         self.inner.active.fetch_add(1, Ordering::Relaxed);
         Span {
             finished: false,
@@ -439,7 +442,10 @@ impl Profiler {
     pub fn cancellation_requested(&self) {
         let now = self.inner.clock.now();
         let mut state = self.inner.state.lock();
-        state.cancelled_at = Some(state.cancelled_at.map_or(now, |old| old.min(now)));
+        state.cancelled_at = Some(match state.cancelled_at {
+            Some(old) => old.min(now),
+            None => now,
+        });
     }
 
     /// Record when the operation returned, after every worker joined and
@@ -516,7 +522,7 @@ impl Window {
     }
 }
 
-struct SpanInner {
+pub(crate) struct SpanInner {
     profiler: Profiler,
     id: SpanId,
     parent: Option<SpanId>,
@@ -529,6 +535,105 @@ struct SpanInner {
 }
 
 impl SpanInner {
+    fn now(&self) -> Duration {
+        self.profiler.inner.clock.now()
+    }
+
+    /// Record a check that started at `start` and just returned `result`.
+    /// Shared by every [`Instrumented`] type, so it is compiled once.
+    fn record_check(
+        &self,
+        start: Duration,
+        result: Result<(), StopReason>,
+        at: &'static Location<'static>,
+    ) {
+        let end = self.now();
+        let mut state = self.state.lock();
+        if state.closed {
+            return;
+        }
+        // A worker sharing this span may have recorded a later reading
+        // first; an out-of-order arrival is a zero gap, not a regression.
+        let gap = start.saturating_sub(state.last_check);
+        if gap > state.stats.max_check_gap {
+            state.stats.max_check_gap = gap;
+            state.stats.max_check_gap_start = state.last_check;
+        }
+        state.window.check(start);
+        state.last_check = state.last_check.max(start);
+        let elapsed = match end.checked_sub(start) {
+            Some(elapsed) => elapsed,
+            None => {
+                state.stats.clock_regressions += 1;
+                Duration::ZERO
+            }
+        };
+        state.stats.check_time = state.stats.check_time.saturating_add(elapsed);
+        state.stats.overflowed |= add(&mut state.stats.checks, 1);
+        if let Err(reason) = result
+            && state.stats.stopped_at.is_none()
+        {
+            state.stats.stopped_at = Some(end);
+            state.stats.stop_reason = Some(reason);
+        }
+        if let Some(site) = site(&mut state.stats, at) {
+            site.checks = site.checks.saturating_add(1);
+            site.max_gap_before_check = site.max_gap_before_check.max(gap);
+        }
+        drop(state);
+        if result.is_err() {
+            let mut trace = self.profiler.inner.state.lock();
+            trace.observed_at = Some(match trace.observed_at {
+                Some(old) => old.min(end),
+                None => end,
+            });
+        }
+    }
+
+    /// Record a report of `completed` units. Compiled once, like
+    /// [`record_check`](Self::record_check).
+    fn record_report(&self, completed: u64, at: &'static Location<'static>) {
+        let now = if self.time_reports {
+            Some(self.now())
+        } else {
+            None
+        };
+        let mut state = self.state.lock();
+        if state.closed {
+            return;
+        }
+        if let Some(now) = now {
+            let at = SourceSite::from_location(at);
+            if now >= state.last_report {
+                let (checks, max_check_gap) = state.window.close(now);
+                let duration = now - state.last_report;
+                if state
+                    .stats
+                    .max_report_gap
+                    .as_ref()
+                    .is_none_or(|old| duration > old.duration)
+                {
+                    state.stats.max_report_gap = Some(ReportGap {
+                        start: state.last_report,
+                        duration,
+                        checks,
+                        max_check_gap,
+                        from: state.last_report_site,
+                        to: Some(at),
+                    });
+                }
+                state.last_report = now;
+                state.last_report_site = Some(at);
+            }
+        }
+        state.stats.overflowed |= add(&mut state.stats.reports, 1);
+        state.stats.overflowed |= add(&mut state.stats.units, completed);
+        if let Some(site) = site(&mut state.stats, at) {
+            site.reports = site.reports.saturating_add(1);
+            site.units = site.units.saturating_add(completed);
+        }
+    }
+
     fn finish(&self, outcome: Outcome) {
         let end = self.profiler.inner.clock.now();
         let stats = {
@@ -623,8 +728,13 @@ impl Span {
     pub fn instrument<T>(&self, value: T) -> Instrumented<T> {
         Instrumented {
             value,
-            span: Arc::clone(&self.inner),
+            span: self.shared(),
         }
+    }
+    /// The recording state, for wrappers that record through
+    /// [`checked`] and [`advanced`].
+    pub(crate) fn shared(&self) -> Arc<SpanInner> {
+        Arc::clone(&self.inner)
     }
     /// Record how the span ended. Wrappers keep working afterwards but stop
     /// recording.
@@ -664,10 +774,55 @@ impl<T: fmt::Debug> fmt::Debug for Instrumented<T> {
 }
 
 impl<T> Instrumented<T> {
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn new(value: T, span: Arc<SpanInner>) -> Self {
+        Self { value, span }
+    }
     /// The wrapped value. Calls made through it are not recorded.
     pub fn inner(&self) -> &T {
         &self.value
     }
+}
+
+/// The indices `0..len`, stably ordered by `compare`: equal elements keep
+/// their index order.
+///
+/// Every sort in this crate's analysis code goes through this one bottom-up
+/// merge sort. The standard library's sorts compile to thousands of lines per
+/// element type and comparator, which this cold code does not need.
+pub(crate) fn sorted_indices(
+    len: usize,
+    compare: &dyn Fn(usize, usize) -> core::cmp::Ordering,
+) -> Vec<usize> {
+    let mut order = Vec::with_capacity(len);
+    for index in 0..len {
+        order.push(index);
+    }
+    let mut merged = alloc::vec![0; len];
+    let mut width = 1;
+    while width < len {
+        let mut start = 0;
+        while start < len {
+            let middle = (start + width).min(len);
+            let end = (start + 2 * width).min(len);
+            let (mut left, mut right) = (start, middle);
+            for slot in &mut merged[start..end] {
+                let take_left =
+                    right == end || (left < middle && compare(order[left], order[right]).is_le());
+                if take_left {
+                    *slot = order[left];
+                    left += 1;
+                } else {
+                    *slot = order[right];
+                    right += 1;
+                }
+            }
+            start = end;
+        }
+        core::mem::swap(&mut order, &mut merged);
+        width *= 2;
+    }
+    order
 }
 
 fn add(value: &mut u64, n: u64) -> bool {
@@ -677,10 +832,13 @@ fn add(value: &mut u64, n: u64) -> bool {
 }
 
 fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a mut SiteStats> {
-    let position = stats
-        .sites
-        .iter()
-        .position(|s| s.file == at.file() && s.line == at.line() && s.column == at.column());
+    let mut position = None;
+    for (index, s) in stats.sites.iter().enumerate() {
+        if s.file == at.file() && s.line == at.line() && s.column == at.column() {
+            position = Some(index);
+            break;
+        }
+    }
     let index = if let Some(index) = position {
         index
     } else {
@@ -702,89 +860,35 @@ fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a 
     Some(&mut stats.sites[index])
 }
 
+/// `value.check()`, recorded in `span` at the caller's location. Every
+/// instrumented type calls this one body, so instrumenting another type adds
+/// a few lines, not a copy of the bookkeeping.
+#[track_caller]
+pub(crate) fn checked(span: &SpanInner, value: &dyn Stop) -> Result<(), StopReason> {
+    let start = span.now();
+    let result = value.check(); // User policy never runs under our locks.
+    span.record_check(start, result, Location::caller());
+    result
+}
+
+/// `value.advance(completed)`, recorded in `span` like [`checked`].
+#[track_caller]
+pub(crate) fn advanced(span: &SpanInner, value: &dyn Report, completed: u64) {
+    value.advance(completed);
+    span.record_report(completed, Location::caller());
+}
+
 impl<T: Stop> Stop for Instrumented<T> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        let start = self.span.profiler.inner.clock.now();
-        let result = self.value.check(); // User policy never runs under our locks.
-        let end = self.span.profiler.inner.clock.now();
-        let mut state = self.span.state.lock();
-        if !state.closed {
-            // A worker sharing this span may have recorded a later reading
-            // first; an out-of-order arrival is a zero gap, not a regression.
-            let gap = start.saturating_sub(state.last_check);
-            if gap > state.stats.max_check_gap {
-                state.stats.max_check_gap = gap;
-                state.stats.max_check_gap_start = state.last_check;
-            }
-            state.window.check(start);
-            state.last_check = state.last_check.max(start);
-            let elapsed = end.checked_sub(start).unwrap_or_else(|| {
-                state.stats.clock_regressions += 1;
-                Duration::ZERO
-            });
-            state.stats.check_time = state.stats.check_time.saturating_add(elapsed);
-            state.stats.overflowed |= add(&mut state.stats.checks, 1);
-            if result.is_err() && state.stats.stopped_at.is_none() {
-                state.stats.stopped_at = Some(end);
-                state.stats.stop_reason = result.err();
-            }
-            if let Some(site) = site(&mut state.stats, Location::caller()) {
-                site.checks = site.checks.saturating_add(1);
-                site.max_gap_before_check = site.max_gap_before_check.max(gap);
-            }
-            drop(state);
-            if result.is_err() {
-                let mut trace = self.span.profiler.inner.state.lock();
-                trace.observed_at = Some(trace.observed_at.map_or(end, |old| old.min(end)));
-            }
-        }
-        result
+        checked(&self.span, &self.value)
     }
 }
 
 impl<T: Report> Report for Instrumented<T> {
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.value.advance(completed);
-        let now = self
-            .span
-            .time_reports
-            .then(|| self.span.profiler.inner.clock.now());
-        let mut state = self.span.state.lock();
-        if state.closed {
-            return;
-        }
-        if let Some(now) = now {
-            let at = SourceSite::from_location(Location::caller());
-            if now >= state.last_report {
-                let (checks, max_check_gap) = state.window.close(now);
-                let duration = now - state.last_report;
-                if state
-                    .stats
-                    .max_report_gap
-                    .as_ref()
-                    .is_none_or(|old| duration > old.duration)
-                {
-                    state.stats.max_report_gap = Some(ReportGap {
-                        start: state.last_report,
-                        duration,
-                        checks,
-                        max_check_gap,
-                        from: state.last_report_site,
-                        to: Some(at),
-                    });
-                }
-                state.last_report = now;
-                state.last_report_site = Some(at);
-            }
-        }
-        state.stats.overflowed |= add(&mut state.stats.reports, 1);
-        state.stats.overflowed |= add(&mut state.stats.units, completed);
-        if let Some(site) = site(&mut state.stats, Location::caller()) {
-            site.reports = site.reports.saturating_add(1);
-            site.units = site.units.saturating_add(completed);
-        }
+        advanced(&self.span, &self.value, completed);
     }
 }
 
@@ -844,15 +948,12 @@ impl Trace {
     /// `Work`, a span with clock regressions, or a span together with one of
     /// its ancestors (which would count time twice).
     pub fn overlap(&self, ids: &[SpanId]) -> Option<Overlap> {
-        if ids.is_empty() {
-            return None;
-        }
-        let mut spans = Vec::new();
-        for (i, id) in ids.iter().enumerate() {
-            if ids[..i].contains(id) {
+        let mut spans: Vec<&SpanRecord> = Vec::with_capacity(ids.len());
+        for (i, &id) in ids.iter().enumerate() {
+            if ids[..i].contains(&id) {
                 return None;
             }
-            let span = self.spans.iter().find(|span| span.id == *id)?;
+            let span = self.span(id)?;
             if span.kind != SpanKind::Work
                 || span.end < span.start
                 || span.stats.clock_regressions != 0
@@ -864,26 +965,31 @@ impl Trace {
                 if ids.contains(&id) {
                     return None;
                 }
-                parent = self.spans.iter().find(|s| s.id == id)?.parent;
+                parent = self.span(id)?.parent;
             }
             spans.push(span);
         }
-        let first = spans.iter().map(|s| s.start).min()?;
-        let last = spans.iter().map(|s| s.end).max()?;
-        let mut events: Vec<_> = spans
-            .iter()
-            .flat_map(|s| [(s.start, 1_isize), (s.end, -1)])
-            .collect();
-        events.sort_unstable_by_key(|e| e.0);
+        let span = spans.first()?;
+        let (mut first, mut last) = (span.start, span.end);
+        let mut task_time = Duration::ZERO;
+        let mut events: Vec<(Duration, isize)> = Vec::with_capacity(2 * spans.len());
+        for span in &spans {
+            first = first.min(span.start);
+            last = last.max(span.end);
+            task_time = task_time.saturating_add(span.elapsed());
+            events.push((span.start, 1));
+            events.push((span.end, -1));
+        }
+        let order = sorted_indices(events.len(), &|a, b| events[a].0.cmp(&events[b].0));
         let mut active = 0_isize;
         let mut peak = 0;
         let mut tail_start = None;
         let mut i = 0;
-        while i < events.len() {
-            let at = events[i].0;
+        while i < order.len() {
+            let at = events[order[i]].0;
             let before = active;
-            while i < events.len() && events[i].0 == at {
-                active += events[i].1;
+            while i < order.len() && events[order[i]].0 == at {
+                active += events[order[i]].1;
                 i += 1;
             }
             peak = peak.max(active as usize);
@@ -894,9 +1000,6 @@ impl Trace {
             }
         }
         let wall = last.saturating_sub(first);
-        let task_time = spans
-            .iter()
-            .fold(Duration::ZERO, |sum, s| sum.saturating_add(s.elapsed()));
         Some(Overlap {
             wall,
             task_time,
@@ -906,8 +1009,25 @@ impl Trace {
                 task_time.as_secs_f64() / wall.as_secs_f64()
             },
             peak_active_tasks: peak,
-            single_task_tail: tail_start.map_or(Duration::ZERO, |at| last.saturating_sub(at)),
+            single_task_tail: match tail_start {
+                Some(at) => last.saturating_sub(at),
+                None => Duration::ZERO,
+            },
         })
+    }
+
+    /// The retained span with this identity.
+    #[expect(
+        clippy::manual_find,
+        reason = "a loop compiles to less code than an adapter"
+    )]
+    pub(crate) fn span(&self, id: SpanId) -> Option<&SpanRecord> {
+        for span in &self.spans {
+            if span.id == id {
+                return Some(span);
+            }
+        }
+        None
     }
 
     /// Time from the cancellation request to the first check that saw it.
@@ -1082,5 +1202,34 @@ fn optional_site(out: &mut impl fmt::Write, value: Option<SourceSite>) -> fmt::R
             write!(out, ",\"line\":{},\"column\":{}}}", site.line, site.column)
         }
         None => out.write_str("null"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sorted_indices;
+    use alloc::vec::Vec;
+
+    #[test]
+    fn sorted_indices_is_a_stable_sort() {
+        // A small LCG, so the test needs no dependencies and is reproducible.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        for len in [0, 1, 2, 3, 4, 5, 7, 8, 9, 16, 31, 33, 100, 257] {
+            for keys in [2, 7, 1_000] {
+                let values: Vec<u64> = (0..len)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                        (seed >> 33) % keys
+                    })
+                    .collect();
+                let mut expected: Vec<usize> = (0..len).collect();
+                expected.sort_by_key(|&i| values[i]); // The standard stable sort.
+                assert_eq!(
+                    sorted_indices(len, &|a, b| values[a].cmp(&values[b])),
+                    expected,
+                    "{len} values from {keys} keys"
+                );
+            }
+        }
     }
 }

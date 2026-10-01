@@ -129,14 +129,14 @@ impl Node {
             children: Vec::new(),
         };
         let children = meta.children.clone();
-        result.children = children
-            .iter()
-            .map(|child| child.snapshot_with(nonblocking))
-            .collect::<Option<Vec<_>>>()?;
-        if result.status == Status::Pending
-            && result.children.iter().any(|c| c.status != Status::Pending)
-        {
-            result.status = Status::Running;
+        result.children = Vec::with_capacity(children.len());
+        for child in &children {
+            let child = child.snapshot_with(nonblocking)?;
+            if child.status != Status::Pending {
+                // A pending branch whose child has started is running.
+                result.status = Status::Running;
+            }
+            result.children.push(child);
         }
         Some(result)
     }
@@ -250,10 +250,10 @@ impl Phase {
         execution: Execution,
         parts: [PhaseSpec<'_>; N],
     ) -> Result<[Phase; N], PlanError> {
-        let children = self.split_vec(execution, &parts)?;
-        Ok(children
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("same array length")))
+        match self.split_vec(execution, &parts)?.try_into() {
+            Ok(children) => Ok(children),
+            Err(_) => unreachable!("one child per part"),
+        }
     }
     /// Split an unused leaf into a runtime-sized list of children.
     ///
@@ -266,11 +266,16 @@ impl Phase {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Phase>, PlanError> {
         self.ensure_unused()?;
-        if parts.is_empty() || parts.iter().any(|p| p.weight == 0) {
+        if parts.is_empty() {
             return Err(PlanError::EmptyOrZeroWeight);
         }
+        // Checked in one pass, in the order `how-far`'s `NoPulse` checks, so
+        // both report the same error for the same plan.
         let mut sum = 0_u64;
         for part in parts {
+            if part.weight == 0 {
+                return Err(PlanError::EmptyOrZeroWeight);
+            }
             sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
         }
         let first = self
@@ -280,22 +285,22 @@ impl Phase {
                 n.checked_add(parts.len())
             })
             .map_err(|_| PlanError::Overflow)?;
-        let children: Vec<_> = parts
-            .iter()
-            .enumerate()
-            .map(|(i, part)| Phase {
-                node: Arc::new(Node::new(
-                    NodeId(first + i),
-                    Some(self.node.id),
-                    part,
-                    Arc::clone(&self.node.next_id),
-                )),
-            })
-            .collect();
+        let mut children = Vec::with_capacity(parts.len());
+        let mut nodes = Vec::with_capacity(parts.len());
+        for (i, part) in parts.iter().enumerate() {
+            let node = Arc::new(Node::new(
+                NodeId(first + i),
+                Some(self.node.id),
+                part,
+                Arc::clone(&self.node.next_id),
+            ));
+            nodes.push(Arc::clone(&node));
+            children.push(Phase { node });
+        }
         let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
         meta.total = Total::Unknown;
-        meta.children = children.iter().map(|p| Arc::clone(&p.node)).collect();
+        meta.children = nodes;
         self.node.meta.publish(meta);
         self.node.branch.store(true, Ordering::Release);
         Ok(children)
@@ -314,22 +319,20 @@ impl Phase {
     pub fn finish_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
         let mut snapshot = self.node.snapshot();
-        if snapshot
-            .children
-            .iter()
-            .any(|c| !matches!(c.status, Status::Finished(_)))
-        {
-            return Err(PlanError::UnfinishedChildren);
+        for child in &snapshot.children {
+            if !matches!(child.status, Status::Finished(_)) {
+                return Err(PlanError::UnfinishedChildren);
+            }
         }
-        if matches!(outcome, Outcome::Succeeded | Outcome::Skipped)
-            && snapshot.children.iter().any(|c| {
-                !matches!(
-                    c.status,
+        if matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
+            for child in &snapshot.children {
+                if !matches!(
+                    child.status,
                     Status::Finished(Outcome::Succeeded | Outcome::Skipped)
-                )
-            })
-        {
-            return Err(PlanError::UnsuccessfulChildren);
+                ) {
+                    return Err(PlanError::UnsuccessfulChildren);
+                }
+            }
         }
         snapshot.status = Status::Finished(outcome);
         self.freeze(snapshot);
@@ -596,7 +599,7 @@ impl Snapshot {
             return Some(1.0);
         }
         if !self.children.is_empty() {
-            let sum: f64 = self.children.iter().map(|c| c.weight as f64).sum();
+            let sum = self.child_weight_sum();
             let mut result = 0.0;
             for child in &self.children {
                 result += child.weight as f64 / sum * child.fraction()?;
@@ -623,11 +626,19 @@ impl Snapshot {
         if self.children.is_empty() {
             return 1.0;
         }
-        let sum: f64 = self.children.iter().map(|c| c.weight as f64).sum();
-        self.children
-            .iter()
-            .map(|c| c.weight as f64 / sum * c.unresolved_fraction())
-            .sum()
+        let sum = self.child_weight_sum();
+        let mut unresolved = 0.0;
+        for child in &self.children {
+            unresolved += child.weight as f64 / sum * child.unresolved_fraction();
+        }
+        unresolved
+    }
+    fn child_weight_sum(&self) -> f64 {
+        let mut sum = 0.0;
+        for child in &self.children {
+            sum += child.weight as f64;
+        }
+        sum
     }
     /// Whether an exact count was exceeded. Success never hides this diagnostic.
     pub fn overrun(&self) -> bool {
