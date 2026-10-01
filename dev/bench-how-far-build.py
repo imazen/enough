@@ -136,8 +136,8 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
         for _ in range(args.runs):
             for key in samples:
                 samples[key].append(perf_instructions(commands[key], tmp))
-    except RuntimeError as error:
-        print(f"perf unavailable ({error.args[0].strip().splitlines()[-1]}); skipping instruction counts")
+    except RuntimeError:
+        print("perf cannot count instructions here (see kernel.perf_event_paranoid); skipping them")
         raise SystemExit(0)
     m = {key: statistics.median(values) / 1e6 for key, values in samples.items()}
     print(f"{'rustc instructions (millions)':44} {'check':>7} {'debug':>7} {'release':>7}")

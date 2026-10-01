@@ -105,7 +105,8 @@ again for the generic `how-far` code compiled into the library itself.
 `dev/bench-how-far-build.py` measures both and runs in CI. It fails if
 `how-far` gains a feature, a build script, or a dependency other than
 `enough`, or if one `Stages::run_*` call site adds more than 120 lines of
-`how-far`'s unoptimized LLVM IR to the caller's crate (81 today).
+`how-far`'s unoptimized LLVM IR to the caller's crate (81 with rustc
+1.98.1, 91 with 1.88).
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
