@@ -100,19 +100,37 @@ traces from the UI with `Profiler::try_snapshot`.
 
 ## Build cost
 
-A library that adopts `how-far` adds one small crate to its build. Fresh
-target directory, default features, warm toolchain and file caches, five runs
-each, measured 2026-10-01 on an AMD Ryzen 9 5900XT with rustc 1.98.1:
+A library that adopts `how-far` pays twice: once to compile `how-far`, and
+again for the generic `how-far` code compiled into the library itself.
+`dev/bench-how-far-build.py` measures both and runs in CI. It fails if
+`how-far` gains a feature, a build script, or a dependency other than
+`enough`, or if one `Stages::run_*` call site adds more than 120 lines of
+`how-far`'s unoptimized LLVM IR to the caller's crate (81 today).
 
-| Crate | Median | Runs (seconds) |
-| --- | ---: | --- |
-| `enough` | 0.125 s | 0.126, 0.122, 0.123, 0.125, 0.127 |
-| `how-far` (including `enough`) | 0.217 s | 0.223, 0.217, 0.217, 0.214, 0.211 |
+With `perf` available, it also counts rustc's instructions, which unlike wall
+time do not depend on machine load (the metric
+[rustc-perf](https://perf.rust-lang.org/) uses). Measured 2026-10-01 with
+rustc 1.98.1, medians of five, in millions:
 
-So `how-far` adds about 90 ms to a cold build, process startup included. These
-are one machine's numbers, not guarantees. Reproduce with
-`python3 dev/bench-how-far-build.py --runs 5`, which alternates crate order,
-uses a new target directory per sample, and first checks that `how-far` has no
-features and depends only on `enough`.
+| rustc instructions | check | debug | release |
+| --- | ---: | ---: | ---: |
+| An empty `no_std` crate | 14.2 | 16.4 | 19.1 |
+| `how-far` | 161.3 | 312.6 | 399.4 |
+| A plain function call, per call site | 4.5 | 8.1 | 45.5 |
+| A `Stages::run_stoppable` call site | 5.6 | 12.2 | 59.6 |
+
+The last two rows come from caller crates with 8 and 32 call sites, each
+running the same small stage function. On an AMD Ryzen 9 5900XT, rustc takes
+70 ms to check `how-far` and 99 ms for a debug build of it, against 34 ms and
+33 ms for an empty crate; most of an empty crate's time is process startup.
+`how-far` depends only on `enough`, so in a real build it compiles while a
+library's larger dependencies are still compiling.
+
+Before `Stages` moved its bookkeeping out of its generic methods, a call site
+added 312 lines of IR and cost 16.7 and 70.5 million instructions in debug
+and release builds; `how-far` itself cost 161.1, 302.8 and 382.0. The
+reasoning is in [the design notes](how-far-design.md#compile-time-cost).
+
+Reproduce with `python3 dev/bench-how-far-build.py --runs 5`.
 
 Runtime cost is in [the overhead results](../benchmarks/how-far-overhead.md).

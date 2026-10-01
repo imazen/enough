@@ -30,7 +30,9 @@ Every phase has exactly one owner, and only the owner publishes its outcome.
   unfinished (including during a panic) is recorded as `Abandoned`.
 - The pulse a function receives belongs to its caller. `Pulse` has no
   `finish` method, so a library cannot finish what it was given.
-- `Stages` finishes the stages it split and never the pulse it was given.
+- `Stages` finishes the stages it split and never the pulse it was given. If
+  a stage's closure panics, the stage is recorded as abandoned and no later
+  stage runs.
 - The application finishes the root with `PulseTree::finish`.
 
 This is what makes libraries composable. When library A runs library B
@@ -146,6 +148,45 @@ many workers. Measured on one machine, a checkpoint into a live tree costs 1.6
 to 3.1 ns more than into `NoPulse`, which is about 1 to 2% of a 256 KiB
 codec loop checked once per 4 KiB; see
 [the overhead results](../benchmarks/how-far-overhead.md).
+
+## Compile-time cost
+
+`how-far` has no build script, proc macros, or features, and one dependency,
+`enough`. Checking it costs about ten empty crates' worth of rustc work, and
+because it depends only on `enough`, it compiles while a library's larger
+dependencies are still compiling. [The validation notes](how-far-validation.md#build-cost)
+have the numbers and the CI guard.
+
+The cost that lands in a library's own compile is the generic code it
+instantiates, once per distinct type argument:
+
+- Library code takes `&dyn Pulse`, so nothing is compiled per pulse type. A
+  library compiles once whether its caller passes a `PulseTree`, a test
+  recorder, or `NoPulse`.
+- `Stages::run_*` must be generic over its closure, so every call site gets a
+  copy. The copy only fetches the stage, calls the closure, and hands the
+  result on. Choosing the next stage and finishing it are compiled once, in
+  `how-far`; the step between them is generic only over the result type, so
+  call sites with the same types share it. A call site costs about 1.5 times
+  as much to compile as a plain function call.
+- `ProgressExt::step` and `live` are compiled once per receiver type, and
+  there are only a few: `dyn Pulse`, `Option<&dyn Pulse>`, `Child`.
+  `split_array` is compiled per pulse type and length, with its panic kept out
+  of line.
+
+If a stage's closure panics, nothing is recorded during the unwind: that
+would put a drop of the stage into every call site's copy. The stage stays in
+the `Stages` and is recorded as abandoned, with every later stage, when the
+`Stages` drops. A caller that catches the panic and calls a `run` method
+again gets `PlanError::Finished`; the stage is then recorded as abandoned and
+the rest as skipped.
+
+The derives are deliberate. `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`, and
+`Default` together are about a quarter of `how-far`'s own check time, and the
+least useful of them (equality on `NoPulse`, `NoReport`, and
+`ProgressWithStop`, and `Hash` anywhere) are about 6%. They stay: a type that
+embeds `NoReport` or an `Outcome` can derive those traits only if `how-far`
+implements them, and no other crate can add them later.
 
 ## API evolution
 
