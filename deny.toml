@@ -12,6 +12,9 @@ exclude = [
     "test-codec-mock",
     "test-ergonomics",
     "test-or-do-this",
+    "test-how-far-codec",
+    "test-how-far-pipeline",
+    "test-how-far-app",
 ]
 
 [advisories]

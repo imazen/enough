@@ -279,7 +279,8 @@ fn bad_clock_is_diagnostic_and_noop_instrumentation_survives_type_erasure() {
     span.finish(Outcome::Failed);
     let trace = profiler.snapshot();
     assert_eq!(trace.spans[0].stats.checks, 1);
-    assert_eq!(trace.spans[0].stats.clock_regressions, 2);
+    // The reading at finish (9) is behind the last check's (20): one regression.
+    assert_eq!(trace.spans[0].stats.clock_regressions, 1);
     assert!(trace.overlap(&[trace.spans[0].id]).is_none());
 }
 
@@ -363,4 +364,28 @@ fn reporting_reads_the_clock_only_when_report_timing_is_on() {
     assert_eq!(trace.spans[0].stats.reports, 100);
     assert!(trace.spans[0].stats.max_report_gap.is_none());
     assert!(trace.spans[1].stats.max_report_gap.is_some());
+}
+
+#[test]
+fn workers_sharing_a_span_never_look_like_a_backwards_clock() {
+    // Each worker reads the clock before taking the span's lock, so readings
+    // reach the span out of order. That is concurrency, not a clock fault.
+    let profiler = Profiler::new(how_far_along::profile::StdClock::new(), 1);
+    profiler.set_report_timing(true);
+    let span = profiler.span(None, "shared", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                for _ in 0..2_000 {
+                    work.step(1).unwrap();
+                }
+            });
+        }
+    });
+    span.finish(Outcome::Succeeded);
+    let trace = profiler.snapshot();
+    assert_eq!(trace.spans[0].stats.clock_regressions, 0);
+    assert_eq!(trace.spans[0].stats.checks, 16_000);
+    assert_eq!(trace.spans[0].stats.units, 16_000);
 }

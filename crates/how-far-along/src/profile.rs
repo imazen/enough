@@ -208,7 +208,9 @@ pub struct Stats {
     pub stopped_at: Option<Duration>,
     /// That check's reason, which keeps cancellation apart from a timeout.
     pub stop_reason: Option<StopReason>,
-    /// Times the clock went backwards here; those intervals count as zero.
+    /// Times the clock went backwards within one call, or at finish. Workers
+    /// sharing a span can deliver readings out of order; that is expected,
+    /// counts as a zero gap, and is not a regression.
     pub clock_regressions: u64,
     /// Up to 64 distinct call sites.
     pub sites: Vec<SiteStats>,
@@ -708,16 +710,15 @@ impl<T: Stop> Stop for Instrumented<T> {
         let end = self.span.profiler.inner.clock.now();
         let mut state = self.span.state.lock();
         if !state.closed {
-            let gap = start.checked_sub(state.last_check).unwrap_or_else(|| {
-                state.stats.clock_regressions += 1;
-                Duration::ZERO
-            });
+            // A worker sharing this span may have recorded a later reading
+            // first; an out-of-order arrival is a zero gap, not a regression.
+            let gap = start.saturating_sub(state.last_check);
             if gap > state.stats.max_check_gap {
                 state.stats.max_check_gap = gap;
                 state.stats.max_check_gap_start = state.last_check;
             }
             state.window.check(start);
-            state.last_check = start;
+            state.last_check = state.last_check.max(start);
             let elapsed = end.checked_sub(start).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
@@ -756,28 +757,27 @@ impl<T: Report> Report for Instrumented<T> {
         }
         if let Some(now) = now {
             let at = SourceSite::from_location(Location::caller());
-            let (checks, max_check_gap) = state.window.close(now);
-            let duration = now.checked_sub(state.last_report).unwrap_or_else(|| {
-                state.stats.clock_regressions += 1;
-                Duration::ZERO
-            });
-            if state
-                .stats
-                .max_report_gap
-                .as_ref()
-                .is_none_or(|old| duration > old.duration)
-            {
-                state.stats.max_report_gap = Some(ReportGap {
-                    start: state.last_report,
-                    duration,
-                    checks,
-                    max_check_gap,
-                    from: state.last_report_site,
-                    to: Some(at),
-                });
+            if now >= state.last_report {
+                let (checks, max_check_gap) = state.window.close(now);
+                let duration = now - state.last_report;
+                if state
+                    .stats
+                    .max_report_gap
+                    .as_ref()
+                    .is_none_or(|old| duration > old.duration)
+                {
+                    state.stats.max_report_gap = Some(ReportGap {
+                        start: state.last_report,
+                        duration,
+                        checks,
+                        max_check_gap,
+                        from: state.last_report_site,
+                        to: Some(at),
+                    });
+                }
+                state.last_report = now;
+                state.last_report_site = Some(at);
             }
-            state.last_report = now;
-            state.last_report_site = Some(at);
         }
         state.stats.overflowed |= add(&mut state.stats.reports, 1);
         state.stats.overflowed |= add(&mut state.stats.units, completed);

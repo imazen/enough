@@ -1,0 +1,12 @@
+[package]
+name = "test-how-far-codec"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "A pretend codec library that reports through how-far, as a real one would"
+
+# A library adopting how-far needs only the interface crate. No tracker here.
+[dependencies]
+how-far = { workspace = true }
+rayon = "1.12.0"
