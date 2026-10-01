@@ -60,11 +60,11 @@ fn decode_generic<P: Pulse>(buf: &mut [u8], chunk: usize, pulse: &P) -> Result<(
     Ok(())
 }
 
-/// The `&dyn` loop with the gate a library can add: no calls at all when the
+/// The `&dyn` loop gated with `ProgressExt::gated`: no calls at all when the
 /// pulse neither stops nor reports.
 #[inline(never)]
 fn decode_gated(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
-    let pulse = (pulse.may_stop() || pulse.may_report()).then_some(pulse);
+    let pulse = pulse.gated();
     pulse.check()?;
     for part in buf.chunks_mut(chunk) {
         sub_defilter(part);

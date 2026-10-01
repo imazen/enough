@@ -12,9 +12,10 @@
   `Pulse`, one object-safe interface through which a library checks for
   cancellation, counts completed work, and plans weighted phases. `Stages` runs
   sequential plans; owned `Child` handles make finishing a phase owner-only and
-  once-only, so libraries built on `Stages` can call one another; and
-  `Pulse::handle` gives `'static` code an owned stop and counter (a967c21,
-  c421c45, fc36c54).
+  once-only, so libraries built on `Stages` can call one another;
+  `Pulse::handle` gives `'static` code an owned stop and counter; and
+  `ProgressExt::gated` plus `how_far::prelude` make a hot loop's checkpoints
+  free when nobody listens (a967c21, c421c45, fc36c54).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span

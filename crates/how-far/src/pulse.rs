@@ -177,16 +177,20 @@ impl<'a> PhaseSpec<'a> {
     }
 }
 
-/// Check a split's parts the way every `Pulse` does.
+/// Check a split's parts the way every `Pulse` does. Plain loops keep this
+/// crate's compiled code small.
 pub(crate) fn validate(parts: &[PhaseSpec<'_>]) -> Result<(), PlanError> {
-    if parts.is_empty() || parts.iter().any(|part| part.weight == 0) {
+    if parts.is_empty() {
         return Err(PlanError::EmptyOrZeroWeight);
     }
-    parts
-        .iter()
-        .try_fold(0_u64, |sum, part| sum.checked_add(part.weight))
-        .map(|_| ())
-        .ok_or(PlanError::Overflow)
+    let mut sum = 0_u64;
+    for part in parts {
+        if part.weight == 0 {
+            return Err(PlanError::EmptyOrZeroWeight);
+        }
+        sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
+    }
+    Ok(())
 }
 
 /// Cancellation, completed work, and nested phase planning, in one value.
@@ -353,7 +357,11 @@ impl Report for NoPulse {
 impl Pulse for NoPulse {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         validate(parts)?;
-        Ok(parts.iter().map(|_| Child::new(Self)).collect())
+        let mut children = Vec::with_capacity(parts.len());
+        for _ in parts {
+            children.push(Child::new(Self));
+        }
+        Ok(children)
     }
     fn handle(&self) -> PulseHandle {
         PulseHandle::default()

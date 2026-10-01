@@ -140,8 +140,8 @@ time on every target.
 Dynamic dispatch does not by itself cause register spills; any call the
 compiler cannot inline does, because the loop's live values must survive it.
 The remedies are cadence and gating: check once per row, block, or tile;
-skip no-op pulses with `(pulse.may_stop() || pulse.may_report()).then_some(pulse)`;
-and batch reports from
+skip no-op pulses with `pulse.gated()`, an `Option<&dyn Pulse>` whose
+calls are branches when nobody listens; and batch reports from
 many workers. Measured on one machine, a checkpoint into a live tree costs 1.6
 to 3.1 ns more than into `NoPulse`, which is about 1 to 2% of a 256 KiB
 codec loop checked once per 4 KiB; see

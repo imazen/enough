@@ -19,6 +19,37 @@ pub trait ProgressExt: Stop + Report {
         self.check()
     }
 
+    /// This value, or `None` when it can neither stop nor report.
+    ///
+    /// Call it once before a hot loop. `Option<&P>` implements `Stop` and
+    /// `Report`, so `check`, `advance` and `step` work on the result: they
+    /// forward when the pulse may stop or report, and cost a branch instead
+    /// of a call when it can do neither, as with [`NoPulse`](crate::NoPulse).
+    /// `may_stop` and `may_report` return `false` only for permanent no-ops, so
+    /// gating early never drops a report or a stop request.
+    ///
+    /// ```
+    /// use how_far::prelude::*;
+    ///
+    /// fn decode(rows: &[Vec<u8>], pulse: &dyn Pulse) -> Result<u64, how_far::StopReason> {
+    ///     let pulse = pulse.gated();
+    ///     pulse.check()?;
+    ///     let mut sum = 0;
+    ///     for row in rows {
+    ///         sum += row.iter().map(|&b| u64::from(b)).sum::<u64>();
+    ///         pulse.step(1)?;
+    ///     }
+    ///     Ok(sum)
+    /// }
+    ///
+    /// assert!(how_far::NoPulse.gated().is_none());
+    /// assert_eq!(decode(&[vec![1, 2], vec![3]], &how_far::NoPulse), Ok(6));
+    /// ```
+    #[inline]
+    fn gated(&self) -> Option<&Self> {
+        (self.may_stop() || self.may_report()).then_some(self)
+    }
+
     /// [`Pulse::split`] into exactly `N` children, returned as an array.
     ///
     /// ```

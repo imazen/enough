@@ -159,3 +159,74 @@ fn split_array_rejects_a_pulse_that_breaks_the_split_contract() {
         [PhaseSpec::new("one", 1, Total::Unknown)],
     );
 }
+
+#[test]
+fn gating_drops_only_pulses_that_can_neither_stop_nor_report() {
+    use how_far::{NoReport, ProgressWithStop, Unstoppable};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Count(AtomicU64);
+    impl Report for Count {
+        fn advance(&self, n: u64) {
+            self.0.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+    struct Stopping;
+    impl Stop for Stopping {
+        fn check(&self) -> Result<(), StopReason> {
+            Err(StopReason::Cancelled)
+        }
+    }
+
+    let inert: &dyn Pulse = &NoPulse;
+    assert!(inert.gated().is_none());
+    assert!(NoPulse.gated().is_none());
+    assert!(
+        ProgressWithStop::new(Unstoppable, NoReport)
+            .gated()
+            .is_none()
+    );
+    let [child] = NoPulse
+        .split_array(
+            Execution::Sequence,
+            [PhaseSpec::new("child", 1, Total::Unknown)],
+        )
+        .unwrap();
+    assert!(child.gated().is_none());
+    // `None` checks and steps like the original, without a call.
+    let gated = inert.gated();
+    gated.check().unwrap();
+    gated.advance(5);
+    gated.step(5).unwrap();
+    assert!(!gated.may_stop() && !gated.may_report());
+
+    let count = Count(AtomicU64::new(0));
+    let counting = ProgressWithStop::new(Unstoppable, &count);
+    let gated = counting.gated();
+    assert!(gated.is_some());
+    gated.step(3).unwrap();
+    gated.advance(2);
+    assert_eq!(count.0.load(Ordering::Relaxed), 5);
+
+    let stopping = ProgressWithStop::new(Stopping, NoReport);
+    assert_eq!(stopping.gated().check(), Err(StopReason::Cancelled));
+}
+
+#[test]
+fn the_prelude_brings_every_checkpoint_method_into_scope() {
+    mod library {
+        use how_far::prelude::*;
+
+        pub fn run(pulse: &dyn Pulse) -> Result<(), how_far::StopReason> {
+            let gated = pulse.gated();
+            gated.check()?;
+            gated.advance(1);
+            gated.step(1)?;
+            let handle = pulse.handle();
+            handle.check()?;
+            handle.advance(1);
+            handle.step(1)
+        }
+    }
+    library::run(&NoPulse).unwrap();
+}

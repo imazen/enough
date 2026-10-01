@@ -61,7 +61,7 @@ mod tree;
 pub use how_far::{
     Child, ChildPulse, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, ProgressExt,
     ProgressWithStop, Pulse, PulseHandle, Report, RunError, Stages, Stop, StopReason, Total,
-    Unstoppable,
+    Unstoppable, prelude,
 };
 pub use pulse::PulseTree;
 pub use tree::{NodeId, Observer, Phase, Reporter, Snapshot, Status};

@@ -185,7 +185,10 @@ impl Report for TreePulse {
         }
     }
     fn may_report(&self) -> bool {
-        self.activity.load(Ordering::Relaxed) < SPLIT && self.reporter.may_report()
+        // `false` must be permanent, so a split in progress (which may still
+        // fail and revert) does not count; the reporter turns inert only once
+        // the split is published.
+        self.activity.load(Ordering::Relaxed) != FINISHED && self.reporter.may_report()
     }
 }
 
