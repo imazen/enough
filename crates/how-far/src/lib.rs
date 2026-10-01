@@ -54,11 +54,13 @@ extern crate alloc;
 pub use enough::{Stop, StopReason, Unstoppable};
 
 mod ext;
+mod paced;
 mod pulse;
 mod report;
 mod stages;
 
 pub use ext::ProgressExt;
+pub use paced::Paced;
 pub use pulse::{
     Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, PulseHandle, Total,
 };

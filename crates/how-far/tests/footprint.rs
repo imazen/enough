@@ -7,8 +7,8 @@
 //! grows them should fail here first.
 
 use how_far::{
-    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, ProgressWithStop, Pulse,
-    PulseHandle, Report, RunError, Stages, Stop, StopReason, Total, Unstoppable,
+    Child, Execution, NoPulse, NoReport, Outcome, Paced, PhaseSpec, PlanError, ProgressWithStop,
+    Pulse, PulseHandle, Report, RunError, Stages, Stop, StopReason, Total, Unstoppable,
 };
 use std::mem::size_of;
 
@@ -23,6 +23,8 @@ const _: () = {
     assert!(size_of::<Box<dyn Pulse>>() == 2 * WORD);
     // `ProgressExt::live` keeps the two words: `None` is the null pointer.
     assert!(size_of::<Option<&dyn Pulse>>() == 2 * WORD);
+    // A pulse and two counters; its `step` keeps them in registers in a loop.
+    assert!(size_of::<Paced<'static>>() == 2 * WORD + 16);
     assert!(size_of::<Result<(), StopReason>>() == 1);
     assert!(size_of::<Result<(), PlanError>>() == 1);
     assert!(size_of::<Outcome>() == 1);
