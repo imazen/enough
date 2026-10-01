@@ -1,21 +1,41 @@
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use enough::{Stop, StopReason};
-use how_far::{Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report};
-use std::sync::Barrier;
+//! A hand-written `Pulse` shared by OS threads, with no tracker involved.
 
-/// A test-only leaf: this exercises the public trait without depending on the tracker.
-#[derive(Default)]
+use how_far::{
+    Child, Execution, PhaseSpec, PlanError, ProgressExt, ProgressWithStop, Pulse, PulseHandle,
+    Report, Stop, StopReason,
+};
+use std::sync::{
+    Arc, Barrier,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
+
+/// A leaf whose state is shared, so it can also hand out `'static` handles.
+#[derive(Clone, Default)]
 struct SharedLeaf {
-    completed: AtomicU64,
-    cancelled: AtomicBool,
+    completed: Arc<AtomicU64>,
+    cancelled: Arc<AtomicBool>,
 }
-impl Stop for SharedLeaf {
+
+struct Flag(Arc<AtomicBool>);
+impl Stop for Flag {
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.0.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
         }
+    }
+}
+struct Counter(Arc<AtomicU64>);
+impl Report for Counter {
+    fn advance(&self, units: u64) {
+        self.0.fetch_add(units, Ordering::Relaxed);
+    }
+}
+
+impl Stop for SharedLeaf {
+    fn check(&self) -> Result<(), StopReason> {
+        Flag(self.cancelled.clone()).check()
     }
 }
 impl Report for SharedLeaf {
@@ -24,21 +44,19 @@ impl Report for SharedLeaf {
     }
 }
 impl Pulse for SharedLeaf {
-    fn split(
-        &self,
-        _: Execution,
-        _: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Box<dyn Pulse + '_>>, PlanError> {
-        Err(PlanError::AlreadyInUse)
+    fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
+        Err(PlanError::Unsupported)
     }
-
-    fn finish(&self, _: Outcome) -> Result<(), PlanError> {
-        Ok(())
+    fn handle(&self) -> PulseHandle {
+        ProgressWithStop::new(
+            Some(Arc::new(Flag(self.cancelled.clone()))),
+            Some(Arc::new(Counter(self.completed.clone()))),
+        )
     }
 }
 
 #[test]
-fn four_os_threads_share_one_dyn_pulse_and_see_cancellation() {
+fn four_scoped_threads_share_one_dyn_pulse_and_all_see_cancellation() {
     let leaf = SharedLeaf::default();
     let pulse: &dyn Pulse = &leaf;
     let start = Barrier::new(5);
@@ -76,12 +94,37 @@ fn four_os_threads_share_one_dyn_pulse_and_see_cancellation() {
 }
 
 #[test]
-fn reporting_checkpoint_observes_cancellation_but_check_only_does_not_report() {
+fn spawned_static_threads_work_through_owned_handles() {
     let leaf = SharedLeaf::default();
     let pulse: &dyn Pulse = &leaf;
-    pulse.check().unwrap();
-    assert_eq!(leaf.completed.load(Ordering::Relaxed), 0);
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            let handle = pulse.handle();
+            // `thread::spawn` needs `'static`; a borrowed pulse cannot move in.
+            std::thread::spawn(move || {
+                for _ in 0..25 {
+                    handle.step(1)?;
+                }
+                Ok::<(), StopReason>(())
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap().unwrap();
+    }
+    assert_eq!(leaf.completed.load(Ordering::Relaxed), 100);
+
     leaf.cancelled.store(true, Ordering::Release);
-    assert_eq!(pulse.step(3), Err(StopReason::Cancelled));
-    assert_eq!(leaf.completed.load(Ordering::Relaxed), 3);
+    let handle = pulse.handle();
+    let stopped = std::thread::spawn(move || handle.stop.check());
+    assert_eq!(stopped.join().unwrap(), Err(StopReason::Cancelled));
+}
+
+#[test]
+fn a_leaf_that_cannot_plan_says_so() {
+    let leaf = SharedLeaf::default();
+    assert_eq!(
+        leaf.split(Execution::Sequence, &[]).err(),
+        Some(PlanError::Unsupported)
+    );
 }

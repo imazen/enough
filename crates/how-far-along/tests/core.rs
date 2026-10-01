@@ -1,5 +1,7 @@
-use how_far_along::ext::{ProgressExt, ReportExt};
-use how_far_along::{IgnoreProgress, ProgressWithStop, Report, Stop, StopReason, Unstoppable};
+use how_far_along::ext::ReportExt;
+use how_far_along::{
+    NoReport, ProgressExt, ProgressWithStop, Report, Stop, StopReason, Unstoppable,
+};
 use std::{num::NonZeroU64, sync::Mutex};
 
 #[derive(Default)]
@@ -38,12 +40,12 @@ fn completed_work_survives_cancellation_and_preserves_the_call_site() {
 
 #[test]
 fn absent_sinks_and_policies_are_permanent_no_ops() {
-    let work = ProgressWithStop::new(Unstoppable, IgnoreProgress);
+    let work = ProgressWithStop::new(Unstoppable, NoReport);
     assert!(!work.may_stop());
     assert!(!work.may_report());
     assert_eq!(std::mem::size_of_val(&work), 0);
     work.step(u64::MAX).unwrap();
-    let report = IgnoreProgress;
+    let report = NoReport;
     assert!(!report.may_report());
     report.advance(1);
 }

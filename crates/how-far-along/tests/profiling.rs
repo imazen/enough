@@ -1,9 +1,8 @@
 #![cfg(feature = "profile")]
-use how_far_along::ext::ProgressExt;
-use how_far_along::poll::ControlHandle;
+use almost_enough::Stopper;
 use how_far_along::profile::{Clock, Profiler, SpanKind};
 use how_far_along::{
-    IgnoreProgress, Outcome, ProgressWithStop, Report, Stop, StopReason, Unstoppable,
+    NoReport, NodeId, Outcome, ProgressExt, ProgressWithStop, Report, Stop, StopReason, Unstoppable,
 };
 use std::{
     sync::{
@@ -31,7 +30,7 @@ fn asymmetric_overlap_exposes_straggler_without_claiming_cpu_utilization() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
     let spans: Vec<_> = (0..4)
-        .map(|i| profiler.span(7, format!("task-{i}"), SpanKind::Work))
+        .map(|i| profiler.span(None, format!("task-{i}"), SpanKind::Work))
         .collect();
     let ids: Vec<_> = spans.iter().map(|span| span.id()).collect();
     for (span, end) in spans.into_iter().zip([12, 20, 22, 90]) {
@@ -50,15 +49,21 @@ fn asymmetric_overlap_exposes_straggler_without_claiming_cpu_utilization() {
         Duration::from_millis(90)
     );
     assert!(trace.overlap(&[ids[0], ids[0]]).is_none());
-    assert!(trace.overlap(&[999]).is_none());
+    assert!(trace.overlap(&[]).is_none());
+    // A span beyond the profiler's capacity is not retained, so it is missing.
+    let extra = profiler.span(None, "over capacity", SpanKind::Work);
+    let missing = extra.id();
+    extra.finish(Outcome::Succeeded);
+    assert_eq!(profiler.snapshot().dropped_spans, 1);
+    assert!(profiler.snapshot().overlap(&[missing]).is_none());
 }
 
 #[test]
 fn per_task_boundary_gaps_cannot_be_masked_by_another_busy_worker() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
-    let busy = profiler.span(1, "frequent", SpanKind::Work);
-    let silent = profiler.span(1, "unpolled tail", SpanKind::Work);
+    let busy = profiler.span(None, "frequent", SpanKind::Work);
+    let silent = profiler.span(None, "unpolled tail", SpanKind::Work);
     let busy_stop = busy.instrument(Unstoppable);
     let silent_stop = silent.instrument(Unstoppable);
     clock.set(2);
@@ -82,8 +87,8 @@ fn per_task_boundary_gaps_cannot_be_masked_by_another_busy_worker() {
 fn check_storms_counts_units_and_original_sites_stay_separate() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 1);
-    let span = profiler.span(0, "candidate search", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    let span = profiler.span(None, "candidate search", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     let mut checks_line = 0;
     for _ in 0..10_000 {
         checks_line = line!() + 1;
@@ -138,17 +143,17 @@ fn check_storms_counts_units_and_original_sites_stay_separate() {
 fn cancellation_measurements_include_observation_and_join_cleanup_tail() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
-    let span = profiler.span(0, "worker", SpanKind::Work);
-    let control = ControlHandle::new();
-    let stop = span.instrument(control.clone());
+    let span = profiler.span(None, "worker", SpanKind::Work);
+    let stopper = Stopper::new();
+    let stop = span.instrument(stopper.clone());
     clock.set(10);
     profiler.cancellation_requested();
-    control.cancel();
+    stopper.cancel();
     clock.set(17);
     assert_eq!(stop.check(), Err(StopReason::Cancelled));
     clock.set(24);
     span.finish(Outcome::Cancelled);
-    let join = profiler.span(0, "join and cleanup", SpanKind::Wait);
+    let join = profiler.span(None, "join and cleanup", SpanKind::Wait);
     clock.set(35);
     join.finish(Outcome::Cancelled);
     profiler.operation_returned();
@@ -171,7 +176,7 @@ fn cancellation_measurements_include_observation_and_join_cleanup_tail() {
 fn nested_callback_wait_and_yield_spans_do_not_double_count_execution() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 8);
-    let outer = profiler.span(1, "outer", SpanKind::Work);
+    let outer = profiler.span(NodeId::ROOT, "outer", SpanKind::Work);
     let inner = outer.child("nested work", SpanKind::Work);
     let ids = [outer.id(), inner.id()];
     clock.set(1);
@@ -207,7 +212,7 @@ fn arbitrary_stop_callback_time_is_measured_without_holding_collector_locks() {
     }
     impl Stop for Callback {
         fn check(&self) -> Result<(), StopReason> {
-            let nested = self.profiler.span(0, "callback", SpanKind::Callback);
+            let nested = self.profiler.span(None, "callback", SpanKind::Callback);
             self.profiler.metadata("reentered", "yes");
             self.clock.set(10);
             nested.finish(Outcome::Succeeded);
@@ -216,7 +221,7 @@ fn arbitrary_stop_callback_time_is_measured_without_holding_collector_locks() {
     }
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let span = profiler.span(0, "outer", SpanKind::Work);
+    let span = profiler.span(None, "outer", SpanKind::Work);
     let stop = span.instrument(Callback {
         clock: clock.clone(),
         profiler: profiler.clone(),
@@ -235,11 +240,11 @@ fn bounded_retention_and_abandonment_are_visible_and_json_escapes_labels() {
     let profiler = Profiler::new(ManualClock::default(), 1);
     profiler.metadata("key\"\n", "value\t\\\u{0001}😀");
     profiler.metadata("key\"\n", "replacement\t\\\u{0001}😀");
-    let first = profiler.span(0, "name\"\n", SpanKind::Work);
-    let first_work = first.instrument(IgnoreProgress);
+    let first = profiler.span(None, "name\"\n", SpanKind::Work);
+    let first_work = first.instrument(NoReport);
     first_work.advance(u64::MAX);
     first_work.advance(1);
-    let second = profiler.span(0, "dropped", SpanKind::Work);
+    let second = profiler.span(None, "dropped", SpanKind::Work);
     assert_eq!(profiler.try_snapshot().unwrap().active_spans, 2);
     drop(first);
     drop(second);
@@ -264,7 +269,7 @@ fn bad_clock_is_diagnostic_and_noop_instrumentation_survives_type_erasure() {
     let clock = ManualClock::default();
     clock.set(20);
     let profiler = Profiler::new(clock.clone(), 1);
-    let span = profiler.span(0, "clock failure", SpanKind::Work);
+    let span = profiler.span(None, "clock failure", SpanKind::Work);
     let meter = span.instrument(Unstoppable);
     assert!(meter.may_stop());
     let stop = almost_enough::StopToken::new(meter);
@@ -274,10 +279,7 @@ fn bad_clock_is_diagnostic_and_noop_instrumentation_survives_type_erasure() {
     span.finish(Outcome::Failed);
     let trace = profiler.snapshot();
     assert_eq!(trace.spans[0].stats.checks, 1);
-    assert_eq!(
-        trace.spans[0].stats.clock_regressions,
-        if cfg!(feature = "diagnostics") { 3 } else { 2 }
-    );
+    assert_eq!(trace.spans[0].stats.clock_regressions, 2);
     assert!(trace.overlap(&[trace.spans[0].id]).is_none());
 }
 
@@ -285,19 +287,19 @@ fn bad_clock_is_diagnostic_and_noop_instrumentation_survives_type_erasure() {
 fn idle_gaps_and_zero_duration_spans_do_not_create_fake_tail_time() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let a = profiler.span(0, "first", SpanKind::Work);
+    let a = profiler.span(None, "first", SpanKind::Work);
     let aid = a.id();
     clock.set(10);
     a.finish(Outcome::Succeeded);
     clock.set(20);
-    let b = profiler.span(0, "last", SpanKind::Work);
+    let b = profiler.span(None, "last", SpanKind::Work);
     let bid = b.id();
     clock.set(25);
     b.finish(Outcome::Succeeded);
     let overlap = profiler.snapshot().overlap(&[aid, bid]).unwrap();
     assert_eq!(overlap.single_task_tail, Duration::from_millis(5));
     assert_eq!(overlap.wall, Duration::from_millis(25));
-    let z = profiler.span(0, "zero", SpanKind::Work);
+    let z = profiler.span(None, "zero", SpanKind::Work);
     let zid = z.id();
     z.finish(Outcome::Succeeded);
     let overlap = profiler.snapshot().overlap(&[zid]).unwrap();
@@ -314,7 +316,7 @@ fn timeout_reason_and_attached_plan_survive_export() {
         }
     }
     let profiler = Profiler::new(ManualClock::default(), 1);
-    let span = profiler.span(0, "deadline", SpanKind::Work);
+    let span = profiler.span(None, "deadline", SpanKind::Work);
     assert_eq!(span.instrument(Timeout).check(), Err(StopReason::TimedOut));
     span.finish(Outcome::Cancelled);
     let mut phase = how_far_along::Phase::new("job", how_far_along::Total::Estimated(3));
@@ -326,13 +328,14 @@ fn timeout_reason_and_attached_plan_survive_export() {
     let mut json = String::new();
     trace.write_json(&mut json).unwrap();
     assert!(json.contains("\"stop_reason\":\"TimedOut\""));
-    assert!(json.contains("\"initial_total\":{\"kind\":\"Estimated\",\"units\":\"3\"}"));
-    assert!(json.contains("\"total_revisions\":[{\"kind\":\"Exact\",\"units\":\"4\"}]"));
+    assert!(json.contains("\"initial_total\":{\"kind\":\"Estimated\",\"count\":\"3\"}"));
+    assert!(json.contains("\"total_revisions\":[{\"kind\":\"Exact\",\"count\":\"4\"}]"));
+    // The trace embeds the tree's root node, not a second versioned document.
+    assert_eq!(json.matches("schema_version").count(), 1);
 }
 
 #[test]
-#[cfg(not(feature = "diagnostics"))]
-fn reporting_does_not_read_the_clock_and_span_finish_is_measured_once() {
+fn reporting_reads_the_clock_only_when_report_timing_is_on() {
     struct CountingClock(Arc<AtomicU64>);
     impl Clock for CountingClock {
         fn now(&self) -> Duration {
@@ -340,17 +343,24 @@ fn reporting_does_not_read_the_clock_and_span_finish_is_measured_once() {
         }
     }
     let reads = Arc::new(AtomicU64::new(0));
-    let profiler = Profiler::new(CountingClock(reads.clone()), 1);
-    let span = profiler.span(0, "clock policy", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
-    let before = reads.load(Ordering::Relaxed);
-    for _ in 0..100 {
-        work.advance(1);
+    let profiler = Profiler::new(CountingClock(reads.clone()), 2);
+    for timed in [false, true] {
+        profiler.set_report_timing(timed);
+        let span = profiler.span(None, "clock policy", SpanKind::Work);
+        let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
+        let before = reads.load(Ordering::Relaxed);
+        for _ in 0..100 {
+            work.advance(1);
+        }
+        let report_reads = if timed { 100 } else { 0 };
+        assert_eq!(reads.load(Ordering::Relaxed), before + report_reads);
+        work.check().unwrap();
+        assert_eq!(reads.load(Ordering::Relaxed), before + report_reads + 2);
+        span.finish(Outcome::Succeeded);
+        assert_eq!(reads.load(Ordering::Relaxed), before + report_reads + 3);
     }
-    assert_eq!(reads.load(Ordering::Relaxed), before);
-    work.check().unwrap();
-    assert_eq!(reads.load(Ordering::Relaxed), before + 2);
-    span.finish(Outcome::Succeeded);
-    assert_eq!(reads.load(Ordering::Relaxed), before + 3);
-    assert_eq!(profiler.snapshot().spans[0].stats.reports, 100);
+    let trace = profiler.snapshot();
+    assert_eq!(trace.spans[0].stats.reports, 100);
+    assert!(trace.spans[0].stats.max_report_gap.is_none());
+    assert!(trace.spans[1].stats.max_report_gap.is_some());
 }

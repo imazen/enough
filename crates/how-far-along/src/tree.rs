@@ -1,11 +1,37 @@
 use crate::{
-    Report,
+    Execution, Outcome, PhaseSpec, PlanError, Report, Total,
     sync::{Counter, MetadataCell},
 };
-use alloc::{string::String, sync::Arc, vec::Vec};
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use alloc::{
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
+use core::{
+    fmt,
+    sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+};
 
-pub use how_far::{Execution, Outcome, PlanError, Total};
+/// A phase's identity within one job. The root is [`NodeId::ROOT`]; children
+/// are numbered in planning order. Profiling spans use it to refer to phases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeId(usize);
+
+impl NodeId {
+    /// The root phase of every job.
+    pub const ROOT: Self = Self(0);
+
+    /// The identifier as a number, as written in JSON exports.
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Lifecycle state, independent of the counted fraction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,38 +45,6 @@ pub enum Status {
     Finished(Outcome),
 }
 
-/// One child's fixed relative budget in a partition.
-#[derive(Clone, Debug)]
-pub struct Part {
-    name: String,
-    weight: u64,
-    total: Total,
-    units: String,
-    execution: Execution,
-}
-impl Part {
-    /// Describe a child. Weights need not sum to 100; they are normalized once.
-    pub fn new(name: impl Into<String>, weight: u64, total: Total) -> Self {
-        Self {
-            name: name.into(),
-            weight,
-            total,
-            units: "items".into(),
-            execution: Execution::Unspecified,
-        }
-    }
-    /// Name the counted unit (for example `rows`, `bytes`, or `superblocks`).
-    pub fn units(mut self, units: impl Into<String>) -> Self {
-        self.units = units.into();
-        self
-    }
-    /// Attach scheduling information without creating an executor.
-    pub fn execution(mut self, execution: Execution) -> Self {
-        self.execution = execution;
-        self
-    }
-}
-
 #[derive(Clone)]
 struct Metadata {
     units: String,
@@ -61,8 +55,8 @@ struct Metadata {
     frozen: Option<Snapshot>,
 }
 struct Node {
-    id: usize,
-    parent: Option<usize>,
+    id: NodeId,
+    parent: Option<NodeId>,
     name: String,
     weight: u64,
     initial_total: Total,
@@ -75,23 +69,28 @@ struct Node {
     meta: MetadataCell<Metadata>,
 }
 impl Node {
-    fn new(id: usize, parent: Option<usize>, part: Part, next_id: Arc<AtomicUsize>) -> Self {
+    fn new(
+        id: NodeId,
+        parent: Option<NodeId>,
+        spec: &PhaseSpec<'_>,
+        next_id: Arc<AtomicUsize>,
+    ) -> Self {
         Self {
             id,
             parent,
-            name: part.name,
-            weight: part.weight,
-            initial_total: part.total,
+            name: spec.name.to_string(),
+            weight: spec.weight,
+            initial_total: spec.total,
             next_id,
             issued: AtomicBool::new(false),
             branch: AtomicBool::new(false),
             state: AtomicU8::new(0),
             completed: Counter::new(),
             meta: MetadataCell::new(Metadata {
-                units: part.units,
-                total: part.total,
+                units: spec.units.to_string(),
+                total: spec.total,
                 revisions: Vec::new(),
-                execution: part.execution,
+                execution: spec.execution,
                 children: Vec::new(),
                 frozen: None,
             }),
@@ -143,36 +142,43 @@ impl Node {
     }
 }
 
-/// The unique owner of a phase's plan and outcome. Dropping it abandons the phase.
+/// The owner of one phase: its plan, its counter, and its outcome.
 ///
-/// Clone [`Progress`] for workers, not the owner. Join workers and flush their
-/// batches before calling [`finish`](Self::finish). A new attempt uses a new
-/// phase/tree; old reporting handles can never reset or corrupt the new attempt.
+/// Give workers cloned [`Reporter`]s, not the owner. Join workers and flush
+/// their batches before [`finish`](Self::finish). Dropping an unfinished owner
+/// records [`Outcome::Abandoned`]. Each attempt uses a new phase, so a stale
+/// reporter from an earlier attempt can never change a new one.
+///
+/// Phases are owned and `'static`: move children into spawned threads or
+/// tasks, or wrap any phase in a [`PulseTree`](crate::PulseTree) to hand it to
+/// a library as `&dyn Pulse`.
 pub struct Phase {
     node: Arc<Node>,
 }
 impl Phase {
-    /// Create a job with one leaf, initially pending and counting `items`.
+    /// Start a job: a pending root leaf that counts `items`.
     pub fn new(name: impl Into<String>, total: Total) -> Self {
+        let name = name.into();
         Self {
             node: Arc::new(Node::new(
-                0,
+                NodeId::ROOT,
                 None,
-                Part::new(name, 1, total),
+                &PhaseSpec::new(&name, 1, total),
                 Arc::new(AtomicUsize::new(1)),
             )),
         }
     }
-    /// Obtain a cheap clonable reporting handle. Planning must precede this call.
-    /// A branch handle is inert: only leaves count work, avoiding double counting.
-    pub fn progress(&self) -> Progress {
+    /// A cheap, cloneable counter for this phase's workers.
+    ///
+    /// Taking one ends planning: the phase can no longer split. A branch's
+    /// reporter ignores reports, so work is never counted twice.
+    pub fn reporter(&self) -> Reporter {
         self.node.issued.store(true, Ordering::Relaxed);
-        self.deferred_progress()
+        self.deferred_reporter()
     }
-    /// Build a reporter without starting or claiming the phase for planning.
-    /// The Pulse adapter publishes its first report only after split is ruled out.
-    pub(crate) fn deferred_progress(&self) -> Progress {
-        Progress {
+    /// A reporter that does not end planning until its first report.
+    pub(crate) fn deferred_reporter(&self) -> Reporter {
+        Reporter {
             node: Arc::clone(&self.node),
         }
     }
@@ -182,17 +188,18 @@ impl Phase {
             node: Arc::clone(&self.node),
         }
     }
-    /// Job-local stable identity, also used to associate profiling spans.
-    pub fn id(&self) -> usize {
+    /// This phase's identity within its job.
+    pub fn id(&self) -> NodeId {
         self.node.id
     }
-    /// Start an opaque phase (reports also start leaves automatically).
+    /// Mark the phase running before its first report, for work that starts
+    /// long before it can count anything. A report starts a leaf on its own.
     pub fn start(&mut self) -> Result<(), PlanError> {
         self.ensure_live()?;
         self.node.state.store(1, Ordering::Release);
         Ok(())
     }
-    /// Set units before planning/reporting begins. Units never change mid-count.
+    /// Name the counted unit, before planning or counting begins.
     pub fn set_units(&mut self, units: impl Into<String>) -> Result<(), PlanError> {
         self.ensure_unused()?;
         let units = units.into();
@@ -201,21 +208,22 @@ impl Phase {
         self.node.meta.publish(meta);
         Ok(())
     }
-    /// Attach an execution model before use, including a shared-counter work pool.
+    /// Declare how this phase's work is scheduled, before planning or counting.
     pub fn set_execution(&mut self, execution: Execution) -> Result<(), PlanError> {
         self.ensure_unused()?;
-        validate_execution(execution)?;
         let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
         self.node.meta.publish(meta);
         Ok(())
     }
-    /// Revise a leaf denominator. Raw fractions may regress; consumers own smoothing.
-    /// Every explicit revision is retained for this job, including revisions to exact counts.
+    /// Revise a leaf's total while it runs.
+    ///
+    /// Every revision is kept in [`Snapshot::total_revisions`]. A fraction can
+    /// go down after a revision; smoothing is the display's job.
     pub fn set_total(&mut self, total: Total) -> Result<(), PlanError> {
         self.ensure_live()?;
         if self.node.branch.load(Ordering::Relaxed) {
-            return Err(PlanError::AlreadyInUse);
+            return Err(PlanError::NotALeaf);
         }
         let mut meta = (*self.node.meta.get()).clone();
         if meta.total != total {
@@ -225,45 +233,45 @@ impl Phase {
         }
         Ok(())
     }
-    /// Replace an unused leaf with a fixed weighted group, preserving array destructuring.
+    /// Split an unused leaf into weighted children, returned as an array.
     ///
     /// ```
-    /// use how_far_along::{Execution, Part, Phase, Total};
+    /// use how_far_along::{Execution, Phase, PhaseSpec, Total};
     /// let mut job = Phase::new("encode", Total::Unknown);
     /// let [before, middle, after] = job.split(Execution::Sequence, [
-    ///     Part::new("prepare", 35, Total::Exact(1)),
-    ///     Part::new("parallel", 30, Total::Unknown),
-    ///     Part::new("write", 35, Total::Exact(1)),
+    ///     PhaseSpec::new("prepare", 35, Total::Exact(1)),
+    ///     PhaseSpec::new("parallel", 30, Total::Unknown),
+    ///     PhaseSpec::new("write", 35, Total::Exact(1)),
     /// ])?;
     /// # Ok::<(), how_far_along::PlanError>(())
     /// ```
     pub fn split<const N: usize>(
         &mut self,
         execution: Execution,
-        parts: [Part; N],
+        parts: [PhaseSpec<'_>; N],
     ) -> Result<[Phase; N], PlanError> {
-        let children = self.split_vec(execution, Vec::from(parts))?;
+        let children = self.split_vec(execution, &parts)?;
         Ok(children
             .try_into()
             .unwrap_or_else(|_| unreachable!("same array length")))
     }
-    /// Partition a runtime-sized, fully discovered collection. A live partition
-    /// cannot grow; keep discovery in an unknown-total leaf until the plan is known.
+    /// Split an unused leaf into a runtime-sized list of children.
+    ///
+    /// A split is final: a running phase cannot gain siblings later. Keep
+    /// discovery in an `Unknown`-total leaf until the full list is known.
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     pub fn split_vec(
         &mut self,
         execution: Execution,
-        parts: Vec<Part>,
+        parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Phase>, PlanError> {
         self.ensure_unused()?;
-        validate_execution(execution)?;
         if parts.is_empty() || parts.iter().any(|p| p.weight == 0) {
             return Err(PlanError::EmptyOrZeroWeight);
         }
         let mut sum = 0_u64;
-        for part in &parts {
+        for part in parts {
             sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
-            validate_execution(part.execution)?;
         }
         let first = self
             .node
@@ -273,11 +281,11 @@ impl Phase {
             })
             .map_err(|_| PlanError::Overflow)?;
         let children: Vec<_> = parts
-            .into_iter()
+            .iter()
             .enumerate()
             .map(|(i, part)| Phase {
                 node: Arc::new(Node::new(
-                    first + i,
+                    NodeId(first + i),
                     Some(self.node.id),
                     part,
                     Arc::clone(&self.node.next_id),
@@ -292,13 +300,17 @@ impl Phase {
         self.node.branch.store(true, Ordering::Release);
         Ok(children)
     }
-    /// Publish success after all workers joined and all children succeeded/skipped.
+    /// Record success, after every worker has joined and every child has
+    /// succeeded or been skipped.
     pub fn finish(&mut self) -> Result<(), PlanError> {
         self.finish_with(Outcome::Succeeded)
     }
-    /// Publish a terminal outcome and freeze this subtree's observation.
-    /// Explicit outcomes require every child to be terminal; drop records abandonment
-    /// immediately instead. Cancellation here describes an outcome, not a stop request.
+    /// Record a terminal outcome and freeze this subtree's snapshot.
+    ///
+    /// Every child must have finished first, and `Succeeded` or `Skipped` also
+    /// requires every child to have succeeded or been skipped. A failed call
+    /// changes nothing, so the owner can fix the cause and finish again.
+    /// `Cancelled` records how the work ended; it does not request a stop.
     pub fn finish_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
         let mut snapshot = self.node.snapshot();
@@ -357,21 +369,23 @@ impl Drop for Phase {
         }
     }
 }
-fn validate_execution(execution: Execution) -> Result<(), PlanError> {
-    if matches!(execution, Execution::WorkPool { max_parallelism: 0 }) {
-        Err(PlanError::ZeroParallelism)
-    } else {
-        Ok(())
-    }
-}
-
-/// A clonable, thread-safe leaf reporter. No clocks, callbacks, or tree walks on advance.
-/// Counters saturate on overflow and expose that fact. Reports after finish are ignored.
+/// A cloneable, thread-safe counter for one phase, from [`Phase::reporter`].
+///
+/// `advance` is one atomic add: no clock, callback, lock, or tree walk.
+/// Counts saturate and record the overflow. Reports after the phase finishes,
+/// and reports to a phase that split, are ignored.
 #[derive(Clone)]
-pub struct Progress {
+pub struct Reporter {
     node: Arc<Node>,
 }
-impl Report for Progress {
+impl fmt::Debug for Reporter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reporter")
+            .field("phase", &self.node.id)
+            .finish_non_exhaustive()
+    }
+}
+impl Report for Reporter {
     #[inline]
     #[track_caller]
     #[allow(clippy::collapsible_match)] // Keep the first-report transition explicit.
@@ -401,73 +415,96 @@ impl Report for Progress {
     }
 }
 
-/// A read-only, clonable view. Holding it retains this job's records.
+/// A read-only, cloneable view of a phase and its subtree, usable from any
+/// thread. Holding one keeps the job's records alive.
 #[derive(Clone)]
 pub struct Observer {
     node: Arc<Node>,
 }
+impl fmt::Debug for Observer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Observer")
+            .field("phase", &self.node.id)
+            .finish_non_exhaustive()
+    }
+}
 impl Observer {
-    /// Materialize a snapshot now. Live counters across nodes are weakly consistent;
-    /// metadata for each node is coherent. Terminal subtree snapshots are frozen.
-    /// This allocates and walks the observed tree; sampling cadence belongs to you.
+    /// The observed phase's identity.
+    pub fn id(&self) -> NodeId {
+        self.node.id
+    }
+    /// Take a snapshot now.
+    ///
+    /// Each phase's metadata is internally consistent; counters in different
+    /// phases are read one after another, not atomically together. A finished
+    /// subtree's snapshot is frozen. This allocates and walks the subtree, so
+    /// the caller chooses how often to sample.
     pub fn snapshot(&self) -> Snapshot {
         self.node.snapshot()
     }
-    /// Sample without waiting for a contended std mutex. Returns `None` if any
-    /// node is busy; retry on a later UI/event-loop turn. Never spins or retries.
-    /// In no_std builds, the platform critical-section provider still controls
-    /// entry into its critical section. Allocation and tree walks run outside it.
+    /// Take a snapshot without waiting for a lock held by another thread.
+    ///
+    /// Returns `None` if any phase's metadata is being replaced at that moment;
+    /// try again on a later UI or event-loop turn. It never spins. Without
+    /// `std`, entry into the platform's critical section is up to its provider;
+    /// allocation and the tree walk happen outside it.
     pub fn try_snapshot(&self) -> Option<Snapshot> {
         self.node.snapshot_with(true)
     }
-    /// Whether a terminal snapshot has been published, without walking the tree.
+    /// Whether the phase has an outcome, without walking the tree.
     pub fn is_finished(&self) -> bool {
         self.node.state.load(Ordering::Acquire) == 2
     }
 }
 
-/// Owned observation. Count fractions describe weighted work, never elapsed runtime or ETA.
+/// A point-in-time copy of a phase and its subtree.
+///
+/// Fractions measure weighted, counted work. They are not elapsed time and
+/// not an ETA: a nearly finished fork-join can still wait on one slow branch.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Snapshot {
-    /// Stable identifier within this job (root = 0).
-    pub id: usize,
-    /// Parent identifier, absent for the root.
-    pub parent: Option<usize>,
+    /// This phase's identity within its job.
+    pub id: NodeId,
+    /// The parent's identity; `None` for the root.
+    pub parent: Option<NodeId>,
     /// Phase label.
     pub name: String,
-    /// Fixed relative weight among siblings.
+    /// Weight relative to its siblings, fixed when the parent split.
     pub weight: u64,
     /// Name of the counted unit.
     pub units: String,
-    /// Latest denominator.
+    /// The current total.
     pub total: Total,
-    /// Original denominator, before any revisions.
+    /// The total declared when the phase was planned.
     pub initial_total: Total,
-    /// Explicit denominator revisions, in order.
+    /// Every later revision of the total, in order.
     pub total_revisions: Vec<Total>,
-    /// Declared scheduling relationship.
+    /// How this phase's work is scheduled.
     pub execution: Execution,
-    /// Explicit lifecycle; 100% counted does not finish the phase.
+    /// Lifecycle. Counting to 100% does not finish a phase; an outcome does.
     pub status: Status,
-    /// Actual reported units (saturated on overflow).
+    /// Units reported so far, saturating at [`Snapshot::counter_max`].
     pub completed: u64,
-    /// The true count could not be represented. No count fraction is valid.
+    /// The true count exceeded the counter, so no fraction is valid.
     pub overflowed: bool,
-    /// Children in declared plan order.
+    /// Children, in declared order.
     pub children: Vec<Snapshot>,
 }
 impl Snapshot {
-    /// Write a versioned JSON progress tree, including execution relationships,
-    /// fixed weights, units, total revisions, outcomes, and overflow diagnostics.
-    /// Counts and weights use decimal strings to preserve u64 precision in JavaScript.
-    pub fn write_json(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
+    /// Write this tree as versioned JSON: plan, weights, units, totals and
+    /// their revisions, outcomes, and overflow flags.
+    ///
+    /// Counts and weights are decimal strings, so 64-bit values survive
+    /// JavaScript. Later versions may add keys; readers should ignore keys they
+    /// do not know.
+    pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         out.write_str("{\"schema_version\":1,\"root\":")?;
         self.write_node_json(out)?;
         out.write_char('}')
     }
-    fn write_node_json(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
-        use crate::json::quote;
+    pub(crate) fn write_node_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        use crate::json::{outcome_name, quote};
         write!(out, "{{\"id\":{},\"parent\":", self.id)?;
         match self.parent {
             Some(id) => write!(out, "{id}")?,
@@ -492,7 +529,9 @@ impl Snapshot {
             Execution::Unspecified => ("Unspecified", None),
             Execution::Sequence => ("Sequence", None),
             Execution::ForkJoin => ("ForkJoin", None),
-            Execution::WorkPool { max_parallelism } => ("WorkPool", Some(max_parallelism)),
+            Execution::WorkPool {
+                max_parallelism, ..
+            } => ("WorkPool", Some(max_parallelism)),
             _ => ("Other", None),
         };
         write!(out, "],\"execution\":\"{execution}\",\"max_parallelism\":")?;
@@ -507,7 +546,7 @@ impl Snapshot {
         };
         write!(out, ",\"status\":\"{status}\",\"outcome\":")?;
         match outcome {
-            Some(outcome) => write!(out, "\"{outcome:?}\"")?,
+            Some(outcome) => write!(out, "\"{}\"", outcome_name(outcome))?,
             None => out.write_str("null")?,
         }
         write!(
@@ -596,11 +635,11 @@ impl Snapshot {
     }
 }
 
-fn write_total(out: &mut impl core::fmt::Write, total: Total) -> core::fmt::Result {
+fn write_total(out: &mut impl fmt::Write, total: Total) -> fmt::Result {
     match total {
         Total::Unknown => out.write_str("{\"kind\":\"Unknown\"}"),
-        Total::Exact(n) => write!(out, "{{\"kind\":\"Exact\",\"units\":\"{n}\"}}"),
-        Total::Estimated(n) => write!(out, "{{\"kind\":\"Estimated\",\"units\":\"{n}\"}}"),
+        Total::Exact(n) => write!(out, "{{\"kind\":\"Exact\",\"count\":\"{n}\"}}"),
+        Total::Estimated(n) => write!(out, "{{\"kind\":\"Estimated\",\"count\":\"{n}\"}}"),
         _ => out.write_str("{\"kind\":\"Other\"}"),
     }
 }
@@ -609,30 +648,32 @@ fn write_total(out: &mut impl core::fmt::Write, total: Total) -> core::fmt::Resu
 mod tests {
     use super::*;
     use crate::Stop;
-    use crate::poll::{Control, ControlHandle, LocalPoller};
+    use crate::poll::LocalPoller;
+    use almost_enough::Stopper;
 
     #[test]
-    fn busy_child_skips_ui_snapshot_but_reporting_callbacks_and_cancel_still_work() {
+    fn a_busy_child_skips_ui_snapshots_while_reports_callbacks_and_cancellation_continue() {
         let mut root = Phase::new("root", Total::Unknown);
         let [child] = root
             .split(
                 Execution::Sequence,
-                [Part::new("child", 1, Total::Exact(3))],
+                [PhaseSpec::new("child", 1, Total::Exact(3))],
             )
             .unwrap();
         let observer = root.observer();
-        let control = ControlHandle::new();
-        let mut poller = LocalPoller::new(observer.clone(), control.clone());
-        poller.subscribe(|event| {
+        let stop = Stopper::new();
+        let cancel = stop.clone();
+        let mut poller = LocalPoller::new(observer.clone());
+        poller.subscribe(move |event| {
             assert!(event.try_snapshot().is_none());
             assert!(!event.snapshot_materialized());
-            Control::Cancel
+            cancel.cancel();
         });
         child.node.meta.with_lock_for_test(|| {
-            child.progress().advance(1);
+            child.reporter().advance(1);
             assert!(observer.try_snapshot().is_none());
-            assert!(poller.poll().cancelled);
-            assert!(control.check().is_err());
+            poller.poll();
+            assert!(stop.check().is_err());
         });
         assert_eq!(observer.try_snapshot().unwrap().children[0].completed, 1);
     }

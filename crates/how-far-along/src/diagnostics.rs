@@ -1,23 +1,30 @@
-//! Opt-in, evidence-based suggestions for library and application tests.
+//! Checkpoint advice for library tests. Requires the `diagnostics` feature,
+//! normally on a dev-dependency.
 //!
-//! Enable `diagnostics` on a **dev-dependency**, instrument each logical task
-//! with [`crate::profile::Span::instrument`], and inspect the completed trace.
-//! The same wrapper accepts an `enough::Stop` even when no progress is used.
-//! These are heuristics: clock reads and bookkeeping affect the measured run,
-//! and a single run cannot establish optimal weights or production latency.
+//! Wrap the [`PulseTree`] you pass to a library in a [`DiagnosticPulse`], run
+//! the library, then call [`Trace::diagnose`] on the profiler's trace. The
+//! findings point at source lines: long stretches without a cancellation
+//! check, long stretches without a report, very hot call sites, slow or
+//! irregular callbacks, and stage weights that differ from measured time.
+//! Code that uses only a stop policy can be measured with
+//! [`Span::instrument`](crate::profile::Span::instrument) and diagnosed the
+//! same way.
+//!
+//! These are heuristics. Clock reads and bookkeeping slow the measured run,
+//! and one run cannot establish good weights or production latency.
 //!
 //! # Stability
 //!
-//! [`Options`], [`Finding`] and [`Kind`] are `#[non_exhaustive]`: fields and
-//! kinds may be added, so build `Options` from `Default` and keep a wildcard
-//! arm when matching `Kind`. [`Kind`] and a finding's presence are the
-//! contract; the wording of [`Finding::evidence`] and [`Finding::advice`], the
-//! sample code, and which thresholds fire are heuristics that improve between
-//! releases. Do not parse them or assert on exact text in downstream tests.
+//! [`Options`], [`Finding`] and [`Kind`] are `#[non_exhaustive]`. Build
+//! `Options` from `Default`, and keep a wildcard arm when matching `Kind`.
+//! `Kind` and whether a finding appears are the contract. The wording of
+//! [`Finding::evidence`] and [`Finding::advice`], the sample code, and the
+//! exact thresholds are heuristics that improve between releases: do not
+//! parse them or assert on their text in downstream tests.
 
 use crate::{
-    Execution, Observer, Outcome, PhaseSpec, PlanError, Pulse, Report, Snapshot, Status, Stop,
-    StopReason,
+    Child, ChildPulse, Execution, NodeId, Observer, Outcome, PhaseSpec, PlanError,
+    ProgressWithStop, Pulse, PulseHandle, PulseTree, Report, Snapshot, Status, Stop, StopReason,
     profile::{Instrumented, Profiler, SourceSite, Span, SpanKind, SpanRecord, Trace},
     sync::Mutex,
 };
@@ -28,31 +35,34 @@ use core::{
     time::Duration,
 };
 
-/// Thresholds for a diagnostic pass. Edit fields after [`Default::default`].
+/// Thresholds for [`Trace::diagnose`]. Start from `Default` and adjust fields.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Options {
-    /// Desired upper bound for a task's interval without a stop check.
+    /// Longest acceptable stretch without a cancellation check. Default 10 ms.
     pub stop_gap_target: Duration,
-    /// Desired upper bound for a task's interval without a progress report.
+    /// Longest acceptable stretch without a report. Default 50 ms.
     pub report_gap_target: Duration,
-    /// Maximum acceptable subscriber invocation time; defaults to 10 ms.
+    /// Longest acceptable callback. Default 10 ms.
     pub callback_budget: Duration,
-    /// Desired maximum time between successive invocations of one subscriber.
+    /// Longest acceptable time between two runs of one callback. Default 10 ms.
     pub callback_interval_target: Duration,
-    /// Rate above which a heavily used check site gets a call-frequency hint.
+    /// Check rate above which a busy call site gets a frequency note.
     pub check_calls_per_second: f64,
-    /// Rate above which a heavily used report site gets a batching hint.
+    /// Report rate above which a busy call site gets a batching note.
     pub report_calls_per_second: f64,
-    /// Minimum calls before a frequency hint is emitted.
+    /// Calls a site must make before it gets a frequency note.
     pub minimum_calls: u64,
-    /// Minimum sequential stage wall time before proposing different weights.
+    /// Sequential stages must run at least this long in total before their
+    /// weights are compared with measured time.
     pub minimum_stage_wall: Duration,
-    /// Minimum absolute difference between planned and measured child shares.
+    /// Smallest difference between a stage's declared and measured share that
+    /// produces weight advice.
     pub weight_difference: f64,
-    /// A sequential stage measured below this share of the stages' total wall
-    /// time is too small to calibrate from one run: it keeps its declared
-    /// weight and cannot by itself trigger weight advice.
+    /// A stage that took less than this share of the sequence's time is too
+    /// small to calibrate from one run (a flush that is trivial for this input
+    /// may not be for the next). It keeps its declared weight and cannot
+    /// trigger weight advice on its own.
     pub negligible_stage_share: f64,
 }
 impl Default for Options {
@@ -72,41 +82,41 @@ impl Default for Options {
     }
 }
 
-/// The kind of evidence behind one suggestion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a finding is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Kind {
-    /// A task went too long without checking cancellation.
+    /// A task went too long without checking for cancellation.
     StopGap,
-    /// A task went too long between reports.
+    /// A task went too long without reporting.
     ReportGap,
-    /// A check call site ran at a high measured frequency.
+    /// A call site checked very often.
     CheckFrequency,
-    /// A reporting call site ran at a high measured frequency.
+    /// A call site reported very often.
     ReportFrequency,
-    /// A measured subscriber invocation exceeded its budget.
+    /// A callback ran longer than its budget.
     CallbackDuration,
-    /// Successive subscriber invocations were farther apart than the target.
+    /// A callback ran less often than the target.
     CallbackInterval,
-    /// Measured sequential stage times differed substantially from weights.
+    /// Sequential stages took very different shares of time than their weights.
     StageWeights,
-    /// Retention, overflow, or clock quality makes guidance incomplete.
+    /// Dropped spans, saturated counts, or clock trouble limit the advice.
     IncompleteEvidence,
 }
 
-/// One diagnostic finding with its measurement and an actionable suggestion.
-/// `evidence`, `advice` and `sample_code` are for people and may be reworded in
-/// any release; branch on [`Kind`], not on their text.
+/// One finding: what was measured, and what to consider doing about it.
+/// `evidence`, `advice` and `sample_code` are for people and may be reworded
+/// in any release; branch on [`Kind`], not on their text.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Finding {
-    /// Finding category.
+    /// What the finding is about.
     pub kind: Kind,
-    /// Measured evidence, including task and source locations when available.
+    /// The measurement, with task names and source locations.
     pub evidence: String,
-    /// Suggested change or further measurement.
+    /// A suggested change or further measurement.
     pub advice: String,
-    /// Copyable Rust sketch when the finding concerns stage declarations.
+    /// Rust code to copy, for stage-weight findings.
     pub sample_code: Option<String>,
 }
 impl fmt::Display for Finding {
@@ -124,127 +134,140 @@ fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 fn location(site: Option<SourceSite>, boundary: &str) -> String {
-    site.map_or_else(
-        || boundary.into(),
-        |s| format!("{}:{}:{}", s.file, s.line, s.column),
-    )
+    site.map_or_else(|| boundary.into(), |site| format!("{site}"))
 }
 
-enum PulseRef<'a> {
-    Borrowed(&'a dyn Pulse),
-    Owned(Box<dyn Pulse + 'a>),
+/// Measures a library's checkpoints without changing its signature.
+///
+/// Wrap the [`PulseTree`] you would pass to the library, pass `&measured`
+/// instead, and finish the wrapper when the library returns:
+///
+/// ```
+/// use how_far_along::{Outcome, Phase, PulseTree, Total, Unstoppable};
+/// use how_far_along::diagnostics::{DiagnosticPulse, Options};
+/// use how_far_along::profile::{Profiler, StdClock};
+///
+/// let profiler = Profiler::new(StdClock::new(), 256);
+/// let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
+/// let measured = DiagnosticPulse::new(tree, &profiler);
+/// let observer = measured.observer();
+/// // let result = my_library::encode(&input, &measured);
+/// measured.finish(Outcome::Succeeded)?;
+/// let trace = profiler.snapshot().with_progress(observer.snapshot());
+/// for finding in trace.diagnose(&Options::default()) {
+///     eprintln!("{finding}");
+/// }
+/// # Ok::<(), how_far_along::PlanError>(())
+/// ```
+///
+/// Every phase the library plans gets its own span, tied to its node in the
+/// tree. A phase's span starts at its first check or report; a stage of a
+/// sequential split starts when the previous stage finished, and the first
+/// stage when the plan was made. So time spent before a stage's first
+/// checkpoint is measured, and a stage that never checks at all still gets a
+/// span. Workers that share one phase share its span; give each worker its
+/// own [`Span`] when one worker's long silence matters.
+///
+/// [`Pulse::handle`] returns an instrumented handle, so checks made inside
+/// code that owns its stop policy, such as a codec context, count toward the
+/// stage that handed it out. `may_stop` and `may_report` are always `true`, so
+/// libraries that skip calls on no-op pulses still make the calls measured.
+/// Creating one turns on [`Profiler::set_report_timing`].
+pub struct DiagnosticPulse {
+    tree: PulseTree,
+    meter: Meter,
 }
-impl PulseRef<'_> {
-    fn as_pulse(&self) -> &dyn Pulse {
-        match self {
-            Self::Borrowed(pulse) => *pulse,
-            Self::Owned(pulse) => pulse.as_ref(),
-        }
+
+impl fmt::Debug for DiagnosticPulse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiagnosticPulse")
+            .field("tree", &self.tree)
+            .finish_non_exhaustive()
     }
 }
 
-/// Dev-only wrapper around a library's ordinary `&dyn Pulse` call.
-///
-/// Child phases get separate spans with their actual progress-tree node IDs.
-/// A span starts at the first check or report. A stage of a *sequential* split
-/// instead starts when the previous stage finished (the first one when the
-/// plan was made) and always gets a span when it succeeds, so work before its
-/// first checkpoint, or a stage with no checkpoint at all, is still timed.
-/// A phase shared by workers still has aggregate timing; instrument each
-/// worker separately when its own long tail matters.
-///
-/// `may_stop` and `may_report` are `true` even over a no-op pulse, so a library
-/// that skips checkpoints behind them still shows its real call sites.
-pub struct DiagnosticPulse<'a> {
-    inner: PulseRef<'a>,
-    observer: Observer,
-    profiler: Profiler,
-    node: usize,
-    name: String,
-    span: Mutex<Option<Span>>,
-    /// Sequential stage: shared cell holding when this stage was entered.
-    entered: Option<Arc<Mutex<Duration>>>,
-    /// Sequential stage: shared cell the next stage reads as its entry time.
-    exited: Option<Arc<Mutex<Duration>>>,
-    /// A container stage's time belongs to its children's spans.
-    has_children: AtomicBool,
-}
-impl<'a> DiagnosticPulse<'a> {
-    /// Wrap a pulse and its matching observer without changing library code.
-    pub fn new(pulse: &'a dyn Pulse, observer: Observer, profiler: &Profiler) -> Self {
+impl DiagnosticPulse {
+    /// Measure everything a library does through `tree`.
+    pub fn new(tree: PulseTree, profiler: &Profiler) -> Self {
+        profiler.set_report_timing(true);
+        let observer = tree.observer();
         let snapshot = observer.snapshot();
         Self {
-            inner: PulseRef::Borrowed(pulse),
-            observer,
-            profiler: profiler.clone(),
-            node: snapshot.id,
-            name: snapshot.name,
-            span: Mutex::new(None),
-            entered: None,
-            exited: None,
-            has_children: AtomicBool::new(false),
+            meter: Meter {
+                observer,
+                profiler: profiler.clone(),
+                node: snapshot.id,
+                name: snapshot.name,
+                span: Mutex::new(None),
+                entered: None,
+                exited: None,
+                has_children: AtomicBool::new(false),
+            },
+            tree,
         }
     }
+
+    /// A read-only view of the measured tree.
+    pub fn observer(&self) -> Observer {
+        self.meter.observer.clone()
+    }
+
+    /// Record the operation's outcome in the tree, and close the root's span.
+    pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
+        let Self { tree, meter } = self;
+        let result = tree.finish(outcome);
+        meter.close(if result.is_ok() {
+            outcome
+        } else {
+            Outcome::Abandoned
+        });
+        result
+    }
+}
+
+/// The measurement state shared by the root wrapper and every child.
+struct Meter {
+    observer: Observer,
+    profiler: Profiler,
+    node: NodeId,
+    name: String,
+    span: Mutex<Option<Span>>,
+    /// A sequential stage: when it was entered (the previous stage's end).
+    entered: Option<Arc<Mutex<Duration>>>,
+    /// A sequential stage: where the next stage reads its entry time.
+    exited: Option<Arc<Mutex<Duration>>>,
+    /// A phase that split: its time belongs to its children's spans.
+    has_children: AtomicBool,
+}
+
+impl Meter {
     fn start_span(&self) -> Span {
         match &self.entered {
             Some(entered) => {
                 let at = *entered.lock();
                 self.profiler
-                    .span_from(self.node, self.name.clone(), SpanKind::Work, at)
+                    .span_from(Some(self.node), self.name.clone(), SpanKind::Work, at)
             }
             None => self
                 .profiler
                 .span(self.node, self.name.clone(), SpanKind::Work),
         }
     }
-    fn meter(&self) -> Instrumented<&dyn Pulse> {
+
+    fn instrument<T>(&self, value: T) -> Instrumented<T> {
         let mut owner = self.span.lock();
-        let span = owner.get_or_insert_with(|| self.start_span());
-        span.instrument(self.inner.as_pulse())
+        owner
+            .get_or_insert_with(|| self.start_span())
+            .instrument(value)
     }
-}
-fn find_node(snapshot: &Snapshot, id: usize) -> Option<&Snapshot> {
-    if snapshot.id == id {
-        Some(snapshot)
-    } else {
-        snapshot
-            .children
-            .iter()
-            .find_map(|child| find_node(child, id))
-    }
-}
-fn contains_node(snapshot: &Snapshot, id: usize) -> bool {
-    snapshot.id == id
-        || snapshot
-            .children
-            .iter()
-            .any(|child| contains_node(child, id))
-}
-impl Stop for DiagnosticPulse<'_> {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.meter().check()
-    }
-    fn may_stop(&self) -> bool {
-        true
-    }
-}
-impl Report for DiagnosticPulse<'_> {
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        self.meter().advance(completed);
-    }
-    fn may_report(&self) -> bool {
-        true
-    }
-}
-impl Pulse for DiagnosticPulse<'_> {
-    fn split(
+
+    fn split<'s>(
         &self,
+        inner: &'s dyn Pulse,
         execution: Execution,
         parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Box<dyn Pulse + '_>>, PlanError> {
-        let children = self.inner.as_pulse().split(execution, parts)?;
+    ) -> Result<Vec<Child<'s>>, PlanError> {
+        let children = inner.split(execution, parts)?;
         self.has_children.store(true, Ordering::Relaxed);
         let snapshot = self.observer.snapshot();
         let nodes = find_node(&snapshot, self.node).map(|node| &node.children);
@@ -261,29 +284,41 @@ impl Pulse for DiagnosticPulse<'_> {
             .into_iter()
             .enumerate()
             .map(|(index, child)| {
-                Box::new(DiagnosticPulse {
-                    inner: PulseRef::Owned(child),
-                    observer: self.observer.clone(),
-                    profiler: self.profiler.clone(),
-                    node: nodes.and_then(|n| n.get(index)).map_or(self.node, |n| n.id),
-                    name: parts[index].name.into(),
-                    span: Mutex::new(None),
-                    entered: cells.get(index).cloned(),
-                    exited: cells.get(index + 1).cloned(),
-                    has_children: AtomicBool::new(false),
-                }) as Box<dyn Pulse>
+                Child::new(DiagnosticChild {
+                    inner: child,
+                    meter: Meter {
+                        observer: self.observer.clone(),
+                        profiler: self.profiler.clone(),
+                        node: nodes
+                            .and_then(|nodes| nodes.get(index))
+                            .map_or(self.node, |node| node.id),
+                        name: parts[index].name.into(),
+                        span: Mutex::new(None),
+                        entered: cells.get(index).cloned(),
+                        exited: cells.get(index + 1).cloned(),
+                        has_children: AtomicBool::new(false),
+                    },
+                })
             })
             .collect())
     }
-    fn finish(&self, outcome: Outcome) -> Result<(), PlanError> {
-        self.inner.as_pulse().finish(outcome)?;
+
+    fn handle(&self, inner: &dyn Pulse) -> PulseHandle {
+        let handle = inner.handle();
+        ProgressWithStop::new(
+            Some(Arc::new(self.instrument(handle.stop)) as Arc<dyn Stop>),
+            Some(Arc::new(self.instrument(handle.report)) as Arc<dyn Report>),
+        )
+    }
+
+    fn close(&self, outcome: Outcome) {
         let mut owner = self.span.lock();
         if owner.is_none()
             && outcome == Outcome::Succeeded
             && self.entered.is_some()
             && !self.has_children.load(Ordering::Relaxed)
         {
-            // A leaf stage with no checkpoint still occupied wall time.
+            // A leaf stage with no checkpoint still took time.
             *owner = Some(self.start_span());
         }
         if let Some(span) = owner.take() {
@@ -291,20 +326,123 @@ impl Pulse for DiagnosticPulse<'_> {
         }
         drop(owner);
         if let Some(exited) = &self.exited {
-            // Read after the span closed so the next stage never starts before this one ends.
+            // Read after the span closed, so the next stage never starts first.
             *exited.lock() = self.profiler.now();
         }
-        Ok(())
+    }
+}
+
+fn find_node(snapshot: &Snapshot, id: NodeId) -> Option<&Snapshot> {
+    if snapshot.id == id {
+        Some(snapshot)
+    } else {
+        snapshot
+            .children
+            .iter()
+            .find_map(|child| find_node(child, id))
+    }
+}
+
+fn contains_node(snapshot: &Snapshot, id: NodeId) -> bool {
+    snapshot.id == id
+        || snapshot
+            .children
+            .iter()
+            .any(|child| contains_node(child, id))
+}
+
+impl Stop for DiagnosticPulse {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        self.meter.instrument(&self.tree).check()
+    }
+    fn may_stop(&self) -> bool {
+        true
+    }
+}
+
+impl Report for DiagnosticPulse {
+    #[track_caller]
+    fn advance(&self, completed: u64) {
+        self.meter.instrument(&self.tree).advance(completed);
+    }
+    fn may_report(&self) -> bool {
+        true
+    }
+}
+
+impl Pulse for DiagnosticPulse {
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        self.meter.split(&self.tree, execution, parts)
+    }
+    fn handle(&self) -> PulseHandle {
+        self.meter.handle(&self.tree)
+    }
+}
+
+/// A measured child phase.
+struct DiagnosticChild<'a> {
+    inner: Child<'a>,
+    meter: Meter,
+}
+
+impl Stop for DiagnosticChild<'_> {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        self.meter.instrument(&self.inner).check()
+    }
+    fn may_stop(&self) -> bool {
+        true
+    }
+}
+
+impl Report for DiagnosticChild<'_> {
+    #[track_caller]
+    fn advance(&self, completed: u64) {
+        self.meter.instrument(&self.inner).advance(completed);
+    }
+    fn may_report(&self) -> bool {
+        true
+    }
+}
+
+impl Pulse for DiagnosticChild<'_> {
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        self.meter.split(&self.inner, execution, parts)
+    }
+    fn handle(&self) -> PulseHandle {
+        self.meter.handle(&self.inner)
+    }
+}
+
+impl ChildPulse for DiagnosticChild<'_> {
+    fn finish(self: Box<Self>, outcome: Outcome) -> Result<(), PlanError> {
+        let Self { inner, meter } = *self;
+        let result = inner.finish(outcome);
+        meter.close(if result.is_ok() {
+            outcome
+        } else {
+            Outcome::Abandoned
+        });
+        result
     }
 }
 
 impl Trace {
-    /// Analyze retained spans and an optional attached progress tree.
+    /// Analyze the retained spans and the attached progress tree, if any.
     ///
-    /// Frequencies are per task wall time, not exact intervals at one line.
-    /// Report gaps require this feature at recording time. Callback guidance
-    /// requires callback spans; [`crate::profile::Profiler::measure_callback`]
-    /// wraps one subscriber invocation without changing the poller's API.
+    /// Rates are per span's wall time, not exact intervals at one line.
+    /// Report gaps need [`Profiler::set_report_timing`] on while recording.
+    /// Callback findings need callback spans, which
+    /// [`Profiler::measure_callback`] records around each callback.
     pub fn diagnose(&self, options: &Options) -> Vec<Finding> {
         let mut findings = Vec::new();
         if self.dropped_spans != 0 || self.active_spans != 0 {
@@ -503,7 +641,7 @@ fn cover_note(cover: Option<&SpanRecord>) -> String {
 }
 
 struct CallbackGroup<'a> {
-    node: usize,
+    node: Option<NodeId>,
     task: &'a str,
     samples: Vec<(Duration, Duration)>,
 }
@@ -577,8 +715,10 @@ fn phase_spec_code(child: &Snapshot, weight: u64) -> String {
         Execution::Unspecified => {}
         Execution::Sequence => code.push_str(".execution(Execution::Sequence)"),
         Execution::ForkJoin => code.push_str(".execution(Execution::ForkJoin)"),
-        Execution::WorkPool { max_parallelism } => code.push_str(&format!(
-            ".execution(Execution::WorkPool {{ max_parallelism: {max_parallelism} }})"
+        Execution::WorkPool {
+            max_parallelism, ..
+        } => code.push_str(&format!(
+            ".execution(Execution::work_pool(NonZeroUsize::new({max_parallelism}).unwrap()))"
         )),
         _ => code.push_str(" /* preserve this stage's execution mode */"),
     }
@@ -644,7 +784,7 @@ fn stage_findings(
             .iter()
             .map(|child| {
                 let mut spans = trace.spans.iter().filter(|s| {
-                    contains_node(child, s.node)
+                    s.node.is_some_and(|node| contains_node(child, node))
                         && s.kind == SpanKind::Work
                         && s.stats.clock_regressions == 0
                         && s.outcome == Outcome::Succeeded

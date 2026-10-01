@@ -1,43 +1,43 @@
-//! Opt-in evidence for tuning checkpoints and asymmetric parallel work.
+//! Measure how often work checks for cancellation and reports progress.
 //!
-//! Create one [`Span`] per logical task/chunk (not one global meter for the
-//! whole pool), then [`Span::instrument`] its stop/report value. Separate spans
-//! describe queueing, joins, host yields, and callbacks. Nothing in this module
-//! is enabled by ordinary reporting. Clocks and retention limits are explicit.
-//! Recorded durations are elapsed wall time, **not CPU time**. This optional
-//! collector requires `std`; it uses OS mutexes and belongs on native threads
-//! or browser workers. Browser UI readers should use [`Profiler::try_snapshot`].
+//! Create one [`Span`] per logical task or chunk, then wrap that task's stop
+//! policy or progress sink with [`Span::instrument`]. The wrapper records every
+//! check and report at its original call site. One span per task matters: a
+//! single span shared by a pool would let one busy worker hide another
+//! worker's long silence. Separate span kinds record queueing, joins, host
+//! suspensions, and callbacks.
+//!
+//! Durations are wall time, **not CPU time**, read from the [`Clock`] you
+//! supply. Retention is bounded, and anything dropped is counted in every
+//! export. The collector uses OS mutexes, so it requires `std`; it belongs on
+//! native threads or browser workers. Browser UI readers use
+//! [`Profiler::try_snapshot`].
 //!
 //! # Stability
 //!
-//! The record types ([`Trace`], [`SpanRecord`], [`Stats`], [`SiteStats`], ...)
-//! are `#[non_exhaustive]` with public fields. Fields may be **added** in a
-//! compatible release; existing fields keep their name, type and meaning, and
-//! you cannot construct or exhaustively destructure these types outside this
-//! crate. Fields that exist only with the `diagnostics` feature are additive
-//! in the same way. The JSON written by [`Trace::write_json`] follows the same
-//! rule: readers must ignore keys they do not know, and `schema_version`
-//! changes only if a key is removed or its meaning changes.
+//! The record types ([`Trace`], [`SpanRecord`], [`Stats`], [`SiteStats`],
+//! [`ReportGap`], ...) are `#[non_exhaustive]` with public fields. Later
+//! releases may add fields but will not rename, retype or remove them. JSON
+//! from [`Trace::write_json`] follows the same rule: readers must ignore keys
+//! they do not know, and `schema_version` changes only if a key is removed or
+//! its meaning changes.
 
-use crate::json::quote;
-use crate::{Outcome, Report, Stop, StopReason, sync::Mutex};
-use alloc::{
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use crate::json::{outcome_name, quote, stop_reason_name};
+use crate::{NodeId, Outcome, Report, Stop, StopReason, sync::Mutex};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{
     fmt,
     panic::Location,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 
-/// A monotonic clock in a single shared epoch. Reads happen only in instrumented code.
-/// Browser hosts supply a host clock; the collector still requires `std`.
-/// Methods added later will have default implementations.
+/// A monotonic clock with one shared epoch. Only instrumented calls read it.
+///
+/// Browser hosts implement it over `performance.now()`. Methods added in
+/// later compatible releases will have default bodies.
 pub trait Clock: Send + Sync {
-    /// Elapsed time in the clock's epoch.
+    /// Time elapsed since the clock's epoch.
     fn now(&self) -> Duration;
 }
 impl<C: Clock + ?Sized> Clock for Arc<C> {
@@ -46,12 +46,13 @@ impl<C: Clock + ?Sized> Clock for Arc<C> {
     }
 }
 
-/// A monotonic host clock, with a fresh epoch at construction.
+/// The host's monotonic clock, with its epoch at construction.
 #[cfg(feature = "std")]
+#[derive(Clone, Copy, Debug)]
 pub struct StdClock(std::time::Instant);
 #[cfg(feature = "std")]
 impl StdClock {
-    /// Start a shared profiling epoch.
+    /// Start an epoch now.
     pub fn new() -> Self {
         Self(std::time::Instant::now())
     }
@@ -69,55 +70,63 @@ impl Clock for StdClock {
     }
 }
 
-/// What a span measures. Work spans are distinct from waiting and callback overhead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a span measures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SpanKind {
-    /// Logical work execution (may still include nested waits/callbacks).
+    /// A logical task's work, including any nested waits or callbacks.
     Work,
-    /// Work is queued and has not been claimed.
+    /// Work waiting in a queue before a worker claims it.
     Queued,
-    /// Waiting, including a coordinator's join.
+    /// Waiting, such as a coordinator's join.
     Wait,
-    /// A host suspension/yield interval.
+    /// A host suspension, such as a JSPI await.
     Yield,
-    /// Arbitrary observer/application callback work.
+    /// An observer or application callback.
     Callback,
 }
 
-/// Counts attributed to an actual library/application call site.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct SiteStats {
-    /// Source file from `#[track_caller]`.
-    pub file: &'static str,
-    /// Source line.
-    pub line: u32,
-    /// Source column.
-    pub column: u32,
-    /// Cancellation checks, independent of reports.
-    pub checks: u64,
-    /// Reporting calls, independent of completed units.
-    pub reports: u64,
-    /// Completed units (saturated).
-    pub units: u64,
-    /// Longest gap ending at a check at this site, measured within this task.
-    pub max_gap_before_check: Duration,
+impl SpanKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Work => "Work",
+            Self::Queued => "Queued",
+            Self::Wait => "Wait",
+            Self::Yield => "Yield",
+            Self::Callback => "Callback",
+        }
+    }
 }
 
-/// A source location captured by an instrumented checkpoint.
-#[cfg(feature = "diagnostics")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A span's identity within one profiler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SpanId(usize);
+
+impl SpanId {
+    /// The identifier as a number, as written in JSON exports.
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl fmt::Display for SpanId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A source location captured by an instrumented call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct SourceSite {
     /// Source file.
     pub file: &'static str,
-    /// Source line.
+    /// Line.
     pub line: u32,
-    /// Source column.
+    /// Column.
     pub column: u32,
 }
-#[cfg(feature = "diagnostics")]
+
 impl SourceSite {
     fn from_location(at: &'static Location<'static>) -> Self {
         Self {
@@ -128,88 +137,116 @@ impl SourceSite {
     }
 }
 
-/// Longest interval between reports within one task; `None` means a span boundary.
-#[cfg(feature = "diagnostics")]
+impl fmt::Display for SourceSite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.column)
+    }
+}
+
+/// Counts for one call site within one span.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SiteStats {
+    /// Source file, captured through `#[track_caller]`.
+    pub file: &'static str,
+    /// Line.
+    pub line: u32,
+    /// Column.
+    pub column: u32,
+    /// Cancellation checks.
+    pub checks: u64,
+    /// Report calls.
+    pub reports: u64,
+    /// Units those reports added (saturating).
+    pub units: u64,
+    /// Longest interval that ended at a check at this site.
+    pub max_gap_before_check: Duration,
+}
+
+/// The longest interval between reports in one span, recorded only when
+/// [`Profiler::set_report_timing`] is on.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReportGap {
-    /// Start of the interval in the profiler's epoch.
+    /// Start of the interval, in the clock's epoch.
     pub start: Duration,
-    /// Elapsed time between the endpoints.
+    /// Length of the interval.
     pub duration: Duration,
-    /// Stop checks recorded by this task inside the interval.
+    /// Cancellation checks this span made inside the interval.
     pub checks: u64,
-    /// Longest stop-check gap inside the interval, including both boundaries.
+    /// Longest interval without a check inside it, boundaries included.
     pub max_check_gap: Duration,
-    /// Previous report site, or span entry.
+    /// The report that opened the interval; `None` for span entry.
     pub from: Option<SourceSite>,
-    /// Next report site, or span exit.
+    /// The report that closed the interval; `None` for span exit.
     pub to: Option<SourceSite>,
 }
 
-/// Per-task checkpoint evidence. Boundary gaps are included even with zero checks.
+/// One span's checkpoint evidence. Gaps include entry and exit, so a span
+/// with no checks still records how long it ran unchecked.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct Stats {
-    /// Number of checks (saturated).
+    /// Cancellation checks (saturating).
     pub checks: u64,
-    /// Number of reporting calls (saturated).
+    /// Report calls (saturating).
     pub reports: u64,
-    /// Reported completed units (saturated).
+    /// Units reported (saturating).
     pub units: u64,
-    /// Whether any count overflowed. Ratios then lose quantitative meaning.
+    /// Whether any count saturated; rates then lose their meaning.
     pub overflowed: bool,
-    /// Entry-to-first-check, check-to-check, or last-check-to-exit maximum.
+    /// Longest interval without a check: entry to first check, check to
+    /// check, or last check to exit.
     pub max_check_gap: Duration,
-    /// Start of the longest check gap, in the profiler's epoch. Collected only with `diagnostics`.
-    #[cfg(feature = "diagnostics")]
+    /// Start of that interval, in the clock's epoch.
     pub max_check_gap_start: Duration,
-    /// Longest entry/report/exit gap. Collected only with `diagnostics` enabled.
-    #[cfg(feature = "diagnostics")]
+    /// Longest interval between reports, if report timing was on.
     pub max_report_gap: Option<ReportGap>,
-    /// Time inside the wrapped checks, including inline callbacks.
+    /// Time spent inside instrumented checks, including any work they ran.
     pub check_time: Duration,
-    /// First observed Stop error in this task.
+    /// When the first check that returned a stop error finished.
     pub stopped_at: Option<Duration>,
-    /// Why the first stopped check failed, preserving cancellation versus timeout.
+    /// That check's reason, which keeps cancellation apart from a timeout.
     pub stop_reason: Option<StopReason>,
-    /// Clock regressions seen in this task; affected intervals are clamped to zero.
+    /// Times the clock went backwards here; those intervals count as zero.
     pub clock_regressions: u64,
-    /// At most 64 distinct call sites per span.
+    /// Up to 64 distinct call sites.
     pub sites: Vec<SiteStats>,
-    /// Calls whose additional site identity exceeded the site budget. Aggregate counts remain complete.
+    /// Calls from sites beyond the first 64. The totals above still count them.
     pub unattributed_calls: u64,
 }
 
-/// One completed execution span. IDs refer to this profiler run, not OS threads.
+/// One finished span.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SpanRecord {
-    /// Stable run-local span ID.
-    pub id: usize,
-    /// Enclosing span ID, when explicitly supplied.
-    pub parent: Option<usize>,
-    /// Associated progress-tree node ID.
-    pub node: usize,
-    /// Logical task/chunk/attempt label, stable across worker scheduling choices.
+    /// This span's identity.
+    pub id: SpanId,
+    /// The enclosing span, for spans made with [`Span::child`].
+    pub parent: Option<SpanId>,
+    /// The progress-tree phase this span belongs to, if any.
+    pub node: Option<NodeId>,
+    /// The task's label: a logical task, chunk or attempt, not an OS thread.
     pub task: String,
-    /// Execution, queueing, waiting, yield, or callback.
+    /// What the span measures.
     pub kind: SpanKind,
-    /// Start offset in the shared clock epoch.
+    /// Start, in the clock's epoch.
     pub start: Duration,
-    /// End offset in the same epoch.
+    /// End, in the clock's epoch.
     pub end: Duration,
-    /// Explicit outcome; dropping a span records abandonment.
+    /// How the span ended; a dropped span records `Abandoned`.
     pub outcome: Outcome,
-    /// Check/report counts and site attribution.
+    /// Checkpoint evidence.
     pub stats: Stats,
 }
+
 impl SpanRecord {
-    /// Inclusive elapsed time. Do not sum parents and their nested spans.
+    /// Wall time from start to end, including nested spans. Do not add a
+    /// parent's time to its children's.
     pub fn elapsed(&self) -> Duration {
         self.end.saturating_sub(self.start)
     }
-    /// Check density, normalized by this task's elapsed seconds.
+    /// Checks per second of this span's wall time.
     pub fn checks_per_second(&self) -> f64 {
         if self.elapsed().is_zero() {
             0.0
@@ -217,8 +254,8 @@ impl SpanRecord {
             self.stats.checks as f64 / self.elapsed().as_secs_f64()
         }
     }
-    /// A consumer-selected storm heuristic, not a claim that frequent checks are wrong.
-    /// Requires both sufficient evidence and a high per-task rate.
+    /// Whether this span made at least `minimum_checks` checks at more than
+    /// `checks_per_second`. A high rate alone does not prove waste.
     pub fn is_poll_storm(&self, minimum_checks: u64, checks_per_second: f64) -> bool {
         !self.stats.overflowed
             && self.stats.checks >= minimum_checks
@@ -234,27 +271,40 @@ struct TraceState {
     observed_at: Option<Duration>,
     returned_at: Option<Duration>,
 }
+
 struct Inner {
     clock: Arc<dyn Clock>,
     capacity: usize,
+    report_timing: AtomicBool,
     next_id: AtomicUsize,
     active: AtomicUsize,
     state: Mutex<TraceState>,
 }
 
-/// A bounded, clonable collector. No sampling threads, global state, or implicit clocks.
+/// A bounded, cloneable span collector. It starts no threads, keeps no global
+/// state, and reads only the clock you give it.
 #[derive(Clone)]
 pub struct Profiler {
     inner: Arc<Inner>,
 }
+
+impl fmt::Debug for Profiler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Profiler")
+            .field("capacity", &self.inner.capacity)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Profiler {
-    /// Retain up to `capacity` finished spans. Each live span retains at most 64 sites.
-    /// Dropped spans are counted; incomplete coverage is visible in every export.
+    /// Keep up to `capacity` finished spans. Later spans are dropped and
+    /// counted, so every export shows incomplete coverage.
     pub fn new(clock: impl Clock + 'static, capacity: usize) -> Self {
         Self {
             inner: Arc::new(Inner {
                 clock: Arc::new(clock),
                 capacity,
+                report_timing: AtomicBool::new(false),
                 next_id: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 state: Mutex::new(TraceState {
@@ -268,8 +318,18 @@ impl Profiler {
             }),
         }
     }
-    /// Attach effective configuration, build/hardware identity, run/attempt IDs,
-    /// predictor version, or a carefully scoped memory measurement. Replaces matching keys.
+
+    /// Time reports as well as checks, in spans started from now on.
+    ///
+    /// Off by default because it reads the clock at every instrumented report.
+    /// With it on, each span records its longest [`ReportGap`].
+    /// [`DiagnosticPulse`](crate::diagnostics::DiagnosticPulse) turns it on.
+    pub fn set_report_timing(&self, enabled: bool) {
+        self.inner.report_timing.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Record a key/value pair, such as a configuration or build identity.
+    /// A repeated key replaces the earlier value.
     pub fn metadata(&self, key: impl Into<String>, value: impl Into<String>) {
         let key = key.into();
         let value = value.into();
@@ -280,46 +340,63 @@ impl Profiler {
             state.metadata.push((key, value));
         }
     }
-    /// Begin an independent task span. Use one for each asymmetric task or sampled chunk.
-    pub fn span(&self, node: usize, task: impl Into<String>, kind: SpanKind) -> Span {
-        self.start_span(None, node, task.into(), kind, None)
+
+    /// Start a span for one task. `node` ties it to a progress-tree phase; pass
+    /// `None` for work outside a tree.
+    ///
+    /// ```
+    /// use how_far_along::{Outcome, Unstoppable};
+    /// use how_far_along::profile::{Profiler, SpanKind, StdClock};
+    ///
+    /// let profiler = Profiler::new(StdClock::new(), 16);
+    /// let span = profiler.span(None, "decode", SpanKind::Work);
+    /// let stop = span.instrument(Unstoppable);
+    /// // decode(&input, &stop)?;
+    /// span.finish(Outcome::Succeeded);
+    /// assert_eq!(profiler.snapshot().spans.len(), 1);
+    /// ```
+    pub fn span(
+        &self,
+        node: impl Into<Option<NodeId>>,
+        task: impl Into<String>,
+        kind: SpanKind,
+    ) -> Span {
+        self.start_span(None, node.into(), task.into(), kind, None)
     }
-    /// Current offset in this profiler's clock epoch.
+
+    /// Run one callback inside a `Callback` span. A panic records the span as
+    /// abandoned and keeps unwinding.
+    pub fn measure_callback<R>(&self, task: impl Into<String>, callback: impl FnOnce() -> R) -> R {
+        let span = self.span(None, task, SpanKind::Callback);
+        let result = callback();
+        span.finish(Outcome::Succeeded);
+        result
+    }
+
+    /// The clock's current reading.
     #[cfg(feature = "diagnostics")]
     pub(crate) fn now(&self) -> Duration {
         self.inner.clock.now()
     }
-    /// Begin a span whose entry is known to precede its first checkpoint, for
-    /// example a sequential stage entered when the previous stage finished.
+
+    /// A span whose start is known to precede its first checkpoint, such as a
+    /// sequential stage entered when the previous one finished.
     #[cfg(feature = "diagnostics")]
     pub(crate) fn span_from(
         &self,
-        node: usize,
+        node: Option<NodeId>,
         task: impl Into<String>,
         kind: SpanKind,
         start: Duration,
     ) -> Span {
         self.start_span(None, node, task.into(), kind, Some(start))
     }
-    /// Time one subscriber invocation, including any lazily built snapshot.
-    /// A panic records an abandoned callback span and then resumes unwinding.
-    #[cfg(feature = "diagnostics")]
-    pub fn measure_callback<R>(
-        &self,
-        node: usize,
-        task: impl Into<String>,
-        callback: impl FnOnce() -> R,
-    ) -> R {
-        let span = self.span(node, task, SpanKind::Callback);
-        let result = callback();
-        span.finish(Outcome::Succeeded);
-        result
-    }
+
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     fn start_span(
         &self,
-        parent: Option<usize>,
-        node: usize,
+        parent: Option<SpanId>,
+        node: Option<NodeId>,
         task: String,
         kind: SpanKind,
         entered: Option<Duration>,
@@ -336,49 +413,53 @@ impl Profiler {
             finished: false,
             inner: Arc::new(SpanInner {
                 profiler: self.clone(),
-                id,
+                id: SpanId(id),
                 parent,
                 node,
                 task,
                 kind,
                 start,
+                time_reports: self.inner.report_timing.load(Ordering::Relaxed),
                 state: Mutex::new(SpanState {
                     stats: Stats::default(),
                     last_check: start,
-                    #[cfg(feature = "diagnostics")]
                     last_report: start,
-                    #[cfg(feature = "diagnostics")]
                     last_report_site: None,
-                    #[cfg(feature = "diagnostics")]
                     window: Window::new(start),
                     closed: false,
                 }),
             }),
         }
     }
-    /// Record the actual cancellation request independently of the next check.
-    /// Call beside the application's cancel operation, not when a subscriber eventually notices it.
+
+    /// Record when cancellation was actually requested. Call it next to the
+    /// application's cancel call, not when a callback notices.
     pub fn cancellation_requested(&self) {
         let now = self.inner.clock.now();
         let mut state = self.inner.state.lock();
         state.cancelled_at = Some(state.cancelled_at.map_or(now, |old| old.min(now)));
     }
-    /// Record operation return after the last worker joined and cleanup completed.
+
+    /// Record when the operation returned, after every worker joined and
+    /// cleanup finished.
     pub fn operation_returned(&self) {
         let now = self.inner.clock.now();
         self.inner.state.lock().returned_at = Some(now);
     }
-    /// Clone finished records. Active and dropped span counts expose incomplete coverage.
+
+    /// Copy the finished spans. Active and dropped counts show what is missing.
     pub fn snapshot(&self) -> Trace {
         let state = self.inner.state.lock();
         self.snapshot_from(&state)
     }
-    /// Nonblocking observation for a browser UI or other latency-sensitive owner.
-    /// Return None on contention; retain the previous display and sample later.
+
+    /// [`snapshot`](Self::snapshot) without waiting: `None` if another thread
+    /// holds the collector's lock. UI threads keep their last trace and retry.
     pub fn try_snapshot(&self) -> Option<Trace> {
         let state = self.inner.state.try_lock()?;
         Some(self.snapshot_from(&state))
     }
+
     fn snapshot_from(&self, state: &TraceState) -> Trace {
         Trace {
             schema_version: 1,
@@ -397,23 +478,20 @@ impl Profiler {
 struct SpanState {
     stats: Stats,
     last_check: Duration,
-    #[cfg(feature = "diagnostics")]
     last_report: Duration,
-    #[cfg(feature = "diagnostics")]
     last_report_site: Option<SourceSite>,
-    /// Stop-check evidence since the previous report, to tell a progress-granularity
-    /// seam from missing cancellation checks.
-    #[cfg(feature = "diagnostics")]
+    /// Checks since the last report, to tell a coarse reporting unit from
+    /// missing cancellation checks.
     window: Window,
     closed: bool,
 }
-#[cfg(feature = "diagnostics")]
+
 struct Window {
     last_check: Duration,
     checks: u64,
     max_gap: Duration,
 }
-#[cfg(feature = "diagnostics")]
+
 impl Window {
     fn new(at: Duration) -> Self {
         Self {
@@ -427,7 +505,7 @@ impl Window {
         self.last_check = self.last_check.max(at);
         self.checks = self.checks.saturating_add(1);
     }
-    /// Close the interval ending at `end`, then begin the next one there.
+    /// Close the interval at `end` and start the next one there.
     fn close(&mut self, end: Duration) -> (u64, Duration) {
         let gap = self.max_gap.max(end.saturating_sub(self.last_check));
         let checks = self.checks;
@@ -435,16 +513,19 @@ impl Window {
         (checks, gap)
     }
 }
+
 struct SpanInner {
     profiler: Profiler,
-    id: usize,
-    parent: Option<usize>,
-    node: usize,
+    id: SpanId,
+    parent: Option<SpanId>,
+    node: Option<NodeId>,
     task: String,
     kind: SpanKind,
     start: Duration,
+    time_reports: bool,
     state: Mutex<SpanState>,
 }
+
 impl SpanInner {
     fn finish(&self, outcome: Outcome) {
         let end = self.profiler.inner.clock.now();
@@ -458,15 +539,13 @@ impl SpanInner {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
-            #[cfg(feature = "diagnostics")]
             if gap > state.stats.max_check_gap {
+                state.stats.max_check_gap = gap;
                 state.stats.max_check_gap_start = state.last_check;
             }
-            state.stats.max_check_gap = state.stats.max_check_gap.max(gap);
-            #[cfg(feature = "diagnostics")]
-            {
-                let (window_checks, window_gap) = state.window.close(end);
-                let report_gap = end.checked_sub(state.last_report).unwrap_or_else(|| {
+            if self.time_reports {
+                let (checks, max_check_gap) = state.window.close(end);
+                let duration = end.checked_sub(state.last_report).unwrap_or_else(|| {
                     state.stats.clock_regressions += 1;
                     Duration::ZERO
                 });
@@ -474,13 +553,13 @@ impl SpanInner {
                     .stats
                     .max_report_gap
                     .as_ref()
-                    .is_none_or(|old| report_gap > old.duration)
+                    .is_none_or(|old| duration > old.duration)
                 {
                     state.stats.max_report_gap = Some(ReportGap {
                         start: state.last_report,
-                        duration: report_gap,
-                        checks: window_checks,
-                        max_check_gap: window_gap,
+                        duration,
+                        checks,
+                        max_check_gap,
                         from: state.last_report_site,
                         to: None,
                     });
@@ -509,39 +588,50 @@ impl SpanInner {
     }
 }
 
-/// Unique execution-span owner. Finish after its instrumented calls have returned.
-/// Dropping a span records abandonment, including during unwinding.
+/// The owner of one running span. Finish it after its instrumented calls
+/// return; dropping it unfinished, including during unwinding, records
+/// `Abandoned`.
 pub struct Span {
     inner: Arc<SpanInner>,
     finished: bool,
 }
+
+impl fmt::Debug for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Span")
+            .field("id", &self.inner.id)
+            .field("task", &self.inner.task)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Span {
-    /// Span ID within this run.
-    pub fn id(&self) -> usize {
+    /// This span's identity.
+    pub fn id(&self) -> SpanId {
         self.inner.id
     }
-    /// Begin a nested interval, such as a callback, queue wait, or host yield.
+    /// Start a nested span, such as a callback, queue wait, or host suspension.
     pub fn child(&self, task: impl Into<String>, kind: SpanKind) -> Span {
         self.inner
             .profiler
             .start_span(Some(self.id()), self.inner.node, task.into(), kind, None)
     }
-    /// Attach independent check/report instrumentation to this task's value.
-    /// A shared aggregate meter cannot reveal each worker's unpolled tail;
-    /// create separate spans and wrappers for separate tasks.
+    /// Wrap a stop policy or progress sink so that its calls are recorded in
+    /// this span, at their original call sites.
     pub fn instrument<T>(&self, value: T) -> Instrumented<T> {
         Instrumented {
             value,
             span: Arc::clone(&self.inner),
         }
     }
-    /// Publish an explicit outcome. The wrapper remains usable afterwards but
-    /// no longer contributes measurements to this finished span.
+    /// Record how the span ended. Wrappers keep working afterwards but stop
+    /// recording.
     pub fn finish(mut self, outcome: Outcome) {
         self.inner.finish(outcome);
         self.finished = true;
     }
 }
+
 impl Drop for Span {
     fn drop(&mut self) {
         if !self.finished {
@@ -550,24 +640,40 @@ impl Drop for Span {
     }
 }
 
-/// A profiling adapter. `may_stop`/`may_report` stay true to preserve instrumentation
-/// through erased/no-op seams. Caller locations pass through to the real call site.
+/// A stop policy or progress sink whose calls are recorded in a span.
+///
+/// It is `'static` whenever the wrapped value is, so it can go wherever the
+/// original went: into a codec context, a spawned thread, or an
+/// `Arc<dyn Stop>`. `may_stop` and `may_report` always return `true`, so
+/// callers that skip no-op policies still make the calls being measured.
 #[derive(Clone)]
 pub struct Instrumented<T> {
     value: T,
     span: Arc<SpanInner>,
 }
+
+impl<T: fmt::Debug> fmt::Debug for Instrumented<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Instrumented")
+            .field("value", &self.value)
+            .field("span", &self.span.id)
+            .finish()
+    }
+}
+
 impl<T> Instrumented<T> {
-    /// Access the wrapped policy/sink without adding an instrumented event.
+    /// The wrapped value. Calls made through it are not recorded.
     pub fn inner(&self) -> &T {
         &self.value
     }
 }
+
 fn add(value: &mut u64, n: u64) -> bool {
     let overflow = value.checked_add(n).is_none();
     *value = value.saturating_add(n);
     overflow
 }
+
 fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a mut SiteStats> {
     let position = stats
         .sites
@@ -593,11 +699,12 @@ fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a 
     };
     Some(&mut stats.sites[index])
 }
+
 impl<T: Stop> Stop for Instrumented<T> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         let start = self.span.profiler.inner.clock.now();
-        let result = self.value.check(); // Never run user policy under our locks.
+        let result = self.value.check(); // User policy never runs under our locks.
         let end = self.span.profiler.inner.clock.now();
         let mut state = self.span.state.lock();
         if !state.closed {
@@ -605,20 +712,17 @@ impl<T: Stop> Stop for Instrumented<T> {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
-            #[cfg(feature = "diagnostics")]
-            {
-                if gap > state.stats.max_check_gap {
-                    state.stats.max_check_gap_start = state.last_check;
-                }
-                state.window.check(start);
+            if gap > state.stats.max_check_gap {
+                state.stats.max_check_gap = gap;
+                state.stats.max_check_gap_start = state.last_check;
             }
+            state.window.check(start);
             state.last_check = start;
             let elapsed = end.checked_sub(start).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
             state.stats.check_time = state.stats.check_time.saturating_add(elapsed);
-            state.stats.max_check_gap = state.stats.max_check_gap.max(gap);
             state.stats.overflowed |= add(&mut state.stats.checks, 1);
             if result.is_err() && state.stats.stopped_at.is_none() {
                 state.stats.stopped_at = Some(end);
@@ -637,21 +741,23 @@ impl<T: Stop> Stop for Instrumented<T> {
         result
     }
 }
+
 impl<T: Report> Report for Instrumented<T> {
     #[track_caller]
     fn advance(&self, completed: u64) {
         self.value.advance(completed);
-        #[cfg(feature = "diagnostics")]
-        let now = self.span.profiler.inner.clock.now();
+        let now = self
+            .span
+            .time_reports
+            .then(|| self.span.profiler.inner.clock.now());
         let mut state = self.span.state.lock();
         if state.closed {
             return;
         }
-        #[cfg(feature = "diagnostics")]
-        {
+        if let Some(now) = now {
             let at = SourceSite::from_location(Location::caller());
-            let (window_checks, window_gap) = state.window.close(now);
-            let gap = now.checked_sub(state.last_report).unwrap_or_else(|| {
+            let (checks, max_check_gap) = state.window.close(now);
+            let duration = now.checked_sub(state.last_report).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
                 Duration::ZERO
             });
@@ -659,13 +765,13 @@ impl<T: Report> Report for Instrumented<T> {
                 .stats
                 .max_report_gap
                 .as_ref()
-                .is_none_or(|old| gap > old.duration)
+                .is_none_or(|old| duration > old.duration)
             {
                 state.stats.max_report_gap = Some(ReportGap {
                     start: state.last_report,
-                    duration: gap,
-                    checks: window_checks,
-                    max_check_gap: window_gap,
+                    duration,
+                    checks,
+                    max_check_gap,
                     from: state.last_report_site,
                     to: Some(at),
                 });
@@ -682,57 +788,62 @@ impl<T: Report> Report for Instrumented<T> {
     }
 }
 
-/// A versioned, owned run record; serializable without a framework dependency.
+/// A finished run's spans, optionally with its progress tree attached.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Trace {
-    /// Version of the JSON schema.
+    /// Version of the JSON format.
     pub schema_version: u32,
-    /// Optional accounting tree, with units, execution model, and estimate revisions.
+    /// The progress tree, attached with [`with_progress`](Self::with_progress).
     pub progress: Option<crate::Snapshot>,
-    /// Caller-supplied effective configuration and run identity.
+    /// Key/value pairs from [`Profiler::metadata`].
     pub metadata: Vec<(String, String)>,
-    /// Retained completed spans, in finish order.
+    /// Retained finished spans, in the order they finished.
     pub spans: Vec<SpanRecord>,
-    /// Completed spans excluded by the retention budget.
+    /// Finished spans beyond the profiler's capacity.
     pub dropped_spans: u64,
-    /// Spans still open at sampling time.
+    /// Spans still running when the trace was taken.
     pub active_spans: usize,
-    /// First actual cancellation request, if supplied by the caller.
+    /// When cancellation was requested, if recorded.
     pub cancelled_at: Option<Duration>,
-    /// First instrumented check returning a Stop error.
+    /// When an instrumented check first returned a stop error.
     pub observed_at: Option<Duration>,
-    /// Operation return after joins, if supplied by the caller.
+    /// When the operation returned, if recorded.
     pub returned_at: Option<Duration>,
 }
 
-/// Measured overlap of selected *independent* work spans, not inferred CPU utilization.
+/// How a chosen set of independent work spans overlapped in time.
+///
+/// It measures concurrency, not CPU utilization.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Overlap {
-    /// First start to last finish (including any gaps).
+    /// First start to last end, gaps included.
     pub wall: Duration,
-    /// Sum of selected execution intervals, in task-time units.
+    /// Sum of the spans' own durations.
     pub task_time: Duration,
-    /// Task-time divided by wall-time.
+    /// `task_time / wall`: the average number of spans running.
     pub mean_active_tasks: f64,
-    /// Highest measured overlap.
+    /// The most spans running at once.
     pub peak_active_tasks: usize,
-    /// Final continuous interval with exactly one running selected task.
+    /// The final stretch during which exactly one span was running.
     pub single_task_tail: Duration,
 }
+
 impl Trace {
-    /// Attach an accounting snapshot to make the execution trace self-describing.
-    /// Use a terminal snapshot after joins when producing a final job artifact.
+    /// Attach the progress tree, usually a final snapshot taken after every
+    /// worker joined.
     pub fn with_progress(mut self, progress: crate::Snapshot) -> Self {
         self.progress = Some(progress);
         self
     }
 
-    /// Summarize explicit work-span IDs. Returns None for missing/duplicate IDs,
-    /// non-work spans, clock regressions, or ancestor/descendant pairs (which would
-    /// double count). Selection lets callers compare each intermediate parallel group.
-    pub fn overlap(&self, ids: &[usize]) -> Option<Overlap> {
+    /// Measure how the given work spans overlapped.
+    ///
+    /// Returns `None` for an empty, missing or repeated ID, a span that is not
+    /// `Work`, a span with clock regressions, or a span together with one of
+    /// its ancestors (which would count time twice).
+    pub fn overlap(&self, ids: &[SpanId]) -> Option<Overlap> {
         if ids.is_empty() {
             return None;
         }
@@ -798,19 +909,23 @@ impl Trace {
             single_task_tail: tail_start.map_or(Duration::ZERO, |at| last.saturating_sub(at)),
         })
     }
-    /// Request-to-first-observation latency. None if either endpoint is missing or regressed.
+
+    /// Time from the cancellation request to the first check that saw it.
     pub fn cancellation_observation_latency(&self) -> Option<Duration> {
         self.observed_at?.checked_sub(self.cancelled_at?)
     }
-    /// Request-to-return latency, including stragglers, joins, and cleanup.
+
+    /// Time from the cancellation request to the operation's return,
+    /// including stragglers, joins, and cleanup.
     pub fn cancellation_return_latency(&self) -> Option<Duration> {
         self.returned_at?.checked_sub(self.cancelled_at?)
     }
-    /// Export valid JSON with nanosecond offsets encoded as decimal strings to
-    /// preserve integer precision in JavaScript. Schema and coverage are explicit.
-    /// Human labels are escaped, including control characters. Later versions
-    /// may add keys; readers must ignore unknown ones (see the module's
-    /// stability notes).
+
+    /// Write the trace as JSON.
+    ///
+    /// Times are nanoseconds since the clock's epoch, written as decimal
+    /// strings so 64-bit values survive JavaScript. Labels are escaped. Later
+    /// versions may add keys; readers should ignore keys they do not know.
     pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         write!(
             out,
@@ -827,7 +942,7 @@ impl Trace {
         }
         out.write_str("},\"progress\":")?;
         match &self.progress {
-            Some(progress) => progress.write_json(out)?,
+            Some(progress) => progress.write_node_json(out)?,
             None => out.write_str("null")?,
         }
         out.write_str(",\"cancelled_at\":")?;
@@ -841,19 +956,17 @@ impl Trace {
             if i > 0 {
                 out.write_char(',')?;
             }
-            write!(
-                out,
-                "{{\"id\":{},\"parent\":{},\"node\":{},\"task\":",
-                span.id,
-                span.parent.map_or_else(|| "null".into(), |n| n.to_string()),
-                span.node
-            )?;
+            write!(out, "{{\"id\":{},\"parent\":", span.id)?;
+            optional_number(out, span.parent.map(SpanId::get))?;
+            out.write_str(",\"node\":")?;
+            optional_number(out, span.node.map(NodeId::get))?;
+            out.write_str(",\"task\":")?;
             quote(out, &span.task)?;
             write!(
                 out,
-                ",\"kind\":\"{:?}\",\"outcome\":\"{:?}\",\"start\":\"{}\",\"end\":\"{}\",\"checks\":{},\"reports\":{},\"units\":\"{}\",\"overflowed\":{},\"max_check_gap\":\"{}\",\"check_time\":\"{}\",\"clock_regressions\":{},\"unattributed_calls\":{},\"stopped_at\":",
-                span.kind,
-                span.outcome,
+                ",\"kind\":\"{}\",\"outcome\":\"{}\",\"start\":\"{}\",\"end\":\"{}\",\"checks\":{},\"reports\":{},\"units\":\"{}\",\"overflowed\":{},\"max_check_gap\":\"{}\",\"max_check_gap_start\":\"{}\",\"check_time\":\"{}\",\"clock_regressions\":{},\"unattributed_calls\":{},\"stopped_at\":",
+                span.kind.name(),
+                outcome_name(span.outcome),
                 span.start.as_nanos(),
                 span.end.as_nanos(),
                 span.stats.checks,
@@ -861,6 +974,7 @@ impl Trace {
                 span.stats.units,
                 span.stats.overflowed,
                 span.stats.max_check_gap.as_nanos(),
+                span.stats.max_check_gap_start.as_nanos(),
                 span.stats.check_time.as_nanos(),
                 span.stats.clock_regressions,
                 span.stats.unattributed_calls
@@ -868,34 +982,26 @@ impl Trace {
             optional_time(out, span.stats.stopped_at)?;
             out.write_str(",\"stop_reason\":")?;
             match span.stats.stop_reason {
-                Some(reason) => write!(out, "\"{reason:?}\"")?,
+                Some(reason) => write!(out, "\"{}\"", stop_reason_name(reason))?,
                 None => out.write_str("null")?,
             }
-            #[cfg(feature = "diagnostics")]
-            {
-                write!(
-                    out,
-                    ",\"max_check_gap_start\":\"{}\"",
-                    span.stats.max_check_gap_start.as_nanos()
-                )?;
-                out.write_str(",\"max_report_gap\":")?;
-                match &span.stats.max_report_gap {
-                    Some(gap) => {
-                        write!(
-                            out,
-                            "{{\"start\":\"{}\",\"duration\":\"{}\",\"checks\":{},\"max_check_gap\":\"{}\",\"from\":",
-                            gap.start.as_nanos(),
-                            gap.duration.as_nanos(),
-                            gap.checks,
-                            gap.max_check_gap.as_nanos()
-                        )?;
-                        optional_site(out, gap.from)?;
-                        out.write_str(",\"to\":")?;
-                        optional_site(out, gap.to)?;
-                        out.write_char('}')?;
-                    }
-                    None => out.write_str("null")?,
+            out.write_str(",\"max_report_gap\":")?;
+            match &span.stats.max_report_gap {
+                Some(gap) => {
+                    write!(
+                        out,
+                        "{{\"start\":\"{}\",\"duration\":\"{}\",\"checks\":{},\"max_check_gap\":\"{}\",\"from\":",
+                        gap.start.as_nanos(),
+                        gap.duration.as_nanos(),
+                        gap.checks,
+                        gap.max_check_gap.as_nanos()
+                    )?;
+                    optional_site(out, gap.from)?;
+                    out.write_str(",\"to\":")?;
+                    optional_site(out, gap.to)?;
+                    out.write_char('}')?;
                 }
+                None => out.write_str("null")?,
             }
             out.write_str(",\"sites\":[")?;
             for (j, site) in span.stats.sites.iter().enumerate() {
@@ -920,11 +1026,12 @@ impl Trace {
         out.write_str("]}")
     }
 }
+
 impl fmt::Display for Trace {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             out,
-            "how_far trace v{}: {} retained, {} active, {} dropped",
+            "how-far trace v{}: {} retained, {} active, {} dropped",
             self.schema_version,
             self.spans.len(),
             self.active_spans,
@@ -937,31 +1044,36 @@ impl fmt::Display for Trace {
         for span in &self.spans {
             writeln!(
                 out,
-                "{}\t{:?}\t{:?}\t{:.3}\t{}\t{}\t{}\t{:.3}\t{:?}",
+                "{}\t{:?}\t{}\t{:.3}\t{}\t{}\t{}\t{:.3}\t{}",
                 span.id,
                 span.task,
-                span.kind,
+                span.kind.name(),
                 span.elapsed().as_secs_f64() * 1000.0,
                 span.stats.checks,
                 span.stats.reports,
                 span.stats.units,
                 span.stats.max_check_gap.as_secs_f64() * 1000.0,
-                span.outcome
+                outcome_name(span.outcome)
             )?;
         }
-        writeln!(
-            out,
-            "Durations are inclusive elapsed time, not CPU time. Use independent span IDs for overlap; causes require application evidence."
-        )
+        writeln!(out, "Times are wall-clock elapsed time, not CPU time.")
     }
 }
+
 fn optional_time(out: &mut impl fmt::Write, value: Option<Duration>) -> fmt::Result {
     match value {
         Some(time) => write!(out, "\"{}\"", time.as_nanos()),
         None => out.write_str("null"),
     }
 }
-#[cfg(feature = "diagnostics")]
+
+fn optional_number(out: &mut impl fmt::Write, value: Option<usize>) -> fmt::Result {
+    match value {
+        Some(number) => write!(out, "{number}"),
+        None => out.write_str("null"),
+    }
+}
+
 fn optional_site(out: &mut impl fmt::Write, value: Option<SourceSite>) -> fmt::Result {
     match value {
         Some(site) => {

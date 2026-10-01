@@ -47,9 +47,9 @@ jobs:
         if: matrix.rust != '1.85'
         run: cargo test --workspace --all-features
 
-      - name: Test existing crates at their MSRV
+      - name: Test at the 1.85 MSRV (how-far-along needs 1.88)
         if: matrix.rust == '1.85'
-        run: cargo test --workspace --exclude how-far --exclude how-far-along
+        run: cargo test --workspace --exclude how-far-along
 
       - name: Test (no default features)
         run: |
@@ -220,7 +220,7 @@ jobs:
           MIRIFLAGS: -Zmiri-strict-provenance
 
   how-far:
-    name: how-far MSRV and instrumentation
+    name: how-far-along MSRV and instrumentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -229,7 +229,6 @@ jobs:
           toolchain: '1.88'
       - uses: Swatinem/rust-cache@v2
       - run: |
-          cargo test -p how-far
           cargo test -p how-far-along --all-features
           cargo run -p how-far-along --example diagnostics --features diagnostics
           cargo test -p how-far-along --no-default-features
@@ -258,8 +257,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      # The consumer's threaded WASM build requires nightly/build-std. This does
-      # not change how-far's stable Rust 1.88 or enough's Rust 1.85 MSRV.
+      # The consumer's threaded WASM build requires nightly/build-std. The
+      # libraries stay on stable: how-far on 1.85, how-far-along on 1.88.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-09-02

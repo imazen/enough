@@ -1,3 +1,7 @@
+//! Four tasks sharing one counter, each measured in its own span.
+//!
+//! Run with `cargo run -p how-far-along --example profile --features profile`.
+
 use how_far_along::profile::{Profiler, SpanKind, StdClock};
 use how_far_along::{Outcome, Phase, ProgressExt, ProgressWithStop, Stop, Total, Unstoppable};
 
@@ -6,16 +10,17 @@ fn main() {
     profiler.metadata("run", "example");
     profiler.metadata("configuration", "four independent tasks");
     let mut job = Phase::new("pool", Total::Exact(400));
-    let progress = job.progress();
+    let reporter = job.reporter();
     std::thread::scope(|scope| {
         for task in 0..4 {
             let profiler = &profiler;
-            let progress = progress.clone();
+            let reporter = reporter.clone();
+            let node = job.id();
             scope.spawn(move || {
-                let span = profiler.span(0, format!("chunk-{task}"), SpanKind::Work);
-                let work = span.instrument(ProgressWithStop::new(Unstoppable, progress));
+                let span = profiler.span(node, format!("chunk-{task}"), SpanKind::Work);
+                let work = span.instrument(ProgressWithStop::new(Unstoppable, reporter));
+                work.check().unwrap();
                 for _ in 0..100 {
-                    work.check().unwrap();
                     work.step(1).unwrap();
                 }
                 span.finish(Outcome::Succeeded);
