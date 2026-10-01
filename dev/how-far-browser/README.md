@@ -1,10 +1,10 @@
 # Browser integration tests
 
-This isolated application tests `how-far` with zenpipe's binding versions:
-`wasm-bindgen 0.2.123` and `wasm-bindgen-rayon 1.3`, using `no-bundler`, a
-worker-owned Rayon pool and shared Wasm memory. It is excluded from ordinary
-workspace/library builds; none of its browser dependencies become dependencies
-of either library. The fixture opts into `how-far-along` with std.
+This isolated application tests `how-far` with pinned bindings,
+`wasm-bindgen 0.2.123` and `wasm-bindgen-rayon 1.3` (`no-bundler`), a
+worker-owned Rayon pool, and shared Wasm memory. It is excluded from ordinary
+workspace builds, so none of its browser dependencies reach either library.
+The fixture uses `how-far-along` with `std` and `profile`.
 
 ```sh
 rustup toolchain install nightly-2026-09-02 --component rust-src
@@ -18,9 +18,9 @@ npx playwright install --with-deps chromium webkit
 npm test
 ```
 
-Override `HOW_FAR_BINDGEN` if the matching CLI is installed outside PATH. The
-nightly/build-std requirement belongs to this threaded Wasm application;
-`how-far` and `how-far-along` support stable Rust 1.88, and `enough` still supports Rust 1.85.
+Set `HOW_FAR_BINDGEN` if the matching CLI is installed outside `PATH`. Only
+this threaded Wasm application needs nightly and `build-std`; the libraries
+build on stable Rust (`how-far` and `enough` on 1.85, `how-far-along` on 1.88).
 
 The HTTP server supplies COOP/COEP headers. Tests run in Chromium and Playwright
 WebKit and verify:
