@@ -64,3 +64,8 @@ pub use pulse::{
 };
 pub use report::{NoReport, ProgressWithStop, Report};
 pub use stages::{RunError, Stages};
+
+/// The README's examples, compiled and run as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

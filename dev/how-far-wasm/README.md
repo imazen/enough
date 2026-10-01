@@ -17,4 +17,4 @@ This probe deliberately uses raw Wasm exports. Its resumable `begin_chunks` /
 wasm-bindgen-rayon pool in Chromium and WebKit. Neither fixture certifies arbitrary
 closure trampolines, Asyncify transforms, or Apple's packaged Safari.
 The raw probe has no browser-binding dependencies and is excluded from ordinary
-workspace builds. See [integration notes](../../docs/how-far-implementation.md).
+workspace builds. See the [browser and Wasm notes](../../docs/how-far-validation.md#browsers-and-wasm).

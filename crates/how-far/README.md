@@ -1,106 +1,192 @@
-# how-far
+# how-far [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/how-far?style=flat-square)](https://crates.io/crates/how-far) [![lib.rs](https://img.shields.io/crates/v/how-far?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/how-far) [![docs.rs](https://img.shields.io/docsrs/how-far?style=flat-square)](https://docs.rs/how-far) [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/how-far?style=flat-square)](#license)
 
-A small, object-safe progress interface for libraries. A library accepts one
-`&dyn Pulse` for cancellation, completed work, and nested phase planning. It
-depends only on `enough`; the caller decides whether to ignore reports or opt
-into [`how-far-along`](../how-far-along/README.md) for a shared tree, snapshots,
-callbacks, and profiling.
+One interface for cancellation, progress, and weighted phases in libraries.
 
-**Rust 1.88+, `no_std + alloc`, `#![forbid(unsafe_code)]`.** There are no feature
-flags or macros. The only dependency is the small `enough` cancellation trait
-crate; the reporting hot path does not allocate or read a clock.
+A library accepts `&dyn Pulse`. Through it, the library asks whether to
+stop, counts finished work, and splits itself into phases with fixed
+weights. The caller decides what those reports become: nothing, a progress
+bar, a live tree that another thread can read, or a profile. The library's
+signature is the same either way.
 
 ```toml
 [dependencies]
 how-far = "0.1"
 ```
 
-## One callback through a library
+`how-far` is `no_std + alloc`, forbids `unsafe`, has no feature flags, and
+depends only on [`enough`](https://crates.io/crates/enough), whose `Stop`
+trait it re-exports. Applications pick a tracker such as
+[`how-far-along`](https://github.com/imazen/enough/blob/main/crates/how-far-along/README.md).
+
+## A library
 
 ```rust
-use how_far::{PhaseSpec, ProgressExt, Pulse, RunError, Steps, StopReason, Total};
+use how_far::{PhaseSpec, ProgressExt, Pulse, RunError, Stages, StopReason, Total};
 
-fn process(rows: &[u8], pulse: &dyn Pulse) -> Result<(), RunError<StopReason>> {
-    let mut steps = Steps::new(pulse, &[
-        PhaseSpec::new("rows", 1, Total::Exact(rows.len() as u64)).units("rows"),
+pub fn thumbnail(rows: &[Vec<u8>], pulse: &dyn Pulse) -> Result<Vec<u8>, RunError<StopReason>> {
+    let count = rows.len() as u64;
+    let mut stages = Stages::new(pulse, &[
+        PhaseSpec::new("decode", 1, Total::Exact(count)).units("rows"),
+        PhaseSpec::new("resize", 4, Total::Exact(count)).units("rows"),
     ])?;
-    steps.run_stoppable(|stage| {
+    let decoded = stages.run_stoppable(|stage| {
+        stage.check()?; // once, before the loop
+        let mut out = Vec::new();
         for row in rows {
-            stage.check()?;
-            // Process the row successfully, then count it.
-            let _ = row;
+            out.push(row.iter().map(|&b| b / 2).collect::<Vec<u8>>());
+            stage.step(1)?; // count the finished row, then check for a stop
+        }
+        Ok(out)
+    })?;
+    let resized = stages.run_stoppable(|stage| {
+        let mut out = Vec::new();
+        for row in &decoded {
+            out.push(row.iter().step_by(2).copied().sum::<u8>());
             stage.step(1)?;
         }
-        Ok(())
+        Ok(out)
     })?;
-    steps.finish()?;
-    Ok(())
+    stages.finish()?;
+    Ok(resized)
 }
 
-process(&[1, 2, 3], &how_far::NoPulse).unwrap();
+// Callers that don't care pass `NoPulse`, which costs nothing.
+let _pixels = thumbnail(&vec![vec![8; 16]; 4], &how_far::NoPulse)?;
+# Ok::<(), RunError<StopReason>>(())
 ```
 
-`Steps` runs declared leaf phases in order. It marks a successful phase finished;
-on a stop request, it marks that phase cancelled and later phases skipped.
-Use `run` instead of `run_stoppable` when an error means failure rather than
-cancellation. When both are possible, `run_classified` marks only errors the
-library identifies as stops as cancelled; other errors mark the stage failed.
-`RunError<E>` separates an operation error from a plan error,
-so a library can use a type alias for its public error. A panic leaves work
-abandoned. `NoPulse` is the zero-sized, non-cancelling choice.
+A tracker records two phases with a 1:4 weight split, counts in rows, an
+outcome for each stage, and a fraction a progress bar can show.
 
-For parallel work with one logical count, use ordinary `run_stoppable` and pass
-its `&dyn Pulse` to every worker. Join the workers before returning from the
-closure; `Steps` then finishes the phase. Give workers separate child phases
-only when they need their own totals, statuses, or weights. In that case, use
-`run_nested_stoppable` and `Pulse::split`; finish and join the children before
-returning. `Steps` finishes the containing stage and keeps errors flat.
+## Three rules
 
-Child phases can split into `Sequence`, `ForkJoin`, or `WorkPool` groups. The
-relative weights of siblings are fixed before work starts, so a parallel
-middle phase can keep 30% of its parent's budget regardless of worker count.
-`PhaseSpec` is built with `new` and its fields stay readable; it is
-non-exhaustive so future planning options will not break library authors.
+**Finish what you split, never what you were given.**
+[`Pulse::split`](https://docs.rs/how-far/latest/how_far/trait.Pulse.html#tymethod.split)
+returns owned `Child` handles; finishing one consumes it. The pulse a
+function receives belongs to its caller, so a library never finishes it.
+That is what lets one library call another inside a stage: the inner
+library plans and finishes its own children, and the outer `Stages` finishes
+the stage afterwards. The application finishes the root.
 
-`Pulse` extends `Stop` and `Report`, so the same `&dyn Pulse` also works
-at existing `&dyn Stop` and `&dyn Report` seams on this crate's Rust 1.88 MSRV.
-`Stop` and `StopReason` are re-exported here, so a new library needs only
-`how-far` in its manifest.
-`check()` only checks cancellation, so frequent stop points stay cheap.
-`step(n)` reports completed work and then checks cancellation; use it at most
-reporting points. `advance()` remains available for count-only sinks and does
-not poll or call subscribers. A cancelled `step(n)` still counts work that
-finished before that checkpoint.
+**Report completed work.** `advance(n)` counts finished units, including a
+short final batch. `step(n)` counts and then checks for cancellation, so work
+done before a stop request is still counted. Report actual counts, not
+estimates; a `Total` can be `Exact`, `Estimated`, or `Unknown`.
 
-## Thread tests
+**Borrow in hot loops, own in `'static` code.** `&dyn Pulse` costs two
+words and borrows. Code that must own its stop policy or progress sink, such
+as a codec context built with its own stop, a `std::thread::spawn` worker, or
+an async task, takes [`Pulse::handle`](https://docs.rs/how-far/latest/how_far/trait.Pulse.html#tymethod.handle):
+an owned, cloneable `'static` value that checks the same stop policy and
+counts into the same phase.
 
-`cargo test -p how-far --test pulse_threads` starts four OS threads sharing one
-`&dyn Pulse`. It verifies that their asymmetric reports add up and that a
-cancellation request becomes visible to every worker. The tracker integration
-tests (`cargo test -p how-far-along --test pulse`) cover the same shared phase
-inside a serial → parallel → serial plan, including a live snapshot, and a
-Rayon pool whose chunks all report to one logical phase.
+## Stages
 
-## Count only
+`Stages::new(pulse, &parts)` splits a pulse into sequential stages. Each
+`run` hands its closure the next stage as `&dyn Pulse` and then finishes that
+stage: `Succeeded` for `Ok`, otherwise the outcome its error maps to. After an
+error, every later stage is finished as `Skipped`, and the original error is
+returned unchanged.
 
-Algorithms that need no phase structure can continue to accept `impl Report`.
-`IgnoreProgress` discards counts while preserving a separate cancellation
-policy. References, `Box`, `Arc`, and `Option` forward `Report` without feature
-switches. The interface is identical in every build.
+| Method | An error from the closure means |
+| --- | --- |
+| `run` | the stage failed |
+| `run_stoppable` | the stage was cancelled |
+| `run_classified(is_stop, ..)` | cancelled if `is_stop(&error)`, otherwise failed |
+| `run_nested(is_stop, ..)` | the same, for a closure that splits the stage itself and uses `?` on plan errors |
 
-## Opt into tracking in applications and tests
+To call another library inside a stage, pass it the stage:
+`stages.run_classified(CodecError::is_stop, |stage| codec::encode(image, stage))`.
+The codec plans its own stages inside yours.
 
-```toml
-# In a library's Cargo.toml:
-[dependencies]
-how-far = "0.1"
+## Parallel work
 
-[dev-dependencies]
-how-far-along = { version = "0.1", features = ["profile"] }
+Workers that count one logical phase share it. A Rayon `par_iter`, scoped
+threads, or a pool all call `stage.step(1)` on the same `&dyn Pulse`; join
+them before the closure returns. Declare
+`Execution::work_pool(threads)` on the phase so observers know.
+
+Give workers their own child phases only when each needs its own total,
+weight, or outcome:
+
+```rust
+use how_far::{Execution, Outcome, PhaseSpec, ProgressExt, Pulse, StopReason, Total};
+
+fn tiles(pulse: &dyn Pulse) -> Result<(), StopReason> {
+    let [left, right] = pulse
+        .split_array(Execution::ForkJoin, [
+            PhaseSpec::new("left", 1, Total::Exact(8)),
+            PhaseSpec::new("right", 1, Total::Exact(8)),
+        ])
+        .expect("valid plan");
+    std::thread::scope(|scope| {
+        for child in [left, right] {
+            scope.spawn(move || {
+                let result = (0..8).try_for_each(|_| child.step(1));
+                child.finish(Outcome::from_result(&result, |_| true)).expect("joined");
+                result
+            });
+        }
+    });
+    Ok(())
+}
+tiles(&how_far::NoPulse)?;
+# Ok::<(), StopReason>(())
 ```
 
-Applications can use `how-far-along::PulseTree` to pair a phase tree with a stop
-policy, pass it as `&dyn Pulse`, and sample through an observer. Its optional
-plumbing stays out of the library dependency graph. Neither crate permits unsafe
-code. See the [tracker example](../how-far-along/README.md) and
-[library testing and tuning guide](../../docs/how-far-testing-and-tuning.md).
+`'static` workers, such as `std::thread::spawn`, `rayon::spawn`, or
+`tokio::spawn`, cannot borrow a pulse. Give each one `pulse.handle()`.
+
+## What it costs
+
+`&dyn Pulse` is a data pointer and a vtable pointer: two words, however
+large the implementation behind it. Every hot-path call takes those two words
+(plus a `u64` for `advance`) and returns at most one byte, so arguments and
+results travel in registers and nothing spills at the call itself. These
+sizes are asserted at compile time on 32- and 64-bit targets:
+
+| Value | Size |
+| --- | --- |
+| `&dyn Pulse`, `Child`, `Box<dyn Pulse>` | 2 words |
+| `Result<(), StopReason>`, `Outcome` | 1 byte |
+| `PulseHandle` | 4 words |
+| `NoPulse`, `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
+
+`&dyn` does not stop a hot loop from spilling registers: any call the
+compiler cannot inline forces the loop's live values out of caller-saved
+registers, dynamic or not. The fix is cadence, not dispatch:
+
+- Check once per row, block, or tile, not per pixel or byte.
+- Gate no-op pulses. `(pulse.may_stop() || pulse.may_report()).then_some(pulse)`
+  gives an `Option<&dyn Pulse>` whose `check()` and `step()` make no call at
+  all when the pulse neither stops nor reports, as with `NoPulse`.
+- Batch reports from many workers with `how_far_along::ext::ReportExt::batched`.
+
+Measured on one machine (a Ryzen 9 5900XT), a `check()` or `advance()`
+through `&dyn Pulse` costs 1.6 to 3.2 ns. Inside a 256 KiB codec-style loop, a
+live tree added 1.6 to 3.1 ns per checkpoint over `NoPulse`: about 1 to 2% at
+one checkpoint per 4 KiB, and 9 to 13% at one per 256 bytes. With the gate
+above, the no-observer path matched a monomorphized loop. The
+[results, method, and raw output](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
+are committed.
+
+## No-op and count-only use
+
+`NoPulse` never stops, discards reports, and still validates plans, so
+planning mistakes surface even when nobody watches. Algorithms that only
+count can accept `impl Report` instead; `NoReport` discards counts, and
+references, `Box`, `Arc`, and `Option` forward them. `ProgressWithStop`
+pairs any stop policy with any sink.
+
+## Tracking and testing
+
+Applications and tests pass a
+[`how-far-along`](https://github.com/imazen/enough/blob/main/crates/how-far-along/README.md)
+`PulseTree` and read snapshots through an observer. Library tests can also
+measure checkpoint cadence and stage weights without changing the library;
+see the [testing and tuning guide](https://github.com/imazen/enough/blob/main/docs/how-far-testing-and-tuning.md).
+
+## License
+
+Licensed under either of [MIT](https://github.com/imazen/enough/blob/main/LICENSE-MIT)
+or [Apache-2.0](https://github.com/imazen/enough/blob/main/LICENSE-APACHE), at your option.

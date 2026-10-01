@@ -180,8 +180,8 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
-| [`how-far`](crates/how-far/README.md) | Minimal progress interface for libraries (`no_std + alloc`, Rust 1.88) |
-| [`how-far-along`](crates/how-far-along/README.md) | Opt-in phase trees, callbacks, and task profiling for consumers/tests (`no_std + alloc`) |
+| [`how-far`](crates/how-far/README.md) | Cancellation, progress, and weighted phases through one interface for libraries (`no_std + alloc`, Rust 1.85) |
+| [`how-far-along`](crates/how-far-along/README.md) | Progress trees, observers, callbacks, and checkpoint profiling for applications and tests (Rust 1.88) |
 
 Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blob/main/ZERO-DEP.md).
 

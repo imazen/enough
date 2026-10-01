@@ -65,3 +65,8 @@ pub use how_far::{
 };
 pub use pulse::PulseTree;
 pub use tree::{NodeId, Observer, Phase, Reporter, Snapshot, Status};
+
+/// The README's examples, compiled and run as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
