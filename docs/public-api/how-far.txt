@@ -1,0 +1,112 @@
+# how-far public API — supported surface (default features)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+#
+# files: how-far.txt 77 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 11 lines (11 hidden + 0 excluded-feature)
+
+## summary
+#
+#   pub modules                                 1
+#   pub types (struct/enum/trait/alias)        12
+#   pub consts/statics                          3
+#   free functions                              2
+#   inherent methods                           11
+#   struct fields                               6
+#   enum variants                              23
+#   re-exports                                  2
+#   trait roster entries (type × trait)        48
+#   auto-trait-complete types                   7
+#   auto-trait exceptions                       2
+#
+# per-module pub lines:
+#   (root)                           60
+
+## items (60 lines)
+
+pub mod how_far
+pub use Stop
+pub use StopReason
+#[non_exhaustive] pub enum Execution
+pub Execution::ForkJoin
+pub Execution::Sequence
+pub Execution::Unspecified
+pub Execution::WorkPool
+pub Execution::WorkPool::max_parallelism: usize
+#[non_exhaustive] pub enum Outcome
+pub Outcome::Abandoned
+pub Outcome::Cancelled
+pub Outcome::Failed
+pub Outcome::Skipped
+pub Outcome::Succeeded
+#[non_exhaustive] pub enum PlanError
+pub PlanError::AlreadyInUse
+pub PlanError::Busy
+pub PlanError::EmptyOrZeroWeight
+pub PlanError::Finished
+pub PlanError::NoMoreChildren
+pub PlanError::Overflow
+pub PlanError::UnfinishedChildren
+pub PlanError::UnsuccessfulChildren
+pub PlanError::ZeroParallelism
+pub enum RunError<E>
+pub RunError::Plan(PlanError)
+pub RunError::Work(E)
+#[non_exhaustive] pub enum Total
+pub Total::Estimated(u64)
+pub Total::Exact(u64)
+pub Total::Unknown
+pub struct IgnoreProgress
+pub struct NoPulse
+#[non_exhaustive] pub struct PhaseSpec<'a>
+pub PhaseSpec::execution: Execution
+pub PhaseSpec::name: &'a str
+pub PhaseSpec::total: Total
+pub PhaseSpec::units: &'a str
+pub PhaseSpec::weight: u64
+pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
+pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
+pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
+pub struct Steps<'a>
+pub fn Steps<'a>::finish(self) -> core::result::Result<(), PlanError>
+pub fn Steps<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
+pub fn Steps<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Steps<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Steps<'a>::run_nested_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
+pub fn Steps<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub trait ProgressExt: enough::Stop + Report
+pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
+pub trait Pulse: enough::Stop + Report
+pub fn Pulse::finish(&self, Outcome) -> core::result::Result<(), PlanError>
+pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<alloc::boxed::Box<(dyn Pulse + '_)>>, PlanError>
+pub trait Report: core::marker::Send + core::marker::Sync
+pub fn Report::advance(&self, u64)
+pub fn Report::may_report(&self) -> bool
+pub fn &mut T::advance(&self, u64)
+pub fn &mut T::may_report(&self) -> bool
+
+## trait impls (14 types)
+
+&T: Report
+&mut T: Report
+Execution: Clone, Copy, Debug, Default, Eq, PartialEq
+IgnoreProgress: Clone, Copy, Debug, Default, Report
+NoPulse: Clone, Copy, Debug, Default, Pulse, Report, enough::Stop
+Outcome: Clone, Copy, Debug, Eq, PartialEq
+PhaseSpec<'a>: Clone, Copy, Debug
+PlanError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
+RunError<E>: Debug, Display, Error, From<PlanError>
+T: ProgressExt
+Total: Clone, Copy, Debug, Eq, PartialEq
+alloc::boxed::Box<T>: Report
+alloc::sync::Arc<T>: Report
+core::option::Option<T>: Report
+
+## auto traits
+
+7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+Steps<'a>: !RefUnwindSafe !UnwindSafe

@@ -12,8 +12,8 @@ fn public_api_surface_docs_are_current() {
             "almost-enough",
             "enough-tokio",
             "enough-ffi",
-            "howfar",
-            "howfar-along",
+            "how-far",
+            "how-far-along",
         ])
         .run();
 }

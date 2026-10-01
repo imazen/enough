@@ -1,18 +1,18 @@
 /target
 dev/cancel-latency/target/
-dev/howfar-wasm/target/
-dev/howfar-browser/target/
-dev/howfar-browser/pkg/
-dev/howfar-browser/node_modules/
-dev/howfar-browser/test-results/
-dev/howfar-browser/playwright-report/
+dev/how-far-wasm/target/
+dev/how-far-browser/target/
+dev/how-far-browser/pkg/
+dev/how-far-browser/node_modules/
+dev/how-far-browser/test-results/
+dev/how-far-browser/playwright-report/
 apidoc/target/
 Cargo.lock
 # ...but the apidoc snapshot runner's lockfile is committed (last match wins)
 !apidoc/Cargo.lock
 # The dev harness pins git-dep revs (rav1d-safe, zenanalyze) for reproducible runs
 !dev/cancel-latency/Cargo.lock
-!dev/howfar-browser/Cargo.lock
+!dev/how-far-browser/Cargo.lock
 *.swp
 *.swo
 *~
