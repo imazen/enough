@@ -9,8 +9,9 @@ they are built the way they are. The crate READMEs show how to use them;
 **`how-far`** is the interface a library depends on. It defines `Pulse`
 (cancellation, counting, and phase planning in one object-safe trait),
 `Report`, `Stages`, and the no-op `NoPulse`. It is `no_std + alloc`, has no
-feature flags, depends only on `enough`, and builds on Rust 1.85, the same
-as `enough`. Adding it to a library adds one small crate to the build.
+feature flags, depends only on `enough`, and needs Rust 1.86 for trait
+upcasting, which lets a `&dyn Pulse` be passed as a `&dyn Stop` and lets
+`Stages` hand each stage its own pulse. Adding it to a library adds one small crate to the build.
 
 **`how-far-along`** is what applications and tests depend on. `PulseTree`
 implements `Pulse` over a tree of phases that observers read from any

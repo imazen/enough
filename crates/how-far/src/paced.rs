@@ -133,3 +133,11 @@ impl<'a> dyn Pulse + 'a {
         Paced::new(self, every)
     }
 }
+
+impl crate::Child<'_> {
+    /// Checkpoints that reach this child's pulse once every `every` units; see
+    /// [`Paced`].
+    pub fn paced(&self, every: u64) -> Paced<'_> {
+        Paced::new(self.pulse(), every)
+    }
+}

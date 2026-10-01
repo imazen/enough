@@ -8,7 +8,7 @@
 
 ### Added
 
-- `how-far` (new crate; Rust 1.85, `no_std + alloc`, depends only on `enough`):
+- `how-far` (new crate; Rust 1.86, `no_std + alloc`, depends only on `enough`):
   `Pulse`, one object-safe interface through which a library checks for
   cancellation, counts completed work, and plans weighted phases. `Stages` runs
   sequential plans; owned `Child` handles make finishing a phase owner-only and

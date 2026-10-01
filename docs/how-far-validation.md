@@ -26,7 +26,7 @@ What is tested, where, and what the tests do not cover. See
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |
-| `how-far` on Rust 1.85 and `how-far-along` on 1.88; `no_std` builds for Cortex-M and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
+| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
 
 No test suite proves every consumer's behavior. There is no built-in ETA
 model or executor; exported observations support them without claiming that

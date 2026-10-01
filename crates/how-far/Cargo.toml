@@ -2,7 +2,7 @@
 name = "how-far"
 version = "0.1.0"
 edition.workspace = true
-rust-version = "1.85"
+rust-version = "1.86"
 license.workspace = true
 repository.workspace = true
 description = "Cancellation, progress, and weighted phases through one interface for library authors"

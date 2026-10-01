@@ -2,7 +2,7 @@
 name = "test-how-far-pipeline"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 publish = false
 description = "A pretend library that calls the pretend codec inside its own how-far stages"
 

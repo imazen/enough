@@ -275,6 +275,12 @@ impl<'a> Child<'a> {
     pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
         self.pulse.finish(outcome)
     }
+
+    /// The child's own pulse, without the forwarding a `Child` adds when it is
+    /// itself used as a `&dyn Pulse`.
+    pub(crate) fn pulse(&self) -> &(dyn Pulse + 'a) {
+        &*self.pulse
+    }
 }
 
 impl fmt::Debug for Child<'_> {

@@ -70,7 +70,9 @@ fn a_pulse_reference_serves_existing_stop_and_report_seams() {
         work.step(1)
     }
     let pulse: &dyn Pulse = &NoPulse;
-    // `&dyn Pulse` is itself `Stop + Report`, so this needs no trait upcasting.
+    // Trait upcasting passes the pulse itself; a reference to it works too.
+    old_stop_site(pulse).unwrap();
+    old_report_site(pulse);
     old_stop_site(&pulse).unwrap();
     old_report_site(&pulse);
     generic_site(pulse).unwrap();

@@ -1,4 +1,4 @@
-# how-far [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/how-far?style=flat-square)](https://crates.io/crates/how-far) [![lib.rs](https://img.shields.io/crates/v/how-far?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/how-far) [![docs.rs](https://img.shields.io/docsrs/how-far?style=flat-square)](https://docs.rs/how-far) [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/how-far?style=flat-square)](#license)
+# how-far [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/how-far?style=flat-square)](https://crates.io/crates/how-far) [![lib.rs](https://img.shields.io/crates/v/how-far?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/how-far) [![docs.rs](https://img.shields.io/docsrs/how-far?style=flat-square)](https://docs.rs/how-far) [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/how-far?style=flat-square)](#license)
 
 One interface for cancellation, progress, and weighted phases in libraries.
 
@@ -97,7 +97,9 @@ returned unchanged.
 
 To call another library inside a stage, pass it the stage:
 `stages.run_classified(CodecError::is_stop, |stage| codec::encode(image, stage))`.
-The codec plans its own stages inside yours.
+The codec plans its own stages inside yours. A `&dyn Pulse` is also a
+`&dyn Stop` and a `&dyn Report`, so code that only checks for cancellation
+takes the stage as it is: `legacy::decode(input, stage)`.
 
 ## Parallel work
 
