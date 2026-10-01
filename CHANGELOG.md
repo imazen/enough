@@ -23,7 +23,10 @@
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span
   profiler (`profile`), and checkpoint advice with `DiagnosticPulse`
-  (`diagnostics`) (a967c21, d61d9a5, 3ca2b81, c421c45, fc36c54).
+  (`diagnostics`) (a967c21, d61d9a5, 3ca2b81, c421c45, fc36c54). Its debug
+  build is 16% smaller in rustc instructions with default features and 38%
+  with `diagnostics` (release: 20% and 53%) than the first draft, and CI
+  guards its compiled size (a79aead, 2df2564).
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
