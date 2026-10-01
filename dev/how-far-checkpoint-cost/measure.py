@@ -8,7 +8,8 @@ Two tables:
   into `NoPulse` and into a live `PulseTree`, against the same loop with no
   checkpoints;
 - per operation: a three-stage `Stages` plan around that work, with
-  `NoPulse` and with a fresh `PulseTree` per operation.
+  `NoPulse` and with a fresh `PulseTree` per operation, pacing checkpoints
+  (`op-*`) or stepping through the stage on every chunk (`opstep-*`).
 
 Every variant calls the same `#[inline(never)]` defilter, so all run the same
 hot loop at the same address. Counts are the slope between two iteration
@@ -28,7 +29,7 @@ BIN = HERE / "target" / "release" / "how-far-checkpoint-cost"
 LOW, HIGH, RUNS = 200, 1000, 5
 CHECKPOINTS = ["none", "step-nopulse", "live-nopulse", "paced-nopulse",
                "step-tree", "live-tree", "paced-tree"]
-OPERATIONS = ["op-none", "op-nopulse", "op-tree"]
+OPERATIONS = ["op-none", "op-nopulse", "op-tree", "opstep-nopulse", "opstep-tree"]
 
 
 def counts(variant, chunk, iterations, size):

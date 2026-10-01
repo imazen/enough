@@ -173,6 +173,7 @@ and a three-stage plan cost around the same `#[inline(never)]` defilter;
 do not depend on machine load, and cycles depend on it far less than wall time
 does. [The 2026-10-01 counts](../benchmarks/how-far-checkpoint-cost-2026-10-01.md)
 put a paced step at about 5 instructions and 1 cycle, a plain `step` into a
-live tree at about 62 and 18, and a live tree's three-stage plan at about
-6,800 instructions per operation. Wall-time results from zenbench are in
+live tree at about 58 and 16, a step through a stage at about 47
+instructions, and a live tree's three-stage plan at about 6,800 instructions
+per operation. Wall-time results from zenbench are in
 [the overhead results](../benchmarks/how-far-overhead.md).

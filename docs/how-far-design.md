@@ -142,9 +142,12 @@ time on every target.
 
 Dynamic dispatch does not by itself cause register spills; any call the
 compiler cannot inline does, because the loop's live values must survive it.
-Reaching a live tree costs about 62 instructions and 18 cycles per checkpoint
-(two indirect calls and the tree's atomics), so a checkpoint stays under 1%
-only if about 2,000 cycles of work separate two of them.
+Reaching a live tree costs about 58 instructions and 16 cycles per checkpoint:
+two indirect calls and one locked add on the phase's counter, which is the
+floor for a count that workers share. A checkpoint therefore stays under 1%
+only if about 1,600 cycles of work separate two of them. `Stages` hands each
+stage its own pulse rather than the `Child` that forwards to it, so a stage's
+calls go through one vtable, not two.
 
 `Paced` removes that constraint. It counts in a local and reaches the pulse
 once per chosen number of units, so a step is an addition and a comparison:

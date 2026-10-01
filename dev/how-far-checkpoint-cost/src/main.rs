@@ -62,9 +62,15 @@ fn paced(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReas
     Ok(())
 }
 
-/// One operation in three stages, each paced over a third of the buffer.
+/// One operation in three stages, each paced over a third of the buffer, or
+/// stepped on every chunk when `paced` is false.
 #[inline(never)]
-fn operation(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), RunError<StopReason>> {
+fn operation(
+    buf: &mut [u8],
+    chunk: usize,
+    pulse: &dyn Pulse,
+    paced: bool,
+) -> Result<(), RunError<StopReason>> {
     let third = buf.len() / 3;
     let mut stages = Stages::new(
         pulse,
@@ -76,10 +82,17 @@ fn operation(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), RunE
     )?;
     for part in buf.chunks_mut(third).take(3) {
         stages.run_stoppable(|stage| {
-            let mut pace = stage.paced(EVERY);
-            for piece in part.chunks_mut(chunk) {
-                sub_defilter(piece);
-                pace.step(piece.len() as u64)?;
+            if paced {
+                let mut pace = stage.paced(EVERY);
+                for piece in part.chunks_mut(chunk) {
+                    sub_defilter(piece);
+                    pace.step(piece.len() as u64)?;
+                }
+            } else {
+                for piece in part.chunks_mut(chunk) {
+                    sub_defilter(piece);
+                    stage.step(piece.len() as u64)?;
+                }
             }
             Ok(())
         })?;
@@ -117,12 +130,14 @@ fn main() {
                 operation_none(black_box(&mut buf), black_box(chunk));
                 Ok(())
             }
-            "op" if target == "nopulse" => operation(black_box(&mut buf), black_box(chunk), &NoPulse)
-                .map_err(|_| StopReason::Cancelled),
-            "op" => {
+            "op" | "opstep" if target == "nopulse" => {
+                operation(black_box(&mut buf), black_box(chunk), &NoPulse, kind == "op")
+                    .map_err(|_| StopReason::Cancelled)
+            }
+            "op" | "opstep" => {
                 // An application tracks each operation with its own tree.
                 let tree = PulseTree::new(Phase::new("job", Total::Unknown), Stopper::new());
-                let result = operation(black_box(&mut buf), black_box(chunk), &tree);
+                let result = operation(black_box(&mut buf), black_box(chunk), &tree, kind == "op");
                 tree.finish(Outcome::from_result(&result, |_| true)).unwrap();
                 result.map_err(|_| StopReason::Cancelled)
             }

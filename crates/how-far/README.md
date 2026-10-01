@@ -172,10 +172,10 @@ registers, dynamic or not. The fix is cadence, not dispatch:
 - Otherwise check once per row, block, or tile, not per pixel or byte.
 
 Counted with perf on one machine (a Ryzen 9 5900XT), a checkpoint into a live
-tree costs about 62 instructions and 18 cycles with `step`, and about 5
+tree costs about 58 instructions and 16 cycles with `step`, and about 5
 instructions and 1 cycle with `Paced`. On a 256 KiB PNG-style defilter checked
-every 256 bytes, that is 13.9% more instructions with `step` and 1.2% with
-`Paced`; every 4 KiB, 1.0% and 0.19%. Unobserved, `live()` adds nothing and
+every 256 bytes, that is 13.0% more instructions with `step` and 1.2% with
+`Paced`; every 4 KiB, 0.94% and 0.18%. Unobserved, `live()` adds nothing and
 `Paced` 5 instructions per step. A three-stage `Stages` plan adds about 850
 instructions per operation with `NoPulse` and about 6,800 with a live tree, so
 a live tree costs under 1% of operations longer than about 70 µs. The
