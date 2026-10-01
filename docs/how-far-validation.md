@@ -9,6 +9,7 @@ What is tested, where, and what the tests do not cover. See
 | --- | --- |
 | Counting through every sink shape; original call sites survive forwarding | `crates/how-far/tests/interface.rs` |
 | The `Pulse` contract on `NoPulse`: nested plans, validation, handles, `split_array`, outcomes from results | `crates/how-far/tests/pulse.rs` |
+| `Paced`: never reaching a no-op pulse, exact counts per interval, stops seen at the next reach, pending units counted after an early return, saturation, call sites | `crates/how-far/tests/paced.rs` |
 | A hand-written `Pulse` shared by scoped threads; `'static` threads through handles | `crates/how-far/tests/pulse_threads.rs` |
 | `Stages` libraries calling each other: success, nested stop, failure versus cancellation, stage finish errors, abandonment | `crates/how-far/tests/composition.rs`, `crates/how-far-along/tests/pulse.rs` |
 | Sizes of everything a caller holds or passes, asserted at compile time | `crates/how-far/tests/footprint.rs`, `crates/how-far-along/tests/footprint.rs` |
@@ -17,7 +18,7 @@ What is tested, where, and what the tests do not cover. See
 | Rayon: a stage shared by 1–8 workers, nested parallelism, recursive `join`, `scope`, `'static` `spawn`, the global pool | `tests/test-how-far-app/tests/rayon_pools.rs` |
 | `'static` ownership: codec contexts that own their stop, `Arc` and `Box` pulses, Tokio `spawn_blocking` with async cancellation, async tasks reporting | `tests/test-how-far-app/tests/statics.rs` |
 | Diagnostics across crates, including checks inside a codec context credited to the right stage | `tests/test-how-far-app/tests/diagnose.rs` |
-| Application-planned trees: serial → 30% parallel → serial, repeated joins, Rayon and manual threads sharing a counter, totals and revisions, overrun and overflow, frozen and abandoned records | `crates/how-far-along/tests/phases.rs` |
+| Application-planned trees: serial → 30% parallel → serial, repeated joins, Rayon and manual threads sharing a counter, totals and revisions, overrun and overflow, every outcome, frozen and abandoned records, a report racing with the finish | `crates/how-far-along/tests/phases.rs`, `crates/how-far-along/src/tree.rs` |
 | A codec-style pipeline with two parallel waves, a terminal renderer, and a Tokio request whose client disconnects | `crates/how-far-along/tests/hosts.rs` |
 | Pollers: thread-affine callbacks, lazy shared snapshots, busy and recursive dispatch, panics, posted delivery, workers stopped by a callback | `crates/how-far-along/tests/polling.rs` |
 | Profiling: per-task gaps, call-site counts, overlap and stragglers, cancellation latency, bounded retention, clock faults, report timing on and off, workers sharing a span | `crates/how-far-along/tests/profiling.rs` |
@@ -164,4 +165,14 @@ Reproduce with `python3 dev/bench-how-far-build.py --runs 5`.
   pulse path, mostly a second copy of its row loop made by a helper generic
   over its report sink.
 
-Runtime cost is in [the overhead results](../benchmarks/how-far-overhead.md).
+## Runtime cost
+
+`dev/how-far-checkpoint-cost` counts, with perf, what each checkpoint style
+and a three-stage plan cost around the same `#[inline(never)]` defilter;
+`python3 dev/how-far-checkpoint-cost/measure.py` reruns it. Instruction counts
+do not depend on machine load, and cycles depend on it far less than wall time
+does. [The 2026-10-01 counts](../benchmarks/how-far-checkpoint-cost-2026-10-01.md)
+put a paced step at about 5 instructions and 1 cycle, a plain `step` into a
+live tree at about 62 and 18, and a live tree's three-stage plan at about
+6,800 instructions per operation. Wall-time results from zenbench are in
+[the overhead results](../benchmarks/how-far-overhead.md).

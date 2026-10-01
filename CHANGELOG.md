@@ -18,7 +18,9 @@
   free when nobody listens (a967c21, c421c45, fc36c54). Code taking
   `&dyn Pulse` compiles once whatever pulse is passed, a `Stages::run_*` call
   site adds 81 lines of IR to the caller's crate, and CI guards both
-  (ecf2e72).
+  (ecf2e72). `pulse.paced(every)` counts in a local and reaches the pulse once
+  per `every` units, so a checkpoint costs about 5 instructions instead of 62
+  (d3797cf).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span
@@ -26,7 +28,9 @@
   (`diagnostics`) (a967c21, d61d9a5, 3ca2b81, c421c45, fc36c54). Its debug
   build is 16% smaller in rustc instructions with default features and 38%
   with `diagnostics` (release: 20% and 53%) than the first draft, and CI
-  guards its compiled size (a79aead, 2df2564).
+  guards its compiled size (a79aead, 2df2564). Finishing a phase whose
+  children have finished allocates nothing, so a live tree costs about 6,800
+  instructions per three-stage operation instead of 16,100 (5bdfa84).
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100

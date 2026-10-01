@@ -141,13 +141,27 @@ time on every target.
 
 Dynamic dispatch does not by itself cause register spills; any call the
 compiler cannot inline does, because the loop's live values must survive it.
-The remedies are cadence and gating: check once per row, block, or tile;
-skip no-op pulses with `pulse.live()`, an `Option<&dyn Pulse>` whose
-calls are branches when nobody listens; and batch reports from
-many workers. Measured on one machine, a checkpoint into a live tree costs 1.6
-to 3.1 ns more than into `NoPulse`, which is about 1 to 2% of a 256 KiB
-codec loop checked once per 4 KiB; see
-[the overhead results](../benchmarks/how-far-overhead.md).
+Reaching a live tree costs about 62 instructions and 18 cycles per checkpoint
+(two indirect calls and the tree's atomics), so a checkpoint stays under 1%
+only if about 2,000 cycles of work separate two of them.
+
+`Paced` removes that constraint. It counts in a local and reaches the pulse
+once per chosen number of units, so a step is an addition and a comparison:
+about 5 instructions and 1 cycle, observed or not. The reach is a cold,
+non-generic function, so pacing adds nothing to the caller's compile beyond
+the inlined comparison. Cancellation latency is bounded by the interval, which
+the library chooses because only it knows what a unit costs. `pulse.live()`
+remains for code that cannot be paced: an `Option<&dyn Pulse>` whose calls are
+branches when nobody listens, which costs nothing unobserved.
+
+Plans have a fixed cost per operation. A three-stage `Stages` plan costs about
+850 instructions with `NoPulse`, one allocation for the children, and about
+6,800 with a fresh live tree, mostly allocating its named nodes. Finishing a
+phase whose children have all finished stores the outcome and count in atomics
+and allocates nothing; only a phase dropped while a child still runs takes a
+snapshot, so its view does not follow the orphaned child. See
+[the perf counts](../benchmarks/how-far-checkpoint-cost-2026-10-01.md) and
+the earlier [wall-time results](../benchmarks/how-far-overhead.md).
 
 ## Compile-time cost
 

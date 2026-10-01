@@ -156,19 +156,29 @@ sizes are asserted at compile time on 32- and 64-bit targets:
 compiler cannot inline forces the loop's live values out of caller-saved
 registers, dynamic or not. The fix is cadence, not dispatch:
 
-- Check once per row, block, or tile, not per pixel or byte.
-- Gate no-op pulses. `let pulse = pulse.live();` gives an
-  `Option<&dyn Pulse>`, still two words, whose `check()`, `advance()` and
-  `step()` make no call at all when the pulse neither stops nor reports, as
-  with `NoPulse`. Bring the methods into scope with `use how_far::prelude::*;`.
-- Batch reports from many workers with `how_far_along::ext::ReportExt::batched`.
+- Pace checkpoints. `let mut pace = pulse.paced(64 * 1024);` counts each
+  `pace.step(n)?` in a local and reaches the pulse once per 64 Ki units: it
+  reports them, then checks for cancellation. A step that does not reach the
+  pulse is an addition and a comparison. Choose the interval so the work
+  between reaches takes at least a microsecond, and no longer than the
+  cancellation latency you need. Give each worker its own.
+- Gate no-op pulses where pacing does not fit. `let pulse = pulse.live();`
+  gives an `Option<&dyn Pulse>`, still two words, whose `check()`,
+  `advance()` and `step()` make no call at all when the pulse neither stops
+  nor reports, as with `NoPulse`. Bring the methods into scope with
+  `use how_far::prelude::*;`.
+- Otherwise check once per row, block, or tile, not per pixel or byte.
 
-Measured on one machine (a Ryzen 9 5900XT), a `check()` or `advance()`
-through `&dyn Pulse` costs 1.4 to 3.3 ns. Inside a 256 KiB codec-style loop, a
-live tree added 1.6 to 3.1 ns per checkpoint over `NoPulse`: about 1 to 2% at
-one checkpoint per 4 KiB, and 9 to 13% at one per 256 bytes. With the gate
-above, the no-observer path matched a monomorphized loop. The
-[results, method, and raw output](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
+Counted with perf on one machine (a Ryzen 9 5900XT), a checkpoint into a live
+tree costs about 62 instructions and 18 cycles with `step`, and about 5
+instructions and 1 cycle with `Paced`. On a 256 KiB PNG-style defilter checked
+every 256 bytes, that is 13.9% more instructions with `step` and 1.2% with
+`Paced`; every 4 KiB, 1.0% and 0.19%. Unobserved, `live()` adds nothing and
+`Paced` 5 instructions per step. A three-stage `Stages` plan adds about 850
+instructions per operation with `NoPulse` and about 6,800 with a live tree, so
+a live tree costs under 1% of operations longer than about 70 µs. The
+[perf counts](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md)
+and earlier [wall-time results](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
 are committed.
 
 At compile time, `how-far` has no build script, proc macros, or features, and

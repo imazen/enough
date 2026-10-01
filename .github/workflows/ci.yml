@@ -234,6 +234,8 @@ jobs:
           cargo test -p how-far-along --no-default-features
       - name: Verify interface boundary and report cold builds
         run: python3 dev/bench-how-far-build.py --runs 3
+      - name: Build the checkpoint-cost harness
+        run: cargo build --release --manifest-path dev/how-far-checkpoint-cost/Cargo.toml
 
   how-far-wasm:
     name: how-far WASM host boundaries
