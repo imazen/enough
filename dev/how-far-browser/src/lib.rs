@@ -1,7 +1,11 @@
 //! Test-only browser host using the same worker/Rayon binding pattern as zenpipe.
-use how_far_along::poll::ControlHandle;
+use almost_enough::Stopper;
 use how_far_along::profile::{Clock, Profiler, SpanKind};
-use how_far_along::{Execution, Observer, Outcome, Part, Phase, ProgressExt, ProgressWithStop, Report, Stop, Total};
+use how_far_along::{
+    Execution, Observer, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Report, Stop,
+    Total,
+};
+use std::num::NonZeroUsize;
 use rayon::prelude::*;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -25,7 +29,7 @@ impl Clock for BrowserClock {
 struct Job {
     phase: Mutex<Option<Phase>>,
     observer: Observer,
-    control: ControlHandle,
+    stop: Stopper,
     profiler: Profiler,
 }
 static JOB: OnceLock<Job> = OnceLock::new();
@@ -38,7 +42,7 @@ pub fn prepare() {
         JOB.set(Job {
             phase: Mutex::new(Some(phase)),
             observer,
-            control: ControlHandle::new(),
+            stop: Stopper::new(),
             profiler: Profiler::new(BrowserClock, 4)
         })
         .is_ok()
@@ -54,23 +58,23 @@ pub fn run(items: u32) -> String {
         .split(
             Execution::Sequence,
             [
-                Part::new("prepare", 35, Total::Exact(1)),
-                Part::new("search", 30, Total::Exact(u64::from(items))).execution(
-                    Execution::WorkPool {
-                        max_parallelism: rayon::current_num_threads(),
-                    },
+                PhaseSpec::new("prepare", 35, Total::Exact(1)),
+                PhaseSpec::new("search", 30, Total::Exact(u64::from(items))).execution(
+                    Execution::work_pool(
+                        NonZeroUsize::new(rayon::current_num_threads()).unwrap_or(NonZeroUsize::MIN),
+                    ),
                 ),
-                Part::new("write", 35, Total::Exact(1)),
+                PhaseSpec::new("write", 35, Total::Exact(1)),
             ],
         )
         .unwrap();
-    before.progress().advance(1);
+    before.reporter().advance(1);
     before.finish().unwrap();
     middle.start().unwrap();
-    let progress = ProgressWithStop::new(&job.control, middle.progress());
+    let progress = ProgressWithStop::new(&job.stop, middle.reporter());
     let join = job.profiler.span(middle.id(), "Rayon join", SpanKind::Wait);
     let result = (0..items).into_par_iter().try_for_each(|item| {
-        job.control.check()?;
+        job.stop.check()?;
         // Content-dependent work, counted once per accepted logical item.
         let mut value = u64::from(item);
         for _ in 0..(128 + item % 997) {
@@ -81,12 +85,12 @@ pub fn run(items: u32) -> String {
     }); // Rayon joins all in-flight work before returning.
     if result.is_ok() {
         middle.finish().unwrap();
-        after.progress().advance(1);
+        after.reporter().advance(1);
         after.finish().unwrap();
         root.finish().unwrap();
     } else {
         middle.finish_with(Outcome::Cancelled).unwrap();
-        after.finish_with(Outcome::Cancelled).unwrap();
+        after.finish_with(Outcome::Skipped).unwrap();
         root.finish_with(Outcome::Cancelled).unwrap();
     }
     join.finish(if result.is_ok() {
@@ -114,7 +118,7 @@ pub fn observe() -> Option<String> {
 /// A real UI-thread write reaching blocking worker code without a message-loop turn.
 #[wasm_bindgen]
 pub fn cancel() {
-    JOB.get().unwrap().control.cancel();
+    JOB.get().unwrap().stop.cancel();
 }
 
 /// Optional profiling also uses only a nonblocking read on the UI thread.

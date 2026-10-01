@@ -1,51 +1,161 @@
-//! Connect the tiny `Pulse` interface to the optional phase tree.
+//! A phase tree behind the `Pulse` interface.
 
 use crate::{
-    Execution, Observer, Outcome, Part, Phase, PlanError, Progress, Report, Stop, StopReason,
-    sync::OwnerCell,
+    Child, ChildPulse, Execution, NodeId, Observer, Outcome, Phase, PhaseSpec, PlanError,
+    ProgressWithStop, Pulse, PulseHandle, Report, Reporter, Stop, StopReason, sync::OwnerCell,
 };
-use alloc::{boxed::Box, vec::Vec};
-use core::sync::atomic::{AtomicU8, Ordering};
-use how_far::{PhaseSpec, Pulse};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use core::{
+    fmt,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
-/// An owned phase that exposes one `&dyn Pulse` to a library.
+/// The root of a tracked operation, handed to a library as `&dyn Pulse`.
 ///
-/// Create a [`Phase`], keep its observer, then move its owner into this adapter.
-/// The same stop policy applies to every nested child. Reporting remains atomic;
-/// planning and completion administer phase metadata only at cold boundaries.
-pub struct PulseTree<'a> {
-    owner: OwnerCell<Phase>,
-    report: Progress,
-    observer: Observer,
-    stop: &'a dyn Stop,
-    // 0=unplanned leaf, 1=reporting leaf, 2=partitioned, 3=terminal.
-    activity: AtomicU8,
+/// The tree records whatever the library declares: phases, weights, counts and
+/// outcomes. Read it from any thread through [`observer`](Self::observer). When
+/// the library returns, finish the root with the operation's outcome; dropping
+/// it unfinished records [`Outcome::Abandoned`].
+///
+/// ```
+/// use how_far_along::{Outcome, Phase, PulseTree, Total, Unstoppable};
+///
+/// let tree = PulseTree::new(Phase::new("resize", Total::Unknown), Unstoppable);
+/// let observer = tree.observer();
+/// // my_library::resize(&image, &tree)?;  // takes &dyn how_far::Pulse
+/// tree.finish(Outcome::Succeeded)?;
+/// assert!(observer.is_finished());
+/// # Ok::<(), how_far_along::PlanError>(())
+/// ```
+///
+/// The tree owns its stop policy, so it is `'static`: move it into a spawned
+/// thread or share it through an `Arc` like any other value. Every phase in
+/// the tree checks the same policy.
+pub struct PulseTree {
+    node: TreePulse,
 }
-impl<'a> PulseTree<'a> {
-    /// Attach a shared cancellation policy to a phase owner.
-    pub fn new(phase: Phase, stop: &'a dyn Stop) -> Self {
-        let report = phase.deferred_progress();
-        let observer = phase.observer();
+
+impl PulseTree {
+    /// Track `phase` and check `stop` at every cancellation checkpoint.
+    pub fn new(phase: Phase, stop: impl Stop + 'static) -> Self {
         Self {
-            owner: OwnerCell::new(phase),
-            report,
-            observer,
-            stop,
-            activity: AtomicU8::new(0),
+            node: TreePulse::new(phase, Arc::new(stop)),
         }
     }
-    /// Observe this phase from any thread, including after it finishes.
+
+    /// A read-only view of the whole tree, usable from any thread, including
+    /// after the tree finishes.
     pub fn observer(&self) -> Observer {
-        self.observer.clone()
+        self.node.observer.clone()
     }
+
+    /// The root phase's identity.
+    pub fn id(&self) -> NodeId {
+        self.node.observer.id()
+    }
+
+    /// Record the operation's outcome.
+    ///
+    /// Fails if a phase the library planned is still running, or if `outcome`
+    /// is `Succeeded` or `Skipped` while one of them did not succeed. The root
+    /// is then recorded as abandoned. [`Outcome::from_result`] maps a
+    /// library's result to an outcome.
+    pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
+        self.node.finish_with(outcome)
+    }
+}
+
+impl fmt::Debug for PulseTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PulseTree")
+            .field("root", &self.id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Stop for PulseTree {
+    #[inline]
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        self.node.check()
+    }
+    #[inline]
+    fn may_stop(&self) -> bool {
+        self.node.may_stop()
+    }
+}
+
+impl Report for PulseTree {
+    #[inline]
+    #[track_caller]
+    fn advance(&self, completed: u64) {
+        self.node.advance(completed);
+    }
+    #[inline]
+    fn may_report(&self) -> bool {
+        self.node.may_report()
+    }
+}
+
+impl Pulse for PulseTree {
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        self.node.split(execution, parts)
+    }
+    fn handle(&self) -> PulseHandle {
+        self.node.handle()
+    }
+}
+
+// What a phase may still do: count as a leaf, or split into a branch.
+const UNPLANNED: u8 = 0;
+const COUNTING: u8 = 1;
+const SPLIT: u8 = 2;
+const FINISHED: u8 = 3;
+
+/// One phase of the tree behind the `Pulse` interface. Roots are wrapped in
+/// `PulseTree`; children are handed out as `Child`.
+struct TreePulse {
+    owner: OwnerCell<Phase>,
+    reporter: Reporter,
+    observer: Observer,
+    stop: Arc<dyn Stop>,
+    activity: AtomicU8,
+}
+
+impl TreePulse {
+    fn new(phase: Phase, stop: Arc<dyn Stop>) -> Self {
+        Self {
+            reporter: phase.deferred_reporter(),
+            observer: phase.observer(),
+            owner: OwnerCell::new(phase),
+            stop,
+            activity: AtomicU8::new(UNPLANNED),
+        }
+    }
+
+    /// Run `f` on the phase owner. Planning and finishing happen outside the
+    /// owner's lock; a concurrent second administrator gets `Busy`.
     fn with_owner<R>(&self, f: impl FnOnce(&mut Phase) -> R) -> Result<R, PlanError> {
         let mut phase = self.owner.take().ok_or(PlanError::Busy)?;
         let result = f(&mut phase);
         self.owner.put(phase);
         Ok(result)
     }
+
+    fn finish_with(&self, outcome: Outcome) -> Result<(), PlanError> {
+        let result = self.with_owner(|phase| phase.finish_with(outcome))?;
+        if result.is_ok() {
+            self.activity.store(FINISHED, Ordering::Release);
+        }
+        result
+    }
 }
-impl Stop for PulseTree<'_> {
+
+impl Stop for TreePulse {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
@@ -56,61 +166,60 @@ impl Stop for PulseTree<'_> {
         self.stop.may_stop()
     }
 }
-impl Report for PulseTree<'_> {
+
+impl Report for TreePulse {
     #[inline]
     #[track_caller]
     fn advance(&self, completed: u64) {
         if completed == 0 {
             return;
         }
-        match self
-            .activity
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) | Err(1) => self.report.advance(completed),
-            Err(_) => {} // A branch or terminal phase is not a leaf counter.
+        match self.activity.compare_exchange(
+            UNPLANNED,
+            COUNTING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) | Err(COUNTING) => self.reporter.advance(completed),
+            Err(_) => {} // A branch or finished phase does not count units.
         }
     }
     fn may_report(&self) -> bool {
-        self.activity.load(Ordering::Relaxed) < 2 && self.report.may_report()
+        self.activity.load(Ordering::Relaxed) < SPLIT && self.reporter.may_report()
     }
 }
-impl Pulse for PulseTree<'_> {
+
+impl Pulse for TreePulse {
     fn split(
         &self,
         execution: Execution,
         parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Box<dyn Pulse + '_>>, PlanError> {
-        // Convert before claiming this phase. The split itself runs outside
-        // OwnerCell's platform lock, including allocation and metadata writes.
-        let owned = parts
-            .iter()
-            .map(|part| {
-                Part::new(part.name, part.weight, part.total)
-                    .units(part.units)
-                    .execution(part.execution)
-            })
-            .collect();
+    ) -> Result<Vec<Child<'_>>, PlanError> {
         self.activity
-            .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(UNPLANNED, SPLIT, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| PlanError::AlreadyInUse)?;
-        let result = self.with_owner(|phase| phase.split_vec(execution, owned));
-        match result {
+        match self.with_owner(|phase| phase.split_vec(execution, parts)) {
             Ok(Ok(children)) => Ok(children
                 .into_iter()
-                .map(|child| Box::new(Self::new(child, self.stop)) as Box<dyn Pulse>)
+                .map(|child| Child::new(TreePulse::new(child, Arc::clone(&self.stop))))
                 .collect()),
             Ok(Err(error)) | Err(error) => {
-                self.activity.store(0, Ordering::Release);
+                self.activity.store(UNPLANNED, Ordering::Release);
                 Err(error)
             }
         }
     }
-    fn finish(&self, outcome: Outcome) -> Result<(), PlanError> {
-        let result = self.with_owner(|phase| phase.finish_with(outcome))?;
-        if result.is_ok() {
-            self.activity.store(3, Ordering::Release);
-        }
-        result
+
+    fn handle(&self) -> PulseHandle {
+        ProgressWithStop::new(
+            Some(Arc::clone(&self.stop)),
+            Some(Arc::new(self.reporter.clone()) as Arc<dyn Report>),
+        )
+    }
+}
+
+impl ChildPulse for TreePulse {
+    fn finish(self: Box<Self>, outcome: Outcome) -> Result<(), PlanError> {
+        self.finish_with(outcome)
     }
 }

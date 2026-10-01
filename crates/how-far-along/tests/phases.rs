@@ -1,8 +1,12 @@
+//! Application-planned trees: owned `Phase` handles and `Reporter`s.
+
 use how_far_along::ext::ReportExt;
-use how_far_along::{Execution, Outcome, Part, Phase, PlanError, Report, Snapshot, Status, Total};
+use how_far_along::{
+    Execution, Outcome, Phase, PhaseSpec, PlanError, Report, Snapshot, Status, Total,
+};
 use rayon::prelude::*;
 use std::{
-    num::NonZeroU64,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{Arc, Barrier, mpsc},
 };
 
@@ -18,9 +22,9 @@ fn serial_parallel_join_serial_keeps_middle_budget_at_thirty_percent() {
         .split(
             Execution::Sequence,
             [
-                Part::new("before", 35, Total::Exact(1)),
-                Part::new("middle", 30, Total::Unknown),
-                Part::new("after", 35, Total::Exact(1)),
+                PhaseSpec::new("before", 35, Total::Exact(1)),
+                PhaseSpec::new("middle", 30, Total::Unknown),
+                PhaseSpec::new("after", 35, Total::Exact(1)),
             ],
         )
         .unwrap();
@@ -28,26 +32,26 @@ fn serial_parallel_join_serial_keeps_middle_budget_at_thirty_percent() {
         .split(
             Execution::ForkJoin,
             [
-                Part::new("small", 1, Total::Exact(1)),
-                Part::new("slow", 1, Total::Exact(100)),
+                PhaseSpec::new("small", 1, Total::Exact(1)),
+                PhaseSpec::new("slow", 1, Total::Exact(100)),
             ],
         )
         .unwrap();
     before.finish().unwrap();
     near(observer.snapshot().fraction(), 0.35);
-    assert!(!middle.progress().may_report());
-    middle.progress().advance(999); // Branch work never double counts.
+    assert!(!middle.reporter().may_report());
+    middle.reporter().advance(999); // Branch work never double counts.
     let (done_tx, done_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(move || {
-            small.progress().advance(1);
+            small.reporter().advance(1);
             small.finish().unwrap();
             done_tx.send(()).unwrap();
         });
         scope.spawn(move || {
             release_rx.recv().unwrap();
-            slow.progress().advance(100);
+            slow.reporter().advance(100);
             slow.finish().unwrap();
         });
         done_rx.recv().unwrap();
@@ -74,8 +78,8 @@ fn repeated_nested_joins_and_skipped_reduction() {
         .split(
             Execution::Sequence,
             [
-                Part::new("first", 1, Total::Unknown),
-                Part::new("second", 1, Total::Unknown),
+                PhaseSpec::new("first", 1, Total::Unknown),
+                PhaseSpec::new("second", 1, Total::Unknown),
             ],
         )
         .unwrap();
@@ -84,19 +88,16 @@ fn repeated_nested_joins_and_skipped_reduction() {
             .split(
                 Execution::Sequence,
                 [
-                    Part::new("fork", 9, Total::Unknown),
-                    Part::new("reduce", 1, Total::Unknown),
+                    PhaseSpec::new("fork", 9, Total::Unknown),
+                    PhaseSpec::new("reduce", 1, Total::Unknown),
                 ],
             )
             .unwrap();
-        let children = fork
-            .split_vec(
-                Execution::ForkJoin,
-                (0..4)
-                    .map(|i| Part::new(format!("part{i}"), i + 1, Total::Exact(i)))
-                    .collect(),
-            )
-            .unwrap();
+        let names: Vec<String> = (0..4).map(|i| format!("part{i}")).collect();
+        let parts: Vec<_> = (0..4)
+            .map(|i| PhaseSpec::new(&names[i], i as u64 + 1, Total::Exact(i as u64)))
+            .collect();
+        let children = fork.split_vec(Execution::ForkJoin, &parts).unwrap();
         std::thread::scope(|scope| {
             for mut child in children {
                 scope.spawn(move || child.finish().unwrap());
@@ -113,16 +114,16 @@ fn repeated_nested_joins_and_skipped_reduction() {
 #[test]
 fn rayon_dynamic_asymmetric_tasks_share_one_count_and_flush_batches() {
     let mut job = Phase::new("pool", Total::Exact(1001));
-    job.set_execution(Execution::WorkPool { max_parallelism: 4 })
+    job.set_execution(Execution::work_pool(NonZeroUsize::new(4).unwrap()))
         .unwrap();
-    let progress = job.progress();
+    let reporter = job.reporter();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
         .unwrap();
     pool.install(|| {
         (0..1001).into_par_iter().for_each_init(
-            || progress.clone().batched(NonZeroU64::new(16).unwrap()),
+            || reporter.clone().batched(NonZeroU64::new(16).unwrap()),
             |batch, item| {
                 for i in 0..item % 19 {
                     std::hint::black_box(i * item);
@@ -138,16 +139,16 @@ fn rayon_dynamic_asymmetric_tasks_share_one_count_and_flush_batches() {
 #[test]
 fn manual_workers_sum_exactly_and_terminal_snapshot_ignores_stale_reporters() {
     let mut job = Phase::new("manual", Total::Exact(8000));
-    let progress = Arc::new(job.progress());
+    let reporter = Arc::new(job.reporter());
     let barrier = Arc::new(Barrier::new(8));
     std::thread::scope(|scope| {
         for _ in 0..8 {
-            let progress = &progress;
+            let reporter = &reporter;
             let barrier = &barrier;
             scope.spawn(move || {
                 barrier.wait();
                 for _ in 0..1000 {
-                    progress.advance(1);
+                    reporter.advance(1);
                 }
             });
         }
@@ -155,7 +156,7 @@ fn manual_workers_sum_exactly_and_terminal_snapshot_ignores_stale_reporters() {
     job.finish().unwrap();
     let final_snapshot = job.observer().snapshot();
     assert_eq!(final_snapshot.completed, 8000);
-    progress.advance(u64::MAX);
+    reporter.advance(u64::MAX);
     assert_eq!(job.observer().snapshot(), final_snapshot);
     assert_eq!(job.set_total(Total::Exact(10)), Err(PlanError::Finished));
     let fresh_attempt = Phase::new("manual retry", Total::Exact(8000));
@@ -165,8 +166,8 @@ fn manual_workers_sum_exactly_and_terminal_snapshot_ignores_stale_reporters() {
 #[test]
 fn exact_estimated_unknown_zero_overrun_and_overflow_are_distinct() {
     let mut job = Phase::new("unknown", Total::Unknown);
-    let progress = job.progress();
-    progress.advance(4);
+    let reporter = job.reporter();
+    reporter.advance(4);
     assert_eq!(job.observer().snapshot().fraction(), None);
     job.set_total(Total::Estimated(8)).unwrap();
     near(job.observer().snapshot().fraction(), 0.5);
@@ -183,9 +184,9 @@ fn exact_estimated_unknown_zero_overrun_and_overflow_are_distinct() {
     zero.finish().unwrap();
     near(zero.observer().snapshot().fraction(), 1.0);
     let huge = Phase::new("overflow", Total::Unknown);
-    huge.progress().advance(Snapshot::counter_max());
+    huge.reporter().advance(Snapshot::counter_max());
     assert!(!huge.observer().snapshot().overflowed);
-    huge.progress().advance(1);
+    huge.reporter().advance(1);
     assert!(huge.observer().snapshot().overflowed);
     assert_eq!(
         huge.observer().snapshot().completed,
@@ -201,15 +202,15 @@ fn unknown_subtree_keeps_reserved_budget_and_failures_do_not_discharge_it() {
         .split(
             Execution::Sequence,
             [
-                Part::new("known", 7, Total::Exact(10)),
-                Part::new("discovery", 3, Total::Unknown),
+                PhaseSpec::new("known", 7, Total::Exact(10)),
+                PhaseSpec::new("discovery", 3, Total::Unknown),
             ],
         )
         .unwrap();
     known.finish().unwrap();
     assert_eq!(job.observer().snapshot().fraction(), None);
     assert!((job.observer().snapshot().unresolved_fraction() - 0.3).abs() < 1e-12);
-    unknown.progress().advance(2);
+    unknown.reporter().advance(2);
     unknown.finish_with(Outcome::Cancelled).unwrap();
     assert_eq!(job.finish(), Err(PlanError::UnsuccessfulChildren));
     job.finish_with(Outcome::Cancelled).unwrap();
@@ -224,28 +225,30 @@ fn invalid_plan_is_transactional_and_units_cannot_change_after_use() {
         Err(PlanError::EmptyOrZeroWeight)
     ));
     assert!(matches!(
-        job.split(Execution::Sequence, [Part::new("zero", 0, Total::Unknown)]),
+        job.split(
+            Execution::Sequence,
+            [PhaseSpec::new("zero", 0, Total::Unknown)]
+        ),
         Err(PlanError::EmptyOrZeroWeight)
     ));
     assert!(matches!(
         job.split(
             Execution::Sequence,
             [
-                Part::new("a", u64::MAX, Total::Unknown),
-                Part::new("b", 1, Total::Unknown)
+                PhaseSpec::new("a", u64::MAX, Total::Unknown),
+                PhaseSpec::new("b", 1, Total::Unknown)
             ]
         ),
         Err(PlanError::Overflow)
     ));
-    assert_eq!(
-        job.set_execution(Execution::WorkPool { max_parallelism: 0 }),
-        Err(PlanError::ZeroParallelism)
-    );
     job.set_units("bytes").unwrap();
-    let _progress = job.progress();
+    let _reporter = job.reporter();
     assert_eq!(job.set_units("rows"), Err(PlanError::AlreadyInUse));
     assert!(matches!(
-        job.split(Execution::Sequence, [Part::new("a", 1, Total::Unknown)]),
+        job.split(
+            Execution::Sequence,
+            [PhaseSpec::new("a", 1, Total::Unknown)]
+        ),
         Err(PlanError::AlreadyInUse)
     ));
 }
@@ -257,15 +260,15 @@ fn abandoning_owner_freezes_even_if_child_owner_lives_on() {
     let [mut child] = job
         .split(
             Execution::Sequence,
-            [Part::new("child", 1, Total::Exact(3))],
+            [PhaseSpec::new("child", 1, Total::Exact(3))],
         )
         .unwrap();
-    let progress = child.progress();
-    progress.advance(1);
+    let reporter = child.reporter();
+    reporter.advance(1);
     drop(job);
     let frozen = observer.snapshot();
     assert_eq!(frozen.status, Status::Finished(Outcome::Abandoned));
-    progress.advance(2);
+    reporter.advance(2);
     child.finish().unwrap();
     assert_eq!(observer.snapshot(), frozen);
 }
@@ -274,7 +277,7 @@ fn abandoning_owner_freezes_even_if_child_owner_lives_on() {
 fn snapshots_during_metadata_publication_keep_each_revision_coherent() {
     let mut job = Phase::new("updates", Total::Estimated(1));
     let observer = job.observer();
-    let progress = job.progress();
+    let reporter = job.reporter();
     std::thread::scope(|scope| {
         scope.spawn(|| {
             for _ in 0..500 {
@@ -291,7 +294,7 @@ fn snapshots_during_metadata_publication_keep_each_revision_coherent() {
         });
         scope.spawn(move || {
             for _ in 0..500 {
-                progress.advance(1);
+                reporter.advance(1);
             }
         });
         for n in 2..100 {
@@ -306,12 +309,29 @@ fn snapshots_during_metadata_publication_keep_each_revision_coherent() {
 fn sharing_contract_and_owned_trait_objects() {
     fn shared<T: Send + Sync>() {}
     shared::<Phase>();
-    shared::<how_far_along::Progress>();
+    shared::<how_far_along::Reporter>();
     shared::<how_far_along::Observer>();
     let phase = Phase::new("erased", Total::Exact(5));
-    let boxed: Box<dyn Report> = Box::new(phase.progress());
-    let arc: Arc<dyn Report> = Arc::new(phase.progress());
+    let boxed: Box<dyn Report> = Box::new(phase.reporter());
+    let arc: Arc<dyn Report> = Arc::new(phase.reporter());
     boxed.advance(2);
     arc.advance(3);
     assert_eq!(phase.observer().snapshot().completed, 5);
+}
+
+#[test]
+fn only_a_leaf_has_its_own_total_and_a_failed_finish_can_be_retried() {
+    let mut job = Phase::new("job", Total::Unknown);
+    let [mut child] = job
+        .split(
+            Execution::Sequence,
+            [PhaseSpec::new("child", 1, Total::Exact(1))],
+        )
+        .unwrap();
+    assert_eq!(job.set_total(Total::Exact(5)), Err(PlanError::NotALeaf));
+    assert_eq!(job.finish(), Err(PlanError::UnfinishedChildren));
+    child.reporter().advance(1);
+    child.finish().unwrap();
+    job.finish().unwrap();
+    assert_eq!(job.observer().snapshot().fraction(), Some(1.0));
 }

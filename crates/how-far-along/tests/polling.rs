@@ -1,8 +1,10 @@
-use almost_enough::StopToken;
-use how_far_along::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
+//! Callback dispatch over snapshots, on the owner thread and on workers.
+
+use almost_enough::Stopper;
+use how_far_along::poll::{LocalPoller, SharedPoller};
 use how_far_along::{
-    IgnoreProgress, Outcome, Phase, ProgressWithStop, Report, Status, Stop, StopReason, Total,
-    Unstoppable,
+    NoReport, Outcome, Phase, ProgressExt, ProgressWithStop, Report, Status, Stop, StopReason,
+    Total,
 };
 use std::{
     cell::RefCell,
@@ -17,26 +19,22 @@ use std::{
 #[test]
 fn local_callbacks_are_thread_affine_mutable_lazy_and_memoized() {
     let mut job = Phase::new("local", Total::Exact(10));
-    let report = job.progress();
+    let reporter = job.reporter();
     let saved = Rc::new(RefCell::new(None));
     let seen = Rc::new(RefCell::new(Vec::new()));
     let owner = std::thread::current().id();
-    let mut poller = LocalPoller::new(job.observer(), ControlHandle::new());
+    let mut poller = LocalPoller::new(job.observer());
     let seen_first = seen.clone();
     poller.subscribe(move |event| {
         assert_eq!(std::thread::current().id(), owner);
         assert!(!event.snapshot_materialized());
-        seen_first
-            .borrow_mut()
-            .push("arbitrary work without a snapshot");
-        Control::Continue
+        seen_first.borrow_mut().push("work without a snapshot");
     });
     let saved_first = saved.clone();
     poller.subscribe(move |event| {
         assert!(event.try_snapshot().is_some());
         *saved_first.borrow_mut() = Some(event.snapshot_owned());
-        report.advance(1); // Changes after the first snapshot must not alter this dispatch.
-        Control::Yield
+        reporter.advance(1); // Reports after the snapshot must not change this dispatch.
     });
     let saved_second = saved.clone();
     poller.subscribe(move |event| {
@@ -49,38 +47,31 @@ fn local_callbacks_are_thread_affine_mutable_lazy_and_memoized() {
             event.snapshot().completed + 1,
             event.observer().snapshot().completed
         );
-        Control::Continue
     });
-    let result = poller.poll();
-    assert!(result.yield_requested && !result.cancelled);
+    poller.poll();
     assert_eq!(saved.borrow().as_ref().unwrap().completed, 0);
     assert_eq!(seen.borrow().len(), 1);
-    assert!(poller.control().take_yield());
-    assert!(!poller.control().take_yield());
     job.finish().unwrap();
 }
 
 #[test]
-fn subscribers_cancel_in_order_and_terminal_poll_bypasses_consumer_cadence() {
+fn subscribers_run_in_order_and_a_final_poll_delivers_the_outcome() {
     let mut job = Phase::new("job", Total::Exact(4));
-    let control = ControlHandle::new();
-    let mut poller = LocalPoller::new(job.observer(), control.clone());
-    let cancel = poller.subscribe(|_| Control::Cancel);
-    poller.subscribe(|event| {
-        assert!(event.control().is_cancelled());
-        Control::Continue
-    });
-    assert_eq!(poller.poll().check(), Err(StopReason::Cancelled));
-    assert!(poller.unsubscribe(cancel));
-    assert!(!poller.unsubscribe(cancel));
+    let stop = Stopper::new();
+    let mut poller = LocalPoller::new(job.observer());
+    let cancel = stop.clone();
+    let first = poller.subscribe(move |_| cancel.cancel());
+    let later = stop.clone();
+    poller.subscribe(move |_| assert!(later.check().is_err()));
+    poller.poll();
+    assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    assert!(poller.unsubscribe(first));
+    assert!(!poller.unsubscribe(first));
     job.finish_with(Outcome::Cancelled).unwrap();
     let saved = Rc::new(RefCell::new(None));
     let copy = saved.clone();
-    poller.subscribe(move |event| {
-        *copy.borrow_mut() = Some(event.snapshot_owned());
-        Control::Continue
-    });
-    poller.poll(); // Force final delivery regardless of an external timer's deadline.
+    poller.subscribe(move |event| *copy.borrow_mut() = Some(event.snapshot_owned()));
+    poller.poll(); // Deliver the final state regardless of any timer.
     assert_eq!(
         saved.borrow().as_ref().unwrap().status,
         Status::Finished(Outcome::Cancelled)
@@ -88,54 +79,51 @@ fn subscribers_cancel_in_order_and_terminal_poll_bypasses_consumer_cadence() {
 }
 
 #[test]
-fn shared_busy_path_observes_cancellation_without_waiting_for_callback() {
+fn a_busy_shared_poll_returns_at_once_and_cancellation_does_not_wait_for_it() {
     let job = Phase::new("job", Total::Unknown);
-    let control = ControlHandle::new();
+    let stop = Stopper::new();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (exit_tx, exit_rx) = mpsc::channel();
     let exit_rx = Mutex::new(exit_rx);
-    let poller = SharedPoller::new(job.observer(), control.clone(), move |_| {
+    let poller = SharedPoller::new(job.observer(), move |_| {
         entered_tx.send(()).unwrap();
         exit_rx.lock().unwrap().recv().unwrap();
-        Control::Continue
     });
     std::thread::scope(|scope| {
-        scope.spawn(|| poller.try_poll());
+        scope.spawn(|| assert!(poller.try_poll()));
         entered_rx.recv().unwrap();
-        control.cancel();
-        let result = poller.try_poll();
-        assert!(result.busy && !result.dispatched && result.cancelled);
+        stop.cancel();
+        assert!(!poller.try_poll(), "busy");
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
         exit_tx.send(()).unwrap();
     });
 }
 
 #[test]
-fn recursive_dispatch_is_busy_and_unwinding_releases_claim() {
+fn a_recursive_poll_is_busy_and_a_panic_releases_the_claim() {
     let job = Phase::new("job", Total::Unknown);
-    // A temporary owner slot avoids permanently retaining a self-referential poller.
     let slot = Arc::new(Mutex::new(None::<SharedPoller>));
     let slot_in = slot.clone();
     let panic_once = AtomicBool::new(true);
-    let poller = SharedPoller::new(job.observer(), ControlHandle::new(), move |_| {
+    let poller = SharedPoller::new(job.observer(), move |_| {
         let nested = slot_in.lock().unwrap().as_ref().unwrap().clone();
-        assert!(nested.try_poll().busy);
+        assert!(!nested.try_poll());
         if panic_once.swap(false, Ordering::Relaxed) {
             panic!("subscriber panicked");
         }
-        Control::Continue
     });
     *slot.lock().unwrap() = Some(poller.clone());
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poller.try_poll())).is_err());
-    assert!(poller.try_poll().dispatched);
+    assert!(poller.try_poll());
     slot.lock().unwrap().take();
 }
 
 #[test]
-fn shared_callbacks_are_serialized_and_lazy_snapshot_is_shared() {
+fn shared_callbacks_never_overlap_and_share_one_lazy_snapshot() {
     let job = Phase::new("job", Total::Unknown);
     let active = Arc::new(AtomicUsize::new(0));
     let count = Arc::new(AtomicUsize::new(0));
-    let mut builder = SharedPoller::builder(job.observer(), ControlHandle::new());
+    let mut builder = SharedPoller::builder(job.observer());
     let a = active.clone();
     let c = count.clone();
     builder.subscribe(move |event| {
@@ -144,12 +132,8 @@ fn shared_callbacks_are_serialized_and_lazy_snapshot_is_shared() {
         event.snapshot();
         c.fetch_add(1, Ordering::Relaxed);
         a.fetch_sub(1, Ordering::SeqCst);
-        Control::Continue
     });
-    builder.subscribe(|event| {
-        assert!(event.snapshot_materialized());
-        Control::Continue
-    });
+    builder.subscribe(|event| assert!(event.snapshot_materialized()));
     let poller = builder.build();
     std::thread::scope(|scope| {
         for _ in 0..8 {
@@ -164,63 +148,48 @@ fn shared_callbacks_are_serialized_and_lazy_snapshot_is_shared() {
 }
 
 #[test]
-fn polling_stop_survives_all_existing_stop_signature_shapes() {
-    let job = Phase::new("job", Total::Unknown);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let calls = callbacks.clone();
-    let poller = SharedPoller::new(job.observer(), ControlHandle::new(), move |_| {
-        calls.fetch_add(1, Ordering::Relaxed);
-        Control::Continue
-    });
-    let hook = PollingStop::new(Unstoppable, poller.clone());
-    assert!(hook.may_stop());
-    let erased: &dyn Stop = &hook;
-    erased.check().unwrap();
-    let optional: Option<&dyn Stop> = Some(&hook);
-    optional.check().unwrap();
-    let owned: Option<StopToken> = Some(StopToken::new(hook.clone()));
-    owned.check().unwrap();
-    let arc: Option<Arc<dyn Stop>> = Some(Arc::new(hook.clone()));
-    arc.check().unwrap();
-    fn builder_with_stop(stop: StopToken) {
-        stop.check().unwrap();
-    }
-    builder_with_stop(StopToken::new(ProgressWithStop::new(hook, IgnoreProgress)));
-    assert_eq!(callbacks.load(Ordering::Relaxed), 5);
-    poller.control().cancel();
-    assert_eq!(owned.check(), Err(StopReason::Cancelled));
-    assert_eq!(callbacks.load(Ordering::Relaxed), 5);
-}
-
-#[test]
-fn callback_cancellation_is_returned_at_same_checkpoint_and_inner_checked_once() {
-    struct CountingStop(AtomicUsize);
-    impl Stop for CountingStop {
-        fn check(&self) -> Result<(), StopReason> {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Ok(())
+fn workers_poll_at_checkpoints_and_a_callback_can_stop_them() {
+    let mut job = Phase::new("blocks", Total::Exact(1_000));
+    let stop = Stopper::new();
+    let cancel = stop.clone();
+    let poller = SharedPoller::new(job.observer(), move |event| {
+        if event.snapshot().completed >= 100 {
+            cancel.cancel();
         }
-    }
-    let job = Phase::new("job", Total::Unknown);
-    let inner = CountingStop(AtomicUsize::new(0));
-    let poller = SharedPoller::new(job.observer(), ControlHandle::new(), |_| Control::Cancel);
-    let stop = PollingStop::new(&inner, poller);
+    });
+    let reporter = job.reporter();
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let work = ProgressWithStop::new(stop.clone(), reporter.clone());
+            let poller = poller.clone();
+            scope.spawn(move || {
+                for _ in 0..250 {
+                    if work.step(1).is_err() {
+                        return;
+                    }
+                    poller.try_poll();
+                }
+            });
+        }
+    });
     assert_eq!(stop.check(), Err(StopReason::Cancelled));
-    assert_eq!(inner.0.load(Ordering::Relaxed), 1);
+    let completed = job.observer().snapshot().completed;
+    assert!((100..1_000).contains(&completed), "{completed}");
+    job.finish_with(Outcome::Cancelled).unwrap();
 }
 
 #[test]
-fn posted_delivery_moves_observation_to_the_owner_thread() {
+fn posted_delivery_moves_snapshots_to_the_owner_thread() {
     let mut job = Phase::new("posted", Total::Exact(1));
-    let progress = job.progress();
+    let reporter = job.reporter();
     let (tx, rx) = mpsc::sync_channel(1);
-    let poller = SharedPoller::new(job.observer(), ControlHandle::new(), move |event| {
-        let _ = tx.try_send(event.snapshot_owned()); // Consumer chooses bounded/coalesced delivery.
-        Control::Continue
+    let poller = SharedPoller::new(job.observer(), move |event| {
+        // The consumer chooses bounded, coalescing delivery.
+        let _ = tx.try_send(event.snapshot_owned());
     });
     std::thread::scope(|scope| {
         scope.spawn(move || {
-            progress.advance(1);
+            reporter.advance(1);
             poller.try_poll();
         });
         assert_eq!(rx.recv().unwrap().completed, 1);
@@ -229,21 +198,8 @@ fn posted_delivery_moves_observation_to_the_owner_thread() {
 }
 
 #[test]
-fn resumable_host_honors_yield_without_cancelling_and_can_then_receive_cancel() {
-    let job = Phase::new("chunks", Total::Exact(100));
-    let work = ProgressWithStop::new(ControlHandle::new(), job.progress());
-    let mut ui = LocalPoller::new(job.observer(), work.stop.clone());
-    ui.subscribe(|_| Control::Yield);
-    // A host's resumable driver runs a chunk and returns to its scheduler here.
-    for _ in 0..10 {
-        work.check().unwrap();
-        work.advance(1);
-    }
-    ui.poll();
-    assert!(work.stop.take_yield());
-    assert!(work.check().is_ok());
-    // Only after yielding can the same event loop deliver an incoming cancel message.
-    work.stop.cancel();
-    assert_eq!(work.check(), Err(StopReason::Cancelled));
-    assert_eq!(job.observer().snapshot().completed, 10);
+fn a_no_op_pair_compiles_away() {
+    let silent = ProgressWithStop::new(how_far_along::Unstoppable, NoReport);
+    assert_eq!(std::mem::size_of_val(&silent), 0);
+    silent.step(1).unwrap();
 }

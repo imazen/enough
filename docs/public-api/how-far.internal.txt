@@ -9,24 +9,29 @@
 
 ## summary
 #
-#   inherent methods                            4
+#   inherent methods                            9
 #   trait roster entries (type × trait)         7
 #
 # per-module pub lines:
-#   (root)                            4
+#   (root)                            9
 
-## items (4 lines)
+## items (9 lines)
 
 pub fn Execution::assert_fields_are_eq(&self)
+pub fn NoPulse::assert_fields_are_eq(&self)
+pub fn NoReport::assert_fields_are_eq(&self)
 pub fn Outcome::assert_fields_are_eq(&self)
+pub fn PhaseSpec<'a>::assert_fields_are_eq(&self)
 pub fn PlanError::assert_fields_are_eq(&self)
+pub fn ProgressWithStop<S, R>::assert_fields_are_eq(&self)
+pub fn RunError<E>::assert_fields_are_eq(&self)
 pub fn Total::assert_fields_are_eq(&self)
 
 ## trait impls (7 types)
 
 Execution: TrivialClone
-IgnoreProgress: TrivialClone
 NoPulse: TrivialClone
+NoReport: TrivialClone
 Outcome: TrivialClone
 PhaseSpec<'a>: TrivialClone
 PlanError: TrivialClone

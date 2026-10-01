@@ -1,5 +1,5 @@
 use how_far_along::ext::ReportExt;
-use how_far_along::{IgnoreProgress, Phase, Report, Total};
+use how_far_along::{NoReport, Phase, Report, Total};
 use std::{hint::black_box, num::NonZeroU64, time::Instant};
 
 fn measure(label: &str, mut f: impl FnMut()) {
@@ -20,13 +20,13 @@ fn main() {
     measure("loop/black_box baseline", || {
         black_box(1_u64);
     });
-    measure("IgnoreProgress", || IgnoreProgress.advance(black_box(1)));
+    measure("NoReport", || NoReport.advance(black_box(1)));
     let phase = Phase::new("bench", Total::Unknown);
-    let progress = phase.progress();
+    let reporter = phase.reporter();
     measure("Progress (uncontended, saturating)", || {
-        progress.advance(black_box(1))
+        reporter.advance(black_box(1))
     });
-    let mut batch = progress.batched(NonZeroU64::new(64).unwrap());
+    let mut batch = reporter.batched(NonZeroU64::new(64).unwrap());
     measure("worker batch of 64", || batch.advance(black_box(1)));
     batch.flush();
     measure("Instant::now (consumer policy)", || {

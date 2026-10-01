@@ -1,17 +1,16 @@
-//! Optional conveniences. The basic traits remain just `check` and `advance`.
+//! Report adapters. Importing this trait is optional.
 
 use crate::Report;
 use core::num::NonZeroU64;
 
-/// Report-and-check convenience from the lightweight interface crate.
-pub use how_far::ProgressExt;
-
-/// Adapters for sinks; importing this trait is optional.
+/// Adapters for any [`Report`] sink.
 pub trait ReportExt: Report {
-    /// Buffer this worker's reports, flushing at a unit threshold and on drop.
+    /// Buffer one worker's reports, publishing them in batches of at least
+    /// `threshold` units, and the remainder on [`Batch::flush`] or drop.
     ///
-    /// This never batches cancellation. Flush (or drop) before joining/finishing
-    /// the phase. Use one batch per worker to avoid a shared counter's contention.
+    /// Batching reduces contention on a counter shared by many workers. It
+    /// never delays cancellation, because a batch only counts. Flush or drop
+    /// every batch before finishing the phase.
     fn batched(self, threshold: NonZeroU64) -> Batch<Self>
     where
         Self: Sized,
@@ -25,14 +24,19 @@ pub trait ReportExt: Report {
 }
 impl<T: Report + ?Sized> ReportExt for T {}
 
-/// A single-writer buffer. Its mutable methods make ownership explicit.
+/// One worker's report buffer, from [`ReportExt::batched`].
+///
+/// It is single-owner by design: `advance` takes `&mut self`. Give each worker
+/// its own batch.
+#[derive(Debug)]
 pub struct Batch<R: Report> {
     report: R,
     threshold: NonZeroU64,
     pending: u64,
 }
 impl<R: Report> Batch<R> {
-    /// Buffer actual completed units, flushing without wrapping the count.
+    /// Buffer `completed` finished units, publishing once the threshold is met.
+    /// A sum that would overflow is published first, so counts never wrap.
     #[track_caller]
     pub fn advance(&mut self, completed: u64) {
         if let Some(sum) = self.pending.checked_add(completed) {
@@ -45,14 +49,14 @@ impl<R: Report> Batch<R> {
             self.flush();
         }
     }
-    /// Publish the remaining units. Zero pending units generate no report.
+    /// Publish every buffered unit. Nothing is reported when none are pending.
     #[track_caller]
     pub fn flush(&mut self) {
         if self.pending != 0 {
             self.report.advance(core::mem::take(&mut self.pending));
         }
     }
-    /// Units not yet visible to observers.
+    /// Units buffered but not yet visible to observers.
     pub fn pending(&self) -> u64 {
         self.pending
     }

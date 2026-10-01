@@ -6,52 +6,56 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 77 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 11 lines (11 hidden + 0 excluded-feature)
+# files: how-far.txt 97 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 16 lines (16 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 1
-#   pub types (struct/enum/trait/alias)        12
-#   pub consts/statics                          3
+#   pub types (struct/enum/trait/alias)        16
+#   pub consts/statics                          5
 #   free functions                              2
-#   inherent methods                           11
-#   struct fields                               6
-#   enum variants                              23
-#   re-exports                                  2
-#   trait roster entries (type × trait)        48
+#   inherent methods                           16
+#   struct fields                               8
+#   enum variants                              24
+#   re-exports                                  3
+#   trait roster entries (type × trait)        75
 #   auto-trait-complete types                   7
-#   auto-trait exceptions                       2
+#   auto-trait exceptions                       4
 #
 # per-module pub lines:
-#   (root)                           60
+#   (root)                           75
 
-## items (60 lines)
+## items (75 lines)
 
 pub mod how_far
 pub use Stop
 pub use StopReason
+pub use Unstoppable
 #[non_exhaustive] pub enum Execution
 pub Execution::ForkJoin
 pub Execution::Sequence
 pub Execution::Unspecified
-pub Execution::WorkPool
-pub Execution::WorkPool::max_parallelism: usize
+#[non_exhaustive] pub Execution::WorkPool
+pub Execution::WorkPool::max_parallelism: core::num::nonzero::NonZeroUsize
+pub const fn Execution::work_pool(core::num::nonzero::NonZeroUsize) -> Self
 #[non_exhaustive] pub enum Outcome
 pub Outcome::Abandoned
 pub Outcome::Cancelled
 pub Outcome::Failed
 pub Outcome::Skipped
 pub Outcome::Succeeded
+pub fn Outcome::from_result<T, E>(&core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> Self
 #[non_exhaustive] pub enum PlanError
 pub PlanError::AlreadyInUse
 pub PlanError::Busy
 pub PlanError::EmptyOrZeroWeight
 pub PlanError::Finished
-pub PlanError::NoMoreChildren
+pub PlanError::NoMoreStages
+pub PlanError::NotALeaf
 pub PlanError::Overflow
 pub PlanError::UnfinishedChildren
 pub PlanError::UnsuccessfulChildren
-pub PlanError::ZeroParallelism
+pub PlanError::Unsupported
 #[non_exhaustive] pub enum RunError<E>
 pub RunError::Plan(PlanError)
 pub RunError::Work(E)
@@ -59,8 +63,11 @@ pub RunError::Work(E)
 pub Total::Estimated(u64)
 pub Total::Exact(u64)
 pub Total::Unknown
-pub struct IgnoreProgress
+pub struct Child<'a>
+pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
+pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
 pub struct NoPulse
+pub struct NoReport
 #[non_exhaustive] pub struct PhaseSpec<'a>
 pub PhaseSpec::execution: Execution
 pub PhaseSpec::name: &'a str
@@ -70,35 +77,46 @@ pub PhaseSpec::weight: u64
 pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
 pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
 pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
-pub struct Steps<'a>
-pub fn Steps<'a>::finish(self) -> core::result::Result<(), PlanError>
-pub fn Steps<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
-pub fn Steps<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
-pub fn Steps<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
-pub fn Steps<'a>::run_nested_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
-pub fn Steps<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub struct ProgressWithStop<S, R>
+pub ProgressWithStop::report: R
+pub ProgressWithStop::stop: S
+pub const fn ProgressWithStop<S, R>::new(S, R) -> Self
+pub struct Stages<'a>
+pub fn Stages<'a>::finish(self) -> core::result::Result<(), PlanError>
+pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
+pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
+pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub trait ChildPulse: Pulse
+pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
 pub trait ProgressExt: enough::Stop + Report
+pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub trait Pulse: enough::Stop + Report
-pub fn Pulse::finish(&self, Outcome) -> core::result::Result<(), PlanError>
-pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<alloc::boxed::Box<(dyn Pulse + '_)>>, PlanError>
+pub fn Pulse::handle(&self) -> PulseHandle
+pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
 pub trait Report: core::marker::Send + core::marker::Sync
 pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64)
 pub fn &mut T::may_report(&self) -> bool
+pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
-## trait impls (14 types)
+## trait impls (17 types)
 
 &T: Report
 &mut T: Report
+Child<'_>: Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
-IgnoreProgress: Clone, Copy, Debug, Default, Report
-NoPulse: Clone, Copy, Debug, Default, Pulse, Report, enough::Stop
-Outcome: Clone, Copy, Debug, Eq, PartialEq
-PhaseSpec<'a>: Clone, Copy, Debug
-PlanError: Clone, Copy, Debug, Display, Eq, Error, PartialEq
-RunError<E>: Debug, Display, Error, From<PlanError>
+NoPulse: ChildPulse, Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Pulse, Report, enough::Stop
+NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
+Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
+PhaseSpec<'a>: Clone, Copy, Debug, Eq, PartialEq
+PlanError: Clone, Copy, Debug, Display, Eq, Error, Hash, PartialEq
+ProgressWithStop<S, R>: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report, enough::Stop
+RunError<E>: Debug, Display, Eq, Error, From<PlanError>, PartialEq
+Stages<'a>: Debug
 T: ProgressExt
 Total: Clone, Copy, Debug, Eq, PartialEq
 alloc::boxed::Box<T>: Report
@@ -108,5 +126,7 @@ core::option::Option<T>: Report
 ## auto traits
 
 7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+Child<'a>: !RefUnwindSafe !UnwindSafe
+ProgressWithStop<S, R>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
-Steps<'a>: !RefUnwindSafe !UnwindSafe
+Stages<'a>: !RefUnwindSafe !UnwindSafe

@@ -1,13 +1,15 @@
 #![cfg(all(feature = "std", feature = "profile"))]
-//! Host-level contracts: actual CPU pools, joins, a CLI renderer, and an async request owner.
-use how_far_along::ext::ProgressExt;
-use how_far_along::poll::{Control, ControlHandle, LocalPoller, PollingStop, SharedPoller};
+//! Host-level contracts: real CPU pools, joins, a CLI renderer, and an async
+//! request owner.
+use almost_enough::Stopper;
+use how_far_along::poll::{LocalPoller, SharedPoller};
 use how_far_along::profile::{Profiler, SpanKind, StdClock};
 use how_far_along::{
-    Execution, Outcome, Part, Phase, ProgressWithStop, Report, Status, Stop, Total, Unstoppable,
+    Execution, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Report, Status, Stop,
+    Total,
 };
 use rayon::prelude::*;
-use std::{cell::RefCell, fmt::Write, rc::Rc, sync::Arc};
+use std::{cell::RefCell, fmt::Write, num::NonZeroUsize, rc::Rc, sync::Arc};
 
 fn search_block(block: usize) -> u64 {
     let mut value = block as u64;
@@ -18,67 +20,66 @@ fn search_block(block: usize) -> u64 {
 }
 
 #[test]
-fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_serial_filter() {
+fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_a_serial_filter() {
     for cancel in [false, true] {
         let (width, height, sb) = (257_usize, 193_usize, 64_usize);
         let blocks = width.div_ceil(sb) * height.div_ceil(sb);
+        let pool_of_4 = Execution::work_pool(NonZeroUsize::new(4).unwrap());
         let mut job = Phase::new("encode", Total::Unknown);
         let observer = job.observer();
         let [mut prepare, mut search, mut filter, mut pack] = job
             .split(
                 Execution::Sequence,
                 [
-                    Part::new("resize", 5, Total::Exact(17)).units("rows"),
-                    Part::new("search", 82, Total::Exact(blocks as u64))
+                    PhaseSpec::new("resize", 5, Total::Exact(17)).units("rows"),
+                    PhaseSpec::new("search", 82, Total::Exact(blocks as u64))
                         .units("superblocks")
-                        .execution(Execution::WorkPool { max_parallelism: 4 }),
-                    Part::new("filter", 8, Total::Unknown),
-                    Part::new("pack", 5, Total::Exact(blocks as u64))
+                        .execution(pool_of_4),
+                    PhaseSpec::new("filter", 8, Total::Unknown),
+                    PhaseSpec::new("pack", 5, Total::Exact(blocks as u64))
                         .units("superblocks")
-                        .execution(Execution::WorkPool { max_parallelism: 4 }),
+                        .execution(pool_of_4),
                 ],
             )
             .unwrap();
         let profiler = Profiler::new(StdClock::new(), blocks * 2 + 4);
         profiler.metadata("geometry", format!("{width}x{height}; sb={sb}"));
-        let control = ControlHandle::new();
+        let stop = Stopper::new();
         let search_observer = search.observer();
         let request_profile = profiler.clone();
-        let hook = SharedPoller::new(search_observer.clone(), control.clone(), move |event| {
-            if cancel && event.snapshot().completed >= 3 {
+        let cancel_after_three = stop.clone();
+        let poller = SharedPoller::new(search_observer.clone(), move |event| {
+            if cancel && event.snapshot().completed >= 3 && !cancel_after_three.is_cancelled() {
                 request_profile.cancellation_requested();
-                Control::Cancel
-            } else {
-                Control::Continue
+                cancel_after_three.cancel();
             }
         });
-        // Strided preparation includes the partial final row batch.
+        // Strided preparation includes the short final row batch.
         let input = [0_u8; 17];
         for chunk in input.chunks(16) {
-            prepare.progress().advance(chunk.len() as u64);
+            prepare.reporter().advance(chunk.len() as u64);
         }
         prepare.finish().unwrap();
-        let pool = rayon::ThreadPoolBuilder::new()
+        let workers = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
             .unwrap();
-        let report = search.progress();
-        let results = pool.install(|| {
+        let reporter = search.reporter();
+        let results = workers.install(|| {
             (0..blocks)
                 .into_par_iter()
                 .map(|block| {
                     let span = profiler.span(search.id(), format!("sb-{block}"), SpanKind::Work);
-                    let work = span.instrument(ProgressWithStop::new(
-                        PollingStop::new(Unstoppable, hook.clone()),
-                        report.clone(),
-                    ));
+                    let work =
+                        span.instrument(ProgressWithStop::new(stop.clone(), reporter.clone()));
                     let result = (|| {
-                        // Fine cancellation checkpoints do not claim accepted superblocks.
+                        // Fine checkpoints do not claim accepted superblocks.
                         for _ in 0..(1 + block % 23) {
                             work.check()?;
                         }
                         let result = search_block(block);
                         work.step(1)?;
+                        poller.try_poll();
                         Ok::<_, how_far_along::StopReason>(result)
                     })();
                     span.finish(if result.is_ok() {
@@ -89,15 +90,15 @@ fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_serial_fi
                     result
                 })
                 .collect::<Vec<_>>()
-        }); // Collect joins every branch, including cancellation tails.
+        }); // `collect` joins every branch, including cancelled ones.
         if cancel {
             assert!(results.iter().any(Result::is_err));
             search.finish_with(Outcome::Cancelled).unwrap();
-            filter.finish_with(Outcome::Cancelled).unwrap();
-            pack.finish_with(Outcome::Cancelled).unwrap();
+            filter.finish_with(Outcome::Skipped).unwrap();
+            pack.finish_with(Outcome::Skipped).unwrap();
             job.finish_with(Outcome::Cancelled).unwrap();
             assert!(search_observer.snapshot().completed >= 3);
-            // In-flight branches can finish their units before observing cancel.
+            // In-flight branches may finish their unit before seeing the stop.
             assert!(search_observer.snapshot().completed <= blocks as u64);
         } else {
             search.finish().unwrap();
@@ -108,17 +109,17 @@ fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_serial_fi
             filter
                 .set_total(Total::Exact(filtered.len() as u64))
                 .unwrap();
-            filter.progress().advance(filtered.len() as u64);
+            filter.reporter().advance(filtered.len() as u64);
             filter.finish().unwrap();
-            let report = pack.progress();
-            let output = pool.install(|| {
+            let reporter = pack.reporter();
+            let output = workers.install(|| {
                 filtered
                     .par_iter()
                     .enumerate()
                     .map(|(block, value)| {
                         let span =
                             profiler.span(pack.id(), format!("pack-{block}"), SpanKind::Work);
-                        let work = span.instrument(ProgressWithStop::new(&control, &report));
+                        let work = span.instrument(ProgressWithStop::new(&stop, &reporter));
                         let bytes = value.to_le_bytes();
                         work.step(1).unwrap();
                         span.finish(Outcome::Succeeded);
@@ -157,11 +158,11 @@ fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_serial_fi
 }
 
 #[test]
-fn console_renderer_samples_lazily_and_receives_terminal_output() {
+fn a_console_renderer_samples_lazily_and_receives_the_final_state() {
     let mut job = Phase::new("download", Total::Exact(17));
     let output = Rc::new(RefCell::new(String::new()));
     let display = output.clone();
-    let mut poller = LocalPoller::new(job.observer(), ControlHandle::new());
+    let mut poller = LocalPoller::new(job.observer());
     poller.subscribe(move |event| {
         let snapshot = event.snapshot();
         writeln!(
@@ -172,10 +173,9 @@ fn console_renderer_samples_lazily_and_receives_terminal_output() {
             snapshot.status
         )
         .unwrap();
-        Control::Continue
     });
     for size in [16, 1] {
-        job.progress().advance(size);
+        job.reporter().advance(size);
         poller.poll();
     }
     job.finish().unwrap();
@@ -188,22 +188,22 @@ fn console_renderer_samples_lazily_and_receives_terminal_output() {
 }
 
 #[test]
-fn server_disconnect_cancels_blocking_work_and_joins_before_returning() {
+fn a_server_disconnect_cancels_blocking_work_and_joins_before_returning() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
     runtime.block_on(async {
         let mut job = Phase::new("request", Total::Unknown);
         let observer = job.observer();
-        let control = ControlHandle::new();
+        let stop = Stopper::new();
         let profiler = Profiler::new(StdClock::new(), 1);
         let (connected, disconnected) = tokio::sync::oneshot::channel::<()>();
         let (started, started_rx) = tokio::sync::oneshot::channel();
-        let stop = control.clone();
+        let worker_stop = stop.clone();
         let trace = profiler.clone();
         let worker = tokio::task::spawn_blocking(move || {
             let span = trace.span(job.id(), "CPU request", SpanKind::Work);
-            let work = span.instrument(ProgressWithStop::new(stop, job.progress()));
+            let work = span.instrument(ProgressWithStop::new(worker_stop, job.reporter()));
             started.send(()).unwrap();
             while work.check().is_ok() {
                 work.advance(1);
@@ -212,7 +212,7 @@ fn server_disconnect_cancels_blocking_work_and_joins_before_returning() {
             job.finish_with(Outcome::Cancelled).unwrap();
             span.finish(Outcome::Cancelled);
         });
-        let cancel = control.clone();
+        let cancel = stop.clone();
         let trace = profiler.clone();
         let disconnect_task = tokio::spawn(async move {
             if disconnected.await.is_err() {
@@ -221,9 +221,9 @@ fn server_disconnect_cancels_blocking_work_and_joins_before_returning() {
             }
         });
         started_rx.await.unwrap();
-        drop(connected); // Client/request owner disappears while CPU work is running.
+        drop(connected); // The client goes away while the CPU work runs.
         disconnect_task.await.unwrap();
-        worker.await.unwrap(); // Request return includes worker cleanup/join.
+        worker.await.unwrap(); // The request returns only after the worker joins.
         profiler.operation_returned();
         assert_eq!(
             observer.snapshot().status,

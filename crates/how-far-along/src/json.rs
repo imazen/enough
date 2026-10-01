@@ -1,3 +1,9 @@
+//! Small JSON helpers. Wire names are spelled out here rather than taken from
+//! `Debug`, so the format cannot change by accident.
+
+use crate::Outcome;
+#[cfg(feature = "profile")]
+use crate::StopReason;
 use core::fmt;
 
 pub(crate) fn quote(out: &mut impl fmt::Write, value: &str) -> fmt::Result {
@@ -14,4 +20,24 @@ pub(crate) fn quote(out: &mut impl fmt::Write, value: &str) -> fmt::Result {
         }
     }
     out.write_char('"')
+}
+
+pub(crate) fn outcome_name(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Succeeded => "Succeeded",
+        Outcome::Skipped => "Skipped",
+        Outcome::Cancelled => "Cancelled",
+        Outcome::Failed => "Failed",
+        Outcome::Abandoned => "Abandoned",
+        _ => "Other",
+    }
+}
+
+#[cfg(feature = "profile")]
+pub(crate) fn stop_reason_name(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::Cancelled => "Cancelled",
+        StopReason::TimedOut => "TimedOut",
+        _ => "Other",
+    }
 }

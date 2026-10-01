@@ -1,14 +1,15 @@
 #![cfg(feature = "diagnostics")]
+//! Checkpoint advice from deterministic, clock-driven traces.
 
-use how_far::{PhaseSpec, Pulse, RunError, Steps, StopReason};
 use how_far_along::diagnostics::{DiagnosticPulse, Kind, Options};
-use how_far_along::poll::{Control, ControlHandle, LocalPoller};
-use how_far_along::profile::{Clock, Profiler, SpanKind};
+use how_far_along::poll::LocalPoller;
+use how_far_along::profile::{Clock, Profiler, SpanKind, Trace};
 use how_far_along::{
-    Execution, IgnoreProgress, Part, Phase, ProgressExt, ProgressWithStop, PulseTree, Report, Stop,
-    Total, Unstoppable,
+    Execution, NoReport, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Pulse,
+    PulseTree, Report, RunError, Stages, Stop, StopReason, Total, Unstoppable,
 };
 use std::{
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -29,16 +30,24 @@ impl Clock for ManualClock {
     }
 }
 
+fn ms(n: u64) -> Duration {
+    Duration::from_millis(n)
+}
+
+fn tree() -> PulseTree {
+    PulseTree::new(Phase::new("job", Total::Unknown), Unstoppable)
+}
+
 #[test]
-fn stop_only_users_get_gap_guidance_without_progress_or_tracker_state() {
+fn stop_only_code_gets_gap_advice_without_a_progress_tree() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
-    let span = profiler.span(0, "decode", SpanKind::Work);
+    let span = profiler.span(None, "decode", SpanKind::Work);
     let stop = span.instrument(Unstoppable);
     clock.set(1);
     stop.check().unwrap();
     clock.set(22);
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     let findings = profiler.snapshot().diagnose(&Options::default());
     assert!(
         findings
@@ -49,11 +58,12 @@ fn stop_only_users_get_gap_guidance_without_progress_or_tracker_state() {
 }
 
 #[test]
-fn reports_identify_both_source_lines_and_callback_budget_is_measured() {
+fn report_gaps_name_both_source_lines_and_callback_budgets_are_measured() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 5);
-    let span = profiler.span(0, "rows", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    profiler.set_report_timing(true);
+    let span = profiler.span(None, "rows", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     clock.set(1);
     let first = line!() + 1;
     work.step(1).unwrap();
@@ -61,12 +71,12 @@ fn reports_identify_both_source_lines_and_callback_budget_is_measured() {
     let second = line!() + 1;
     work.step(1).unwrap();
     clock.set(36);
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     clock.set(40);
-    profiler.measure_callback(0, "UI render", || clock.set(52));
+    profiler.measure_callback("UI render", || clock.set(52));
     let trace = profiler.snapshot();
     let mut options = Options::default();
-    options.report_gap_target = Duration::from_millis(10);
+    options.report_gap_target = ms(10);
     let findings = trace.diagnose(&options);
     let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
     assert!(report.evidence.contains(&format!("{}:{first}", file!())));
@@ -78,13 +88,13 @@ fn reports_identify_both_source_lines_and_callback_budget_is_measured() {
     );
     let mut json = String::new();
     trace.write_json(&mut json).unwrap();
-    assert!(json.contains("\"max_report_gap\""));
+    assert!(json.contains("\"max_report_gap\":{"));
     assert!(json.contains("\"max_check_gap_start\""));
-    assert!(json.contains("\"checks\":0,\"max_check_gap\""));
+    assert!(json.contains("\"kind\":\"Callback\""));
 }
 
 #[test]
-fn sequential_stage_weights_produce_a_copyable_candidate_but_parallel_overlap_does_not() {
+fn sequential_weights_produce_a_copyable_candidate_but_overlapping_branches_do_not() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
     let mut root = Phase::new("encode", Total::Unknown);
@@ -92,21 +102,21 @@ fn sequential_stage_weights_produce_a_copyable_candidate_but_parallel_overlap_do
         .split(
             Execution::Sequence,
             [
-                Part::new("prepare", 50, Total::Exact(1)).units("rows"),
-                Part::new("encode", 50, Total::Exact(1))
-                    .execution(Execution::WorkPool { max_parallelism: 4 }),
+                PhaseSpec::new("prepare", 50, Total::Exact(1)).units("rows"),
+                PhaseSpec::new("encode", 50, Total::Exact(1))
+                    .execution(Execution::work_pool(NonZeroUsize::new(4).unwrap())),
             ],
         )
         .unwrap();
     let first = profiler.span(prepare.id(), "prepare", SpanKind::Work);
-    prepare.progress().advance(1);
+    prepare.reporter().advance(1);
     clock.set(10);
-    first.finish(how_far_along::Outcome::Succeeded);
+    first.finish(Outcome::Succeeded);
     prepare.finish().unwrap();
     let second = profiler.span(encode.id(), "encode", SpanKind::Work);
-    encode.progress().advance(1);
+    encode.reporter().advance(1);
     clock.set(100);
-    second.finish(how_far_along::Outcome::Succeeded);
+    second.finish(Outcome::Succeeded);
     encode.finish().unwrap();
     root.finish().unwrap();
     let trace = profiler
@@ -119,11 +129,11 @@ fn sequential_stage_weights_produce_a_copyable_candidate_but_parallel_overlap_do
         .unwrap();
     let code = weights.sample_code.as_ref().unwrap();
     assert!(code.contains("PhaseSpec::new(\"prepare\", 10, Total::Exact(1)).units(\"rows\")"));
-    assert!(code.contains("PhaseSpec::new(\"encode\", 90, Total::Exact(1)).execution(Execution::WorkPool { max_parallelism: 4 })"));
+    assert!(code.contains("PhaseSpec::new(\"encode\", 90, Total::Exact(1)).execution(Execution::work_pool(NonZeroUsize::new(4).unwrap()))"));
 
-    // The same data cannot justify serial weights if the declared branches overlap.
+    // The same data cannot justify serial weights if the declared stages overlap.
     let mut overlap = trace.clone();
-    overlap.spans[1].start = Duration::from_millis(5);
+    overlap.spans[1].start = ms(5);
     assert!(
         !overlap
             .diagnose(&Options::default())
@@ -133,34 +143,11 @@ fn sequential_stage_weights_produce_a_copyable_candidate_but_parallel_overlap_do
 }
 
 #[test]
-fn report_timing_cost_is_opt_in_and_stop_only_calls_still_have_their_own_cadence() {
-    struct CountingClock(Arc<AtomicU64>);
-    impl Clock for CountingClock {
-        fn now(&self) -> Duration {
-            Duration::from_nanos(self.0.fetch_add(1, Ordering::Relaxed))
-        }
-    }
-    let reads = Arc::new(AtomicU64::new(0));
-    let profiler = Profiler::new(CountingClock(reads.clone()), 1);
-    let span = profiler.span(0, "rows", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
-    let before = reads.load(Ordering::Relaxed);
-    for _ in 0..100 {
-        work.advance(1);
-    }
-    assert_eq!(reads.load(Ordering::Relaxed), before + 100);
-    work.check().unwrap();
-    assert_eq!(reads.load(Ordering::Relaxed), before + 102);
-    span.finish(how_far_along::Outcome::Succeeded);
-    assert_eq!(reads.load(Ordering::Relaxed), before + 103);
-}
-
-#[test]
 fn frequent_check_and_report_sites_are_identified_separately() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 1);
-    let span = profiler.span(0, "fast loop", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    let span = profiler.span(None, "fast loop", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     let check_line = line!() + 2;
     for _ in 0..100 {
         work.check().unwrap();
@@ -170,7 +157,7 @@ fn frequent_check_and_report_sites_are_identified_separately() {
         work.advance(1);
     }
     clock.set(1);
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     let mut options = Options::default();
     options.check_calls_per_second = 50_000.0;
     options.report_calls_per_second = 50_000.0;
@@ -182,19 +169,18 @@ fn frequent_check_and_report_sites_are_identified_separately() {
 }
 
 #[test]
-fn an_actual_poller_subscriber_can_time_lazy_snapshot_work() {
+fn a_poller_callback_can_time_its_lazy_snapshot_work() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
     let phase = Phase::new("job", Total::Unknown);
-    let mut poller = LocalPoller::new(phase.observer(), ControlHandle::new());
+    let mut poller = LocalPoller::new(phase.observer());
     let measured = profiler.clone();
     poller.subscribe(move |event| {
-        measured.measure_callback(0, "UI callback", || {
+        measured.measure_callback("UI callback", || {
             assert!(!event.snapshot_materialized());
             clock.set(12);
             assert_eq!(event.snapshot().name, "job");
-            Control::Continue
-        })
+        });
     });
     poller.poll();
     assert!(
@@ -210,9 +196,9 @@ fn an_actual_poller_subscriber_can_time_lazy_snapshot_work() {
 fn callback_cadence_is_measured_separately_from_callback_duration() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 3);
-    profiler.measure_callback(0, "UI", || clock.set(1));
+    profiler.measure_callback("UI", || clock.set(1));
     clock.set(15);
-    profiler.measure_callback(0, "UI", || clock.set(16));
+    profiler.measure_callback("UI", || clock.set(16));
     let findings = profiler.snapshot().diagnose(&Options::default());
     assert!(
         findings
@@ -223,9 +209,9 @@ fn callback_cadence_is_measured_separately_from_callback_duration() {
 }
 
 #[test]
-fn a_library_dyn_pulse_is_instrumented_without_changing_its_signature() {
+fn a_library_is_measured_without_changing_its_signature() {
     fn library(pulse: &dyn Pulse, clock: &ManualClock) -> Result<(), RunError<StopReason>> {
-        let mut stages = Steps::new(
+        let mut stages = Stages::new(
             pulse,
             &[
                 PhaseSpec::new("prepare", 50, Total::Exact(1)),
@@ -236,30 +222,28 @@ fn a_library_dyn_pulse_is_instrumented_without_changing_its_signature() {
             clock.set(1);
             stage.check()?;
             clock.set(10);
-            stage.step(1)?;
-            Ok(())
+            stage.step(1)
         })?;
         stages.run_stoppable(|stage| {
             clock.set(11);
             stage.check()?;
             clock.set(100);
-            stage.step(1)?;
-            Ok(())
+            stage.step(1)
         })?;
         stages.finish()?;
         Ok(())
     }
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
-    let observer = pulse.observer();
-    let diagnostic = DiagnosticPulse::new(&pulse, observer.clone(), &profiler);
-    library(&diagnostic, &clock).unwrap();
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
+    library(&measured, &clock).unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
     let snapshot = observer.snapshot();
     let trace = profiler.snapshot().with_progress(snapshot.clone());
     assert_eq!(trace.spans.len(), 2);
-    assert_eq!(trace.spans[0].node, snapshot.children[0].id);
-    assert_eq!(trace.spans[1].node, snapshot.children[1].id);
+    assert_eq!(trace.spans[0].node, Some(snapshot.children[0].id));
+    assert_eq!(trace.spans[1].node, Some(snapshot.children[1].id));
     assert!(
         trace
             .diagnose(&Options::default())
@@ -269,19 +253,18 @@ fn a_library_dyn_pulse_is_instrumented_without_changing_its_signature() {
 }
 
 #[test]
-fn diagnostic_pulse_keeps_nested_child_ids_and_outcomes() {
+fn nested_children_keep_their_node_ids_and_outcomes() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
-    let observer = pulse.observer();
-    let measured = DiagnosticPulse::new(&pulse, observer.clone(), &profiler);
-    let outer = measured
-        .split(
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
+    let [middle] = measured
+        .split_array(
             Execution::Sequence,
-            &[PhaseSpec::new("middle", 1, Total::Unknown)],
+            [PhaseSpec::new("middle", 1, Total::Unknown)],
         )
         .unwrap();
-    let children = outer[0]
+    let children = middle
         .split(
             Execution::ForkJoin,
             &[
@@ -290,23 +273,29 @@ fn diagnostic_pulse_keeps_nested_child_ids_and_outcomes() {
             ],
         )
         .unwrap();
-    for (index, child) in children.iter().enumerate() {
+    for (index, child) in children.into_iter().enumerate() {
         clock.set((index as u64 + 1) * 5);
         child.step(1).unwrap();
-        child.finish(how_far_along::Outcome::Succeeded).unwrap();
+        child.finish(Outcome::Succeeded).unwrap();
     }
-    outer[0].finish(how_far_along::Outcome::Succeeded).unwrap();
-    measured.finish(how_far_along::Outcome::Succeeded).unwrap();
+    middle.finish(Outcome::Succeeded).unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
     let snapshot = observer.snapshot();
     let trace = profiler.snapshot();
     assert_eq!(trace.spans.len(), 2);
-    assert_eq!(trace.spans[0].node, snapshot.children[0].children[0].id);
-    assert_eq!(trace.spans[1].node, snapshot.children[0].children[1].id);
+    assert_eq!(
+        trace.spans[0].node,
+        Some(snapshot.children[0].children[0].id)
+    );
+    assert_eq!(
+        trace.spans[1].node,
+        Some(snapshot.children[0].children[1].id)
+    );
     assert!(
         trace
             .spans
             .iter()
-            .all(|span| span.outcome == how_far_along::Outcome::Succeeded)
+            .all(|span| span.outcome == Outcome::Succeeded)
     );
 }
 
@@ -314,52 +303,47 @@ fn diagnostic_pulse_keeps_nested_child_ids_and_outcomes() {
 fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 6);
-    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
-    let observer = pulse.observer();
-    let measured = DiagnosticPulse::new(&pulse, observer.clone(), &profiler);
-    let stages = measured
-        .split(
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
+    let [before, middle, after] = measured
+        .split_array(
             Execution::Sequence,
-            &[
+            [
                 PhaseSpec::new("before", 33, Total::Exact(1)),
                 PhaseSpec::new("middle", 34, Total::Unknown),
                 PhaseSpec::new("after", 33, Total::Exact(1)),
             ],
         )
         .unwrap();
-    stages[0].check().unwrap();
+    before.check().unwrap();
     clock.set(10);
-    stages[0].step(1).unwrap();
-    stages[0].finish(how_far_along::Outcome::Succeeded).unwrap();
+    before.step(1).unwrap();
+    before.finish(Outcome::Succeeded).unwrap();
 
-    let workers = stages[1]
-        .split(
+    let [quick, slow] = middle
+        .split_array(
             Execution::ForkJoin,
-            &[
+            [
                 PhaseSpec::new("quick", 1, Total::Exact(1)),
                 PhaseSpec::new("slow", 1, Total::Exact(1)),
             ],
         )
         .unwrap();
-    workers[0].check().unwrap();
-    workers[1].check().unwrap();
+    quick.check().unwrap();
+    slow.check().unwrap();
     clock.set(30);
-    workers[0].step(1).unwrap();
-    workers[0]
-        .finish(how_far_along::Outcome::Succeeded)
-        .unwrap();
+    quick.step(1).unwrap();
+    quick.finish(Outcome::Succeeded).unwrap();
     clock.set(80);
-    workers[1].step(1).unwrap();
-    workers[1]
-        .finish(how_far_along::Outcome::Succeeded)
-        .unwrap();
-    stages[1].finish(how_far_along::Outcome::Succeeded).unwrap();
+    slow.step(1).unwrap();
+    slow.finish(Outcome::Succeeded).unwrap();
+    middle.finish(Outcome::Succeeded).unwrap();
 
-    stages[2].check().unwrap();
+    after.check().unwrap();
     clock.set(100);
-    stages[2].step(1).unwrap();
-    stages[2].finish(how_far_along::Outcome::Succeeded).unwrap();
-    measured.finish(how_far_along::Outcome::Succeeded).unwrap();
+    after.step(1).unwrap();
+    after.finish(Outcome::Succeeded).unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
     let trace = profiler.snapshot().with_progress(observer.snapshot());
     let weights = trace
         .diagnose(&Options::default())
@@ -375,39 +359,34 @@ fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
     );
 }
 
-fn ms(n: u64) -> Duration {
-    Duration::from_millis(n)
-}
-
 /// Run sequential `(name, weight, end_ms)` stages whose only checkpoint is a
 /// `step` at the end, as a library that works first and reports afterwards does.
-fn staged(stages: &[(&'static str, u64, u64)]) -> how_far_along::profile::Trace {
+fn staged(stages: &[(&'static str, u64, u64)]) -> Trace {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 16);
-    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
-    let observer = pulse.observer();
-    let measured = DiagnosticPulse::new(&pulse, observer.clone(), &profiler);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
     let specs: Vec<_> = stages
         .iter()
         .map(|(name, weight, _)| PhaseSpec::new(name, *weight, Total::Exact(1)))
         .collect();
-    let mut steps = Steps::new(&measured, &specs).unwrap();
+    let mut run = Stages::new(&measured, &specs).unwrap();
     for (_, _, end) in stages {
-        steps
-            .run_stoppable(|stage| {
-                clock.set(*end);
-                stage.step(1)
-            })
-            .unwrap();
+        run.run_stoppable(|stage| {
+            clock.set(*end);
+            stage.step(1)
+        })
+        .unwrap();
     }
-    steps.finish().unwrap();
+    run.finish().unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
     profiler.snapshot().with_progress(observer.snapshot())
 }
 
 #[test]
 fn a_sequential_stage_is_timed_from_the_previous_stage_not_its_first_checkpoint() {
-    // "flush" does 40 ms of work and only then calls step(1): its first
-    // checkpoint is at 130 ms, but the stage was entered at 90 ms.
+    // "flush" works for 40 ms and only then calls step(1): its first
+    // checkpoint is at 130 ms, but the stage began at 90 ms.
     let trace = staged(&[("frames", 9, 90), ("flush", 1, 130)]);
     assert_eq!(trace.spans[0].start, ms(0));
     assert_eq!(trace.spans[1].start, ms(90));
@@ -421,19 +400,20 @@ fn a_sequential_stage_is_timed_from_the_previous_stage_not_its_first_checkpoint(
 }
 
 #[test]
-fn a_succeeded_leaf_stage_without_any_checkpoint_still_has_a_span() {
+fn a_succeeded_stage_without_any_checkpoint_still_has_a_span() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let pulse = PulseTree::new(Phase::new("job", Total::Unknown), &Unstoppable);
-    let measured = DiagnosticPulse::new(&pulse, pulse.observer(), &profiler);
-    let mut steps = Steps::new(&measured, &[PhaseSpec::new("opaque", 1, Total::Exact(1))]).unwrap();
-    steps
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut stages =
+        Stages::new(&measured, &[PhaseSpec::new("opaque", 1, Total::Exact(1))]).unwrap();
+    stages
         .run_stoppable(|_| {
             clock.set(25);
             Ok::<_, StopReason>(())
         })
         .unwrap();
-    steps.finish().unwrap();
+    stages.finish().unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
     let trace = profiler.snapshot();
     assert_eq!(trace.spans.len(), 1);
     assert_eq!(trace.spans[0].elapsed(), ms(25));
@@ -449,7 +429,7 @@ fn a_succeeded_leaf_stage_without_any_checkpoint_still_has_a_span() {
 fn a_near_zero_stage_keeps_its_declared_weight_instead_of_driving_advice() {
     let mut options = Options::default();
     options.weight_difference = 0.05;
-    // flush is 0.1% of the run: the old 99/1 candidate was noise-driven.
+    // flush took 0.1% of the run; a 99/1 candidate would be noise.
     let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1001)]);
     assert_eq!(trace.spans[1].elapsed(), ms(1));
     assert!(
@@ -458,7 +438,7 @@ fn a_near_zero_stage_keeps_its_declared_weight_instead_of_driving_advice() {
             .iter()
             .any(|f| f.kind == Kind::StageWeights)
     );
-    // Disabling the floor restores the noise-driven candidate.
+    // Without the floor, the noise-driven candidate comes back.
     options.negligible_stage_share = 0.0;
     assert!(
         trace
@@ -467,7 +447,7 @@ fn a_near_zero_stage_keeps_its_declared_weight_instead_of_driving_advice() {
             .any(|f| f.kind == Kind::StageWeights)
     );
     options.negligible_stage_share = Options::default().negligible_stage_share;
-    // The same stage, measured at a calibratable share, is still advised on.
+    // The same stage at a measurable share still gets advice.
     let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1500)]);
     assert!(
         trace
@@ -503,17 +483,18 @@ fn a_negligible_stage_that_owns_most_of_the_bar_is_still_reported() {
 }
 
 #[test]
-fn a_report_gap_with_frequent_checks_inside_is_a_progress_seam_not_missing_cancellation() {
+fn a_report_gap_with_frequent_checks_inside_is_a_reporting_seam_not_missing_cancellation() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
-    let span = profiler.span(0, "frame", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    profiler.set_report_timing(true);
+    let span = profiler.span(None, "frame", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     for at in (5..=85).step_by(5) {
         clock.set(at);
         work.check().unwrap();
     }
     work.advance(1);
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     let findings = profiler.snapshot().diagnose(&Options::default());
     let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
     assert!(report.evidence.contains("85.00 ms"));
@@ -527,11 +508,12 @@ fn a_report_gap_with_frequent_checks_inside_is_a_progress_seam_not_missing_cance
 fn a_report_gap_with_no_checks_inside_is_also_a_cancellation_gap() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 2);
-    let span = profiler.span(0, "frame", SpanKind::Work);
-    let work = span.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    profiler.set_report_timing(true);
+    let span = profiler.span(None, "frame", SpanKind::Work);
+    let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     clock.set(85);
     work.advance(1);
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     let findings = profiler.snapshot().diagnose(&Options::default());
     let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
     assert!(report.evidence.contains("stop checks inside it: 0"));
@@ -540,26 +522,25 @@ fn a_report_gap_with_no_checks_inside_is_also_a_cancellation_gap() {
 }
 
 #[test]
-fn checks_recorded_by_a_separate_span_on_the_same_profiler_cover_a_coarse_stage_gap() {
-    // The library encodes a frame with its own 'static Stop, so the progress
-    // pulse never sees those checks. Instrument that Stop from the same profiler.
+fn checks_in_a_separate_span_on_the_same_profiler_cover_a_coarse_stage_gap() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let stage = profiler.span(0, "encode frames", SpanKind::Work);
-    let stage_pulse = stage.instrument(ProgressWithStop::new(Unstoppable, IgnoreProgress));
+    profiler.set_report_timing(true);
+    let stage = profiler.span(None, "encode frames", SpanKind::Work);
+    let stage_pulse = stage.instrument(ProgressWithStop::new(Unstoppable, NoReport));
     stage_pulse.check().unwrap();
     clock.set(1);
-    let inner = profiler.span(99, "raw frame encode", SpanKind::Work);
+    let inner = profiler.span(None, "raw frame encode", SpanKind::Work);
     let inner_stop = inner.instrument(Unstoppable);
     for at in (3..=83).step_by(2) {
         clock.set(at);
         inner_stop.check().unwrap();
     }
     clock.set(84);
-    inner.finish(how_far_along::Outcome::Succeeded);
+    inner.finish(Outcome::Succeeded);
     clock.set(85);
     stage_pulse.advance(1);
-    stage.finish(how_far_along::Outcome::Succeeded);
+    stage.finish(Outcome::Succeeded);
     let findings = profiler.snapshot().diagnose(&Options::default());
     let stop = findings
         .iter()
@@ -580,37 +561,92 @@ fn checks_recorded_by_a_separate_span_on_the_same_profiler_cover_a_coarse_stage_
 fn a_task_that_does_not_cover_the_interval_is_not_credited() {
     let clock = ManualClock::default();
     let profiler = Profiler::new(clock.clone(), 4);
-    let stage = profiler.span(0, "encode frames", SpanKind::Work);
+    let stage = profiler.span(None, "encode frames", SpanKind::Work);
     let stage_pulse = stage.instrument(Unstoppable);
     stage_pulse.check().unwrap();
-    let brief = profiler.span(99, "brief", SpanKind::Work);
+    let brief = profiler.span(None, "brief", SpanKind::Work);
     let brief_stop = brief.instrument(Unstoppable);
     clock.set(2);
     brief_stop.check().unwrap();
-    brief.finish(how_far_along::Outcome::Succeeded);
+    brief.finish(Outcome::Succeeded);
     clock.set(85);
     stage_pulse.check().unwrap();
-    stage.finish(how_far_along::Outcome::Succeeded);
+    stage.finish(Outcome::Succeeded);
     let findings = profiler.snapshot().diagnose(&Options::default());
     let stop = findings.iter().find(|f| f.kind == Kind::StopGap).unwrap();
     assert!(!stop.evidence.contains("brief"));
     assert!(!stop.advice.contains("already covered"));
 }
 
+/// A codec context that, like many encoders, owns its stop policy.
+struct Encoder<S: Stop + 'static> {
+    stop: S,
+}
+impl<S: Stop + 'static> Encoder<S> {
+    fn encode_frame(&self, clock: &ManualClock, from: u64) -> Result<(), StopReason> {
+        for at in (from + 2..from + 85).step_by(2) {
+            clock.set(at);
+            self.stop.check()?;
+        }
+        clock.set(from + 85);
+        Ok(())
+    }
+}
+
 #[test]
-fn diagnostic_pulse_keeps_checkpoints_visible_over_a_no_op_pulse() {
+fn checks_inside_a_codec_that_owns_its_stop_count_toward_the_stage() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
+    let mut stages = Stages::new(
+        &measured,
+        &[PhaseSpec::new("frames", 1, Total::Exact(2)).units("frames")],
+    )
+    .unwrap();
+    stages
+        .run_stoppable(|stage| {
+            // The codec context is built once and owns a `'static` stop.
+            let encoder = Encoder {
+                stop: stage.handle().stop,
+            };
+            stage.check()?;
+            for frame in 0..2 {
+                encoder.encode_frame(&clock, frame * 85)?;
+                stage.step(1)?;
+            }
+            Ok::<_, StopReason>(())
+        })
+        .unwrap();
+    stages.finish().unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
+    let trace = profiler.snapshot().with_progress(observer.snapshot());
+    let frames = &trace.spans[0];
+    assert_eq!(frames.task, "frames");
+    assert!(frames.stats.checks > 80, "{}", frames.stats.checks);
+    let findings = trace.diagnose(&Options::default());
+    assert!(
+        !findings.iter().any(|f| f.kind == Kind::StopGap),
+        "{findings:#?}"
+    );
+    let report = findings.iter().find(|f| f.kind == Kind::ReportGap).unwrap();
+    assert!(report.advice.contains("progress-granularity seam"));
+}
+
+#[test]
+fn a_diagnostic_pulse_keeps_checkpoints_visible_over_a_never_stopping_tree() {
     let profiler = Profiler::new(ManualClock::default(), 1);
-    let phase = Phase::new("job", Total::Unknown);
-    let measured = DiagnosticPulse::new(&how_far::NoPulse, phase.observer(), &profiler);
+    let plain = tree();
+    assert!(!plain.may_stop());
+    let measured = DiagnosticPulse::new(plain, &profiler);
     assert!(measured.may_stop());
     assert!(measured.may_report());
 }
 
 #[test]
 fn a_stop_adapter_keeps_the_library_call_site() {
-    // A library that owns a `'static` Stop from another trait version needs a
-    // small adapter around an Instrumented value. Stop::check is declared
-    // #[track_caller], so the adapter needs no attribute of its own.
+    // An adapter around an instrumented value needs no #[track_caller] of its
+    // own, because `Stop::check` is declared with it.
     struct Adapter(how_far_along::profile::Instrumented<Unstoppable>);
     impl Stop for Adapter {
         fn check(&self) -> Result<(), StopReason> {
@@ -625,9 +661,9 @@ fn a_stop_adapter_keeps_the_library_call_site() {
         (first, second)
     }
     let profiler = Profiler::new(ManualClock::default(), 1);
-    let span = profiler.span(0, "adapter", SpanKind::Work);
+    let span = profiler.span(None, "adapter", SpanKind::Work);
     let (first, second) = library_loop(&Adapter(span.instrument(Unstoppable)));
-    span.finish(how_far_along::Outcome::Succeeded);
+    span.finish(Outcome::Succeeded);
     let lines: Vec<_> = profiler.snapshot().spans[0]
         .stats
         .sites
@@ -635,4 +671,19 @@ fn a_stop_adapter_keeps_the_library_call_site() {
         .map(|s| s.line)
         .collect();
     assert_eq!(lines, [first, second]);
+}
+
+#[test]
+fn report_counts_reach_the_tree_through_the_wrapper() {
+    let profiler = Profiler::new(ManualClock::default(), 4);
+    let measured = DiagnosticPulse::new(
+        PulseTree::new(Phase::new("job", Total::Exact(3)), Unstoppable),
+        &profiler,
+    );
+    let observer = measured.observer();
+    measured.step(2).unwrap();
+    measured.handle().advance(1);
+    measured.finish(Outcome::Succeeded).unwrap();
+    assert_eq!(observer.snapshot().completed, 3);
+    assert_eq!(profiler.snapshot().spans[0].stats.units, 3);
 }
