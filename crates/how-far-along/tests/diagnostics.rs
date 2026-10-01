@@ -79,6 +79,8 @@ fn reports_identify_both_source_lines_and_callback_budget_is_measured() {
     let mut json = String::new();
     trace.write_json(&mut json).unwrap();
     assert!(json.contains("\"max_report_gap\""));
+    assert!(json.contains("\"max_check_gap_start\""));
+    assert!(json.contains("\"checks\":0,\"max_check_gap\""));
 }
 
 #[test]

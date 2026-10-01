@@ -139,6 +139,10 @@ impl<'a> PhaseSpec<'a> {
 /// observation and decides whether to use the optional `how-far-along` tracker.
 /// `split` runs at a phase boundary; `advance` and `check` remain separate hot
 /// path operations. Call `finish` after children have joined.
+///
+/// Wrappers that add measurement or forwarding may implement this trait, so it
+/// is open. Methods added later will have default implementations; no new
+/// required method will be added within a compatible release.
 pub trait Pulse: Stop + Report {
     /// Declare every child before reporting into this phase. Each returned
     /// child can itself be passed to an algorithm as `&dyn Pulse`.

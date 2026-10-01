@@ -7,6 +7,17 @@
 //! Recorded durations are elapsed wall time, **not CPU time**. This optional
 //! collector requires `std`; it uses OS mutexes and belongs on native threads
 //! or browser workers. Browser UI readers should use [`Profiler::try_snapshot`].
+//!
+//! # Stability
+//!
+//! The record types ([`Trace`], [`SpanRecord`], [`Stats`], [`SiteStats`], ...)
+//! are `#[non_exhaustive]` with public fields. Fields may be **added** in a
+//! compatible release; existing fields keep their name, type and meaning, and
+//! you cannot construct or exhaustively destructure these types outside this
+//! crate. Fields that exist only with the `diagnostics` feature are additive
+//! in the same way. The JSON written by [`Trace::write_json`] follows the same
+//! rule: readers must ignore keys they do not know, and `schema_version`
+//! changes only if a key is removed or its meaning changes.
 
 use crate::json::quote;
 use crate::{Outcome, Report, Stop, StopReason, sync::Mutex};
@@ -24,6 +35,7 @@ use core::{
 
 /// A monotonic clock in a single shared epoch. Reads happen only in instrumented code.
 /// Browser hosts supply a host clock; the collector still requires `std`.
+/// Methods added later will have default implementations.
 pub trait Clock: Send + Sync {
     /// Elapsed time in the clock's epoch.
     fn now(&self) -> Duration;
@@ -796,7 +808,9 @@ impl Trace {
     }
     /// Export valid JSON with nanosecond offsets encoded as decimal strings to
     /// preserve integer precision in JavaScript. Schema and coverage are explicit.
-    /// Human labels are escaped, including control characters.
+    /// Human labels are escaped, including control characters. Later versions
+    /// may add keys; readers must ignore unknown ones (see the module's
+    /// stability notes).
     pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         write!(
             out,
@@ -859,13 +873,21 @@ impl Trace {
             }
             #[cfg(feature = "diagnostics")]
             {
+                write!(
+                    out,
+                    ",\"max_check_gap_start\":\"{}\"",
+                    span.stats.max_check_gap_start.as_nanos()
+                )?;
                 out.write_str(",\"max_report_gap\":")?;
                 match &span.stats.max_report_gap {
                     Some(gap) => {
                         write!(
                             out,
-                            "{{\"duration\":\"{}\",\"from\":",
-                            gap.duration.as_nanos()
+                            "{{\"start\":\"{}\",\"duration\":\"{}\",\"checks\":{},\"max_check_gap\":\"{}\",\"from\":",
+                            gap.start.as_nanos(),
+                            gap.duration.as_nanos(),
+                            gap.checks,
+                            gap.max_check_gap.as_nanos()
                         )?;
                         optional_site(out, gap.from)?;
                         out.write_str(",\"to\":")?;

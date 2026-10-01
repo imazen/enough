@@ -10,6 +10,7 @@ keywords = ["progress", "cancellation", "no_std", "profiling"]
 categories = ["concurrency", "no-std"]
 
 [features]
+# Features are additive: they add items and fields and never remove or retype any.
 default = ["std"]
 std = ["enough/std"]
 profile = ["std"]

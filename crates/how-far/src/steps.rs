@@ -3,8 +3,10 @@
 use crate::{Execution, Outcome, PhaseSpec, PlanError, Pulse};
 use alloc::{boxed::Box, vec::Vec};
 
-/// An operation error or a progress-plan error.
+/// An operation error or a progress-plan error. Match the variants you handle
+/// and keep a wildcard arm: more kinds of failure may be added.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum RunError<E> {
     /// The operation returned an error. Its active stage and later stages were
     /// marked according to the selected [`Steps`] method.

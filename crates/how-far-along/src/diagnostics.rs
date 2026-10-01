@@ -5,6 +5,15 @@
 //! The same wrapper accepts an `enough::Stop` even when no progress is used.
 //! These are heuristics: clock reads and bookkeeping affect the measured run,
 //! and a single run cannot establish optimal weights or production latency.
+//!
+//! # Stability
+//!
+//! [`Options`], [`Finding`] and [`Kind`] are `#[non_exhaustive]`: fields and
+//! kinds may be added, so build `Options` from `Default` and keep a wildcard
+//! arm when matching `Kind`. [`Kind`] and a finding's presence are the
+//! contract; the wording of [`Finding::evidence`] and [`Finding::advice`], the
+//! sample code, and which thresholds fire are heuristics that improve between
+//! releases. Do not parse them or assert on exact text in downstream tests.
 
 use crate::{
     Execution, Observer, Outcome, PhaseSpec, PlanError, Pulse, Report, Snapshot, Status, Stop,
@@ -86,6 +95,8 @@ pub enum Kind {
 }
 
 /// One diagnostic finding with its measurement and an actionable suggestion.
+/// `evidence`, `advice` and `sample_code` are for people and may be reworded in
+/// any release; branch on [`Kind`], not on their text.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Finding {
