@@ -139,6 +139,11 @@ no meaningful difference between `StopToken` and a fully-inlined generic
 `impl Stop` — the dispatch path is within noise, so pick whichever reads
 best.
 
+For measured checkpoint cadence in tests, add `how-far-along` with its
+`diagnostics` feature as a dev-dependency. Its profiler wraps any `enough::Stop`
+and reports long gaps and overactive call sites; `enough` itself gains no
+feature or runtime cost. See the [testing and tuning guide](docs/how-far-testing-and-tuning.md).
+
 ### Without `almost-enough`
 
 Use `&dyn Stop` with `may_stop().then_some()`:
@@ -177,6 +182,8 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
+| [`how-far`](crates/how-far/README.md) | Minimal progress interface for libraries (`no_std + alloc`, Rust 1.88) |
+| [`how-far-along`](crates/how-far-along/README.md) | Opt-in phase trees, callbacks, and task profiling for consumers/tests (`no_std + alloc`) |
 
 Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blob/main/ZERO-DEP.md).
 

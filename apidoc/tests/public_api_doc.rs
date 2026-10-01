@@ -7,6 +7,13 @@
 fn public_api_surface_docs_are_current() {
     zenutils_apidoc::ApiDoc::new()
         .workspace_dir("..")
-        .crates(["enough", "almost-enough", "enough-tokio", "enough-ffi"])
+        .crates([
+            "enough",
+            "almost-enough",
+            "enough-tokio",
+            "enough-ffi",
+            "how-far",
+            "how-far-along",
+        ])
         .run();
 }

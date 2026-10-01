@@ -1,0 +1,12 @@
+[package]
+name = "how-far-wasm-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+how-far-along = { path = "../../crates/how-far-along" }
