@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 107 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 16 lines (16 hidden + 0 excluded-feature)
+# files: how-far.txt 115 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 16 lines (16 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        19
+#   pub types (struct/enum/trait/alias)        20
 #   pub consts/statics                          5
 #   free functions                              4
-#   inherent methods                           24
+#   inherent methods                           29
 #   struct fields                               8
 #   enum variants                              24
 #   re-exports                                  4
-#   trait roster entries (type × trait)        75
+#   trait roster entries (type × trait)        77
 #   auto-trait-complete types                   7
-#   auto-trait exceptions                       4
+#   auto-trait exceptions                       5
 #
 # per-module pub lines:
-#   (root)                           79
+#   (root)                           85
 #   prelude                          11
 
-## items (85 lines)
+## items (91 lines)
 
 pub mod how_far
 pub use Stop
@@ -76,10 +76,16 @@ pub Total::Estimated(u64)
 pub Total::Exact(u64)
 pub Total::Unknown
 pub struct Child<'a>
+pub fn Child<'_>::paced(&self, u64) -> Paced<'_>
 pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
 pub struct NoPulse
 pub struct NoReport
+pub struct Paced<'a>
+pub fn Paced<'a>::check(&self) -> core::result::Result<(), enough::reason::StopReason>
+pub fn Paced<'a>::flush(&mut self)
+pub fn Paced<'a>::new(&'a dyn Pulse, u64) -> Self
+pub fn Paced<'a>::step(&mut self, u64) -> core::result::Result<(), enough::reason::StopReason>
 #[non_exhaustive] pub struct PhaseSpec<'a>
 pub PhaseSpec::execution: Execution
 pub PhaseSpec::name: &'a str
@@ -114,7 +120,7 @@ pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
-## trait impls (17 types)
+## trait impls (18 types)
 
 &T: Report
 &mut T: Report
@@ -123,6 +129,7 @@ Execution: Clone, Copy, Debug, Default, Eq, PartialEq
 NoPulse: ChildPulse, Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Pulse, Report, enough::Stop
 NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
 Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
+Paced<'_>: Debug, Drop
 PhaseSpec<'a>: Clone, Copy, Debug, Eq, PartialEq
 PlanError: Clone, Copy, Debug, Display, Eq, Error, Hash, PartialEq
 ProgressWithStop<S, R>: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report, enough::Stop
@@ -138,6 +145,7 @@ core::option::Option<T>: Report
 
 7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Child<'a>: !RefUnwindSafe !UnwindSafe
+Paced<'a>: !RefUnwindSafe !UnwindSafe
 ProgressWithStop<S, R>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 Stages<'a>: !RefUnwindSafe !UnwindSafe
