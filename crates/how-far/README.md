@@ -157,13 +157,14 @@ compiler cannot inline forces the loop's live values out of caller-saved
 registers, dynamic or not. The fix is cadence, not dispatch:
 
 - Check once per row, block, or tile, not per pixel or byte.
-- Gate no-op pulses. `(pulse.may_stop() || pulse.may_report()).then_some(pulse)`
-  gives an `Option<&dyn Pulse>` whose `check()` and `step()` make no call at
-  all when the pulse neither stops nor reports, as with `NoPulse`.
+- Gate no-op pulses. `let pulse = pulse.live();` gives an
+  `Option<&dyn Pulse>`, still two words, whose `check()`, `advance()` and
+  `step()` make no call at all when the pulse neither stops nor reports, as
+  with `NoPulse`. Bring the methods into scope with `use how_far::prelude::*;`.
 - Batch reports from many workers with `how_far_along::ext::ReportExt::batched`.
 
 Measured on one machine (a Ryzen 9 5900XT), a `check()` or `advance()`
-through `&dyn Pulse` costs 1.6 to 3.2 ns. Inside a 256 KiB codec-style loop, a
+through `&dyn Pulse` costs 1.4 to 3.3 ns. Inside a 256 KiB codec-style loop, a
 live tree added 1.6 to 3.1 ns per checkpoint over `NoPulse`: about 1 to 2% at
 one checkpoint per 4 KiB, and 9 to 13% at one per 256 bytes. With the gate
 above, the no-observer path matched a monomorphized loop. The

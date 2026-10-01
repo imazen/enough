@@ -1,8 +1,8 @@
 //! Libraries using `&dyn Pulse`, recorded by a real `PulseTree`.
 
 use how_far_along::{
-    Execution, Outcome, Phase, PhaseSpec, PlanError, ProgressExt, Pulse, PulseTree, RunError,
-    Stages, Status, Stop, StopReason, Total, Unstoppable,
+    Execution, Outcome, Phase, PhaseSpec, PlanError, ProgressExt, Pulse, PulseTree, Report,
+    RunError, Stages, Status, Stop, StopReason, Total, Unstoppable,
 };
 use std::{num::NonZeroUsize, sync::Barrier};
 
@@ -539,4 +539,41 @@ fn a_tree_shares_its_stop_policy_with_every_phase_and_handle() {
     ] {
         assert_eq!(result, Err(StopReason::Cancelled));
     }
+}
+
+#[test]
+fn gating_a_tree_follows_what_it_can_still_do() {
+    // A never-stopping leaf still counts, so it stays.
+    let tree = PulseTree::new(Phase::new("job", Total::Unknown), Unstoppable);
+    assert!(tree.live().is_some());
+    // A failed split leaves it a counting leaf.
+    assert!(tree.split(Execution::Sequence, &[]).is_err());
+    assert!(tree.may_report() && tree.live().is_some());
+    // Once split, a never-stopping branch can do nothing: gate it away.
+    let [child] = tree
+        .split_array(
+            Execution::Sequence,
+            [PhaseSpec::new("child", 1, Total::Exact(1))],
+        )
+        .unwrap();
+    assert!(!tree.may_report());
+    assert!(tree.live().is_none());
+    assert!(child.live().is_some());
+    child.live().step(1).unwrap();
+    child.finish(Outcome::Succeeded).unwrap();
+    tree.finish(Outcome::Succeeded).unwrap();
+
+    // A branch that may still be cancelled keeps its stop checks.
+    let stoppable = PulseTree::new(
+        Phase::new("job", Total::Unknown),
+        almost_enough::Stopper::new(),
+    );
+    let children = stoppable
+        .split(
+            Execution::Sequence,
+            &[PhaseSpec::new("child", 1, Total::Exact(1))],
+        )
+        .unwrap();
+    assert!(stoppable.live().is_some());
+    drop(children);
 }

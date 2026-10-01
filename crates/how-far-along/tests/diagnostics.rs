@@ -641,6 +641,8 @@ fn a_diagnostic_pulse_keeps_checkpoints_visible_over_a_never_stopping_tree() {
     let measured = DiagnosticPulse::new(plain, &profiler);
     assert!(measured.may_stop());
     assert!(measured.may_report());
+    // So a library that gates its hot loop is still measured.
+    assert!(measured.live().is_some());
 }
 
 #[test]

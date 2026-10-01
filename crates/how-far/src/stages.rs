@@ -103,10 +103,18 @@ impl<E> RunError<RunError<E>> {
 /// Workers that count one logical stage can share its `&dyn Pulse`; join them
 /// before the closure returns. When workers need their own totals or outcomes,
 /// split the stage and use [`run_nested`](Self::run_nested).
-#[derive(Debug)]
 pub struct Stages<'a> {
     stages: IntoIter<Child<'a>>,
     stopped: bool,
+}
+
+impl fmt::Debug for Stages<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stages")
+            .field("remaining", &self.stages.len())
+            .field("stopped", &self.stopped)
+            .finish()
+    }
 }
 
 impl<'a> Stages<'a> {

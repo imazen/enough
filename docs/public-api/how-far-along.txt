@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 118 lines (supported surface) | how-far-along.features.txt 151 added (features: diagnostics,profile,std) | how-far-along.internal.txt 15 lines (15 hidden + 0 excluded-feature)
+# files: how-far-along.txt 119 lines (supported surface) | how-far-along.features.txt 151 added (features: diagnostics,profile,std) | how-far-along.internal.txt 15 lines (15 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -16,17 +16,17 @@
 #   inherent methods                           42
 #   struct fields                              13
 #   enum variants                               3
-#   re-exports                                 19
+#   re-exports                                 20
 #   trait roster entries (type × trait)        41
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                           72
+#   (root)                           73
 #   ext                               6
 #   poll                             19
 
-## items (97 lines)
+## items (98 lines)
 
 pub mod how_far_along
 pub use Child
@@ -48,6 +48,7 @@ pub use Stop
 pub use StopReason
 pub use Total
 pub use Unstoppable
+pub use prelude
 pub mod ext
 pub struct ext::Batch<R: how_far::report::Report>
 pub fn ext::Batch<R>::advance(&mut self, u64)

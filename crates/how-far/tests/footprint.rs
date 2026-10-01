@@ -21,6 +21,8 @@ const _: () = {
     assert!(size_of::<&dyn Report>() == 2 * WORD);
     assert!(size_of::<Child<'static>>() == 2 * WORD);
     assert!(size_of::<Box<dyn Pulse>>() == 2 * WORD);
+    // `ProgressExt::live` keeps the two words: `None` is the null pointer.
+    assert!(size_of::<Option<&dyn Pulse>>() == 2 * WORD);
     assert!(size_of::<Result<(), StopReason>>() == 1);
     assert!(size_of::<Result<(), PlanError>>() == 1);
     assert!(size_of::<Outcome>() == 1);
