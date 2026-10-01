@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 142 lines (supported surface) | how-far-along.features.txt 95 added (features: profile,std) | how-far-along.internal.txt 10 lines (10 hidden + 0 excluded-feature)
+# files: how-far-along.txt 142 lines (supported surface) | how-far-along.features.txt 140 added (features: diagnostics,profile,std) | how-far-along.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #

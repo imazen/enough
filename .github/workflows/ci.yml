@@ -228,6 +228,7 @@ jobs:
       - run: |
           cargo test -p how-far
           cargo test -p how-far-along --all-features
+          cargo run -p how-far-along --example diagnostics --features diagnostics
           cargo test -p how-far-along --no-default-features
       - name: Verify interface boundary and report cold builds
         run: python3 dev/bench-how-far-build.py --runs 3

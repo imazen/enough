@@ -1,5 +1,5 @@
 use how_far_along::profile::{Profiler, SpanKind, StdClock};
-use how_far_along::{Outcome, Phase, ProgressWithStop, Report, Stop, Total, Unstoppable};
+use how_far_along::{Outcome, Phase, ProgressExt, ProgressWithStop, Stop, Total, Unstoppable};
 
 fn main() {
     let profiler = Profiler::new(StdClock::new(), 64);
@@ -16,7 +16,7 @@ fn main() {
                 let work = span.instrument(ProgressWithStop::new(Unstoppable, progress));
                 for _ in 0..100 {
                     work.check().unwrap();
-                    work.advance(1);
+                    work.step(1).unwrap();
                 }
                 span.finish(Outcome::Succeeded);
             });

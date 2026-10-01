@@ -274,7 +274,10 @@ fn bad_clock_is_diagnostic_and_noop_instrumentation_survives_type_erasure() {
     span.finish(Outcome::Failed);
     let trace = profiler.snapshot();
     assert_eq!(trace.spans[0].stats.checks, 1);
-    assert_eq!(trace.spans[0].stats.clock_regressions, 2);
+    assert_eq!(
+        trace.spans[0].stats.clock_regressions,
+        if cfg!(feature = "diagnostics") { 3 } else { 2 }
+    );
     assert!(trace.overlap(&[trace.spans[0].id]).is_none());
 }
 
@@ -328,6 +331,7 @@ fn timeout_reason_and_attached_plan_survive_export() {
 }
 
 #[test]
+#[cfg(not(feature = "diagnostics"))]
 fn reporting_does_not_read_the_clock_and_span_finish_is_measured_once() {
     struct CountingClock(Arc<AtomicU64>);
     impl Clock for CountingClock {

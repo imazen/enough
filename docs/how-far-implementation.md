@@ -176,6 +176,7 @@ wasm-bindgen callback trampolines remain outside this fixture's scope.
 | Straggler overlap, nested spans, queue/join/yield/callback classification | `crates/how-far-along/tests/profiling.rs` |
 | Cancellation request → observation → join/cleanup return | `crates/how-far-along/tests/profiling.rs` |
 | Bounded retention, abandoned spans, counter/clock diagnostics, JSON escaping | `crates/how-far-along/tests/profiling.rs` |
+| Opt-in report-gap source pairs, stop/report rates, 10 ms callback duration and cadence, stage-weight candidates, and a wrapped library `&dyn Pulse` | `crates/how-far-along/tests/diagnostics.rs` |
 | Actual Wasm timer boundary, JSPI yield and cancel, worker posts | `dev/how-far-wasm/check.mjs` |
 | Real browser UI observations/cancellation during wasm-bindgen-rayon work; native JSPI/chunk fallback | `dev/how-far-browser/browser.spec.mjs` (Chromium + WebKit) |
 | Rust 1.88, fixed no_std+alloc interface, tracker backends, Cortex-M and wasm32 | CI feature/MSRV/target jobs |
@@ -205,4 +206,5 @@ dependency graphs can be inspected with `cargo tree -p how-far --edges normal`.
 
 `cargo bench -p how-far-along --bench overhead` measures the opt-in adapter path,
 including atomic reporting, worker-local batching, and clock reads. There is no
-hidden debouncing or clock read in `Report::advance`; those remain consumer policy.
+hidden debouncing or clock read in ordinary `Report::advance`; the separate
+`diagnostics` feature deliberately reads a clock at instrumented report sites.

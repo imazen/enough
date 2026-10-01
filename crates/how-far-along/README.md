@@ -16,6 +16,8 @@ test application's threaded Wasm build uses nightly; these libraries do not.
 how-far-along = "0.1"
 # Optional profiling:
 # how-far-along = { version = "0.1", features = ["profile"] }
+# Dev-only call-frequency and smoothness advice:
+# how-far-along = { version = "0.1", features = ["diagnostics"] }
 # Embedded: always requires alloc and a platform critical-section provider.
 # how-far-along = { version = "0.1", default-features = false }
 ```
@@ -103,6 +105,15 @@ which flushes on drop. Check cancellation at the appropriate cadence; the
 per-worker buffer deliberately reports only when it flushes, so its raw
 `advance()` method does not poll.
 Rayon `for_each_init` creates job-local state, not exactly one state per thread.
+
+## Test a library's checkpoint cadence
+
+Enable `diagnostics` in a dev-dependency to time report gaps and callbacks and
+turn a completed `Trace` into source-located suggestions. Wrap the public
+`&dyn Pulse` with `DiagnosticPulse` without changing the library's signature.
+The same profiler can wrap an `enough::Stop` for cancellation-only libraries.
+See the [testing and tuning guide](../../docs/how-far-testing-and-tuning.md)
+for a fixture, threshold settings, and the limits of stage-weight estimates.
 
 `Phase` is the unique lifecycle owner; cloning a `Progress` never grants finish
 authority. Dropping an owner records `Abandoned`. Success and explicit `Skipped`
@@ -207,6 +218,7 @@ API is identical with or without std; there is no `alloc` switch.
 | Default (`std`) | Short standard mutexes protect metadata handles; atomics count work and latch control |
 | `default-features = false` | Same trees/pollers with alloc and the application's `critical-section` provider |
 | `features = ["profile"]` | Adds bounded profiling with standard mutexes, clocks, and JSON/text export |
+| `features = ["diagnostics"]` | Adds timed report gaps, callback timing helpers, and source-located tuning advice; implies `profile` |
 
 Both crates use `#![forbid(unsafe_code)]`. Normal reporting, cancellation, and
 callback dispatch use `core::sync::atomic`; they do not acquire metadata locks.

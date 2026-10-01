@@ -103,4 +103,4 @@ Applications can use `how-far-along::PulseTree` to pair a phase tree with a stop
 policy, pass it as `&dyn Pulse`, and sample through an observer. Its optional
 plumbing stays out of the library dependency graph. Neither crate permits unsafe
 code. See the [tracker example](../how-far-along/README.md) and
-[validation notes](../../docs/how-far-implementation.md).
+[library testing and tuning guide](../../docs/how-far-testing-and-tuning.md).

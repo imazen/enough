@@ -93,6 +93,42 @@ pub struct SiteStats {
     pub max_gap_before_check: Duration,
 }
 
+/// A source location captured by an instrumented checkpoint.
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SourceSite {
+    /// Source file.
+    pub file: &'static str,
+    /// Source line.
+    pub line: u32,
+    /// Source column.
+    pub column: u32,
+}
+#[cfg(feature = "diagnostics")]
+impl SourceSite {
+    fn from_location(at: &'static Location<'static>) -> Self {
+        Self {
+            file: at.file(),
+            line: at.line(),
+            column: at.column(),
+        }
+    }
+}
+
+/// Longest interval between reports within one task; `None` means a span boundary.
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ReportGap {
+    /// Elapsed time between the endpoints.
+    pub duration: Duration,
+    /// Previous report site, or span entry.
+    pub from: Option<SourceSite>,
+    /// Next report site, or span exit.
+    pub to: Option<SourceSite>,
+}
+
 /// Per-task checkpoint evidence. Boundary gaps are included even with zero checks.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
@@ -107,6 +143,9 @@ pub struct Stats {
     pub overflowed: bool,
     /// Entry-to-first-check, check-to-check, or last-check-to-exit maximum.
     pub max_check_gap: Duration,
+    /// Longest entry/report/exit gap. Collected only with `diagnostics` enabled.
+    #[cfg(feature = "diagnostics")]
+    pub max_report_gap: Option<ReportGap>,
     /// Time inside the wrapped checks, including inline callbacks.
     pub check_time: Duration,
     /// First observed Stop error in this task.
@@ -224,6 +263,20 @@ impl Profiler {
     pub fn span(&self, node: usize, task: impl Into<String>, kind: SpanKind) -> Span {
         self.start_span(None, node, task.into(), kind)
     }
+    /// Time one subscriber invocation, including any lazily built snapshot.
+    /// A panic records an abandoned callback span and then resumes unwinding.
+    #[cfg(feature = "diagnostics")]
+    pub fn measure_callback<R>(
+        &self,
+        node: usize,
+        task: impl Into<String>,
+        callback: impl FnOnce() -> R,
+    ) -> R {
+        let span = self.span(node, task, SpanKind::Callback);
+        let result = callback();
+        span.finish(Outcome::Succeeded);
+        result
+    }
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     fn start_span(&self, parent: Option<usize>, node: usize, task: String, kind: SpanKind) -> Span {
         let id = self
@@ -246,6 +299,10 @@ impl Profiler {
                 state: Mutex::new(SpanState {
                     stats: Stats::default(),
                     last_check: start,
+                    #[cfg(feature = "diagnostics")]
+                    last_report: start,
+                    #[cfg(feature = "diagnostics")]
+                    last_report_site: None,
                     closed: false,
                 }),
             }),
@@ -292,6 +349,10 @@ impl Profiler {
 struct SpanState {
     stats: Stats,
     last_check: Duration,
+    #[cfg(feature = "diagnostics")]
+    last_report: Duration,
+    #[cfg(feature = "diagnostics")]
+    last_report_site: Option<SourceSite>,
     closed: bool,
 }
 struct SpanInner {
@@ -318,6 +379,25 @@ impl SpanInner {
                 Duration::ZERO
             });
             state.stats.max_check_gap = state.stats.max_check_gap.max(gap);
+            #[cfg(feature = "diagnostics")]
+            {
+                let report_gap = end.checked_sub(state.last_report).unwrap_or_else(|| {
+                    state.stats.clock_regressions += 1;
+                    Duration::ZERO
+                });
+                if state
+                    .stats
+                    .max_report_gap
+                    .as_ref()
+                    .is_none_or(|old| report_gap > old.duration)
+                {
+                    state.stats.max_report_gap = Some(ReportGap {
+                        duration: report_gap,
+                        from: state.last_report_site,
+                        to: None,
+                    });
+                }
+            }
             core::mem::take(&mut state.stats)
         };
         let record = SpanRecord {
@@ -466,9 +546,33 @@ impl<T: Report> Report for Instrumented<T> {
     #[track_caller]
     fn advance(&self, completed: u64) {
         self.value.advance(completed);
+        #[cfg(feature = "diagnostics")]
+        let now = self.span.profiler.inner.clock.now();
         let mut state = self.span.state.lock();
         if state.closed {
             return;
+        }
+        #[cfg(feature = "diagnostics")]
+        {
+            let at = SourceSite::from_location(Location::caller());
+            let gap = now.checked_sub(state.last_report).unwrap_or_else(|| {
+                state.stats.clock_regressions += 1;
+                Duration::ZERO
+            });
+            if state
+                .stats
+                .max_report_gap
+                .as_ref()
+                .is_none_or(|old| gap > old.duration)
+            {
+                state.stats.max_report_gap = Some(ReportGap {
+                    duration: gap,
+                    from: state.last_report_site,
+                    to: Some(at),
+                });
+            }
+            state.last_report = now;
+            state.last_report_site = Some(at);
         }
         state.stats.overflowed |= add(&mut state.stats.reports, 1);
         state.stats.overflowed |= add(&mut state.stats.units, completed);
@@ -666,6 +770,24 @@ impl Trace {
                 Some(reason) => write!(out, "\"{reason:?}\"")?,
                 None => out.write_str("null")?,
             }
+            #[cfg(feature = "diagnostics")]
+            {
+                out.write_str(",\"max_report_gap\":")?;
+                match &span.stats.max_report_gap {
+                    Some(gap) => {
+                        write!(
+                            out,
+                            "{{\"duration\":\"{}\",\"from\":",
+                            gap.duration.as_nanos()
+                        )?;
+                        optional_site(out, gap.from)?;
+                        out.write_str(",\"to\":")?;
+                        optional_site(out, gap.to)?;
+                        out.write_char('}')?;
+                    }
+                    None => out.write_str("null")?,
+                }
+            }
             out.write_str(",\"sites\":[")?;
             for (j, site) in span.stats.sites.iter().enumerate() {
                 if j > 0 {
@@ -727,6 +849,17 @@ impl fmt::Display for Trace {
 fn optional_time(out: &mut impl fmt::Write, value: Option<Duration>) -> fmt::Result {
     match value {
         Some(time) => write!(out, "\"{}\"", time.as_nanos()),
+        None => out.write_str("null"),
+    }
+}
+#[cfg(feature = "diagnostics")]
+fn optional_site(out: &mut impl fmt::Write, value: Option<SourceSite>) -> fmt::Result {
+    match value {
+        Some(site) => {
+            out.write_str("{\"file\":")?;
+            quote(out, site.file)?;
+            write!(out, ",\"line\":{},\"column\":{}}}", site.line, site.column)
+        }
         None => out.write_str("null"),
     }
 }

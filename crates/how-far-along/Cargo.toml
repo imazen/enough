@@ -13,6 +13,7 @@ categories = ["concurrency", "no-std"]
 default = ["std"]
 std = ["enough/std"]
 profile = ["std"]
+diagnostics = ["profile"]
 
 [dependencies]
 enough = { workspace = true, features = ["alloc"] }
@@ -32,6 +33,10 @@ required-features = ["std"]
 [[example]]
 name = "profile"
 required-features = ["std", "profile"]
+
+[[example]]
+name = "diagnostics"
+required-features = ["diagnostics"]
 
 [[bench]]
 name = "overhead"

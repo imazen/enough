@@ -1,5 +1,5 @@
 # how-far-along public API — additions from non-default features
-# features: profile,std
+# features: diagnostics,profile,std
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -9,21 +9,49 @@
 
 ## summary
 #
-#   pub modules                                 1
-#   pub types (struct/enum/trait/alias)        11
-#   inherent methods                           22
-#   struct fields                              41
-#   enum variants                               5
-#   trait roster entries (type × trait)        26
-#   auto-trait-complete types                   7
-#   auto-trait exceptions                       3
+#   pub modules                                 2
+#   pub types (struct/enum/trait/alias)        17
+#   inherent methods                           25
+#   struct fields                              61
+#   enum variants                              13
+#   trait roster entries (type × trait)        47
+#   auto-trait-complete types                  12
+#   auto-trait exceptions                       4
 #
 # per-module pub lines:
-#   (root)                            1
-#   profile                          79
+#   (root)                            2
+#   diagnostics                      26
+#   profile                          90
 
-## items (80 lines)
+## items (118 lines)
 
+pub mod diagnostics
+#[non_exhaustive] pub enum diagnostics::Kind
+pub diagnostics::Kind::CallbackDuration
+pub diagnostics::Kind::CallbackInterval
+pub diagnostics::Kind::CheckFrequency
+pub diagnostics::Kind::IncompleteEvidence
+pub diagnostics::Kind::ReportFrequency
+pub diagnostics::Kind::ReportGap
+pub diagnostics::Kind::StageWeights
+pub diagnostics::Kind::StopGap
+pub struct diagnostics::DiagnosticPulse<'a>
+pub fn diagnostics::DiagnosticPulse<'a>::new(&'a dyn how_far::pulse::Pulse, Observer, &profile::Profiler) -> Self
+#[non_exhaustive] pub struct diagnostics::Finding
+pub diagnostics::Finding::advice: alloc::string::String
+pub diagnostics::Finding::evidence: alloc::string::String
+pub diagnostics::Finding::kind: diagnostics::Kind
+pub diagnostics::Finding::sample_code: core::option::Option<alloc::string::String>
+#[non_exhaustive] pub struct diagnostics::Options
+pub diagnostics::Options::callback_budget: core::time::Duration
+pub diagnostics::Options::callback_interval_target: core::time::Duration
+pub diagnostics::Options::check_calls_per_second: f64
+pub diagnostics::Options::minimum_calls: u64
+pub diagnostics::Options::minimum_stage_wall: core::time::Duration
+pub diagnostics::Options::report_calls_per_second: f64
+pub diagnostics::Options::report_gap_target: core::time::Duration
+pub diagnostics::Options::stop_gap_target: core::time::Duration
+pub diagnostics::Options::weight_difference: f64
 pub mod profile
 #[non_exhaustive] pub enum profile::SpanKind
 pub profile::SpanKind::Callback
@@ -41,12 +69,17 @@ pub profile::Overlap::task_time: core::time::Duration
 pub profile::Overlap::wall: core::time::Duration
 pub struct profile::Profiler
 pub fn profile::Profiler::cancellation_requested(&self)
+pub fn profile::Profiler::measure_callback<R>(&self, usize, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnOnce() -> R) -> R
 pub fn profile::Profiler::metadata(&self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
 pub fn profile::Profiler::new(impl profile::Clock + 'static, usize) -> Self
 pub fn profile::Profiler::operation_returned(&self)
 pub fn profile::Profiler::snapshot(&self) -> profile::Trace
 pub fn profile::Profiler::span(&self, usize, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
 pub fn profile::Profiler::try_snapshot(&self) -> core::option::Option<profile::Trace>
+#[non_exhaustive] pub struct profile::ReportGap
+pub profile::ReportGap::duration: core::time::Duration
+pub profile::ReportGap::from: core::option::Option<profile::SourceSite>
+pub profile::ReportGap::to: core::option::Option<profile::SourceSite>
 #[non_exhaustive] pub struct profile::SiteStats
 pub profile::SiteStats::checks: u64
 pub profile::SiteStats::column: u32
@@ -55,6 +88,10 @@ pub profile::SiteStats::line: u32
 pub profile::SiteStats::max_gap_before_check: core::time::Duration
 pub profile::SiteStats::reports: u64
 pub profile::SiteStats::units: u64
+#[non_exhaustive] pub struct profile::SourceSite
+pub profile::SourceSite::column: u32
+pub profile::SourceSite::file: &'static str
+pub profile::SourceSite::line: u32
 pub struct profile::Span
 pub fn profile::Span::child(&self, impl core::convert::Into<alloc::string::String>, profile::SpanKind) -> profile::Span
 pub fn profile::Span::finish(self, how_far::pulse::Outcome)
@@ -78,6 +115,7 @@ pub profile::Stats::check_time: core::time::Duration
 pub profile::Stats::checks: u64
 pub profile::Stats::clock_regressions: u64
 pub profile::Stats::max_check_gap: core::time::Duration
+pub profile::Stats::max_report_gap: core::option::Option<profile::ReportGap>
 pub profile::Stats::overflowed: bool
 pub profile::Stats::reports: u64
 pub profile::Stats::sites: alloc::vec::Vec<profile::SiteStats>
@@ -102,16 +140,23 @@ pub fn profile::Trace::cancellation_return_latency(&self) -> core::option::Optio
 pub fn profile::Trace::overlap(&self, &[usize]) -> core::option::Option<profile::Overlap>
 pub fn profile::Trace::with_progress(self, Snapshot) -> Self
 pub fn profile::Trace::write_json(&self, &mut impl core::fmt::Write) -> core::fmt::Result
+pub fn profile::Trace::diagnose(&self, &diagnostics::Options) -> alloc::vec::Vec<diagnostics::Finding>
 pub trait profile::Clock: core::marker::Send + core::marker::Sync
 pub fn profile::Clock::now(&self) -> core::time::Duration
 
-## trait impls (11 types)
+## trait impls (17 types)
 
 alloc::sync::Arc<C>: profile::Clock
+diagnostics::DiagnosticPulse<'_>: enough::Stop, how_far::Report, how_far::pulse::Pulse
+diagnostics::Finding: Clone, Debug, Display
+diagnostics::Kind: Clone, Copy, Debug, Eq, PartialEq
+diagnostics::Options: Clone, Debug, Default
 profile::Instrumented<T>: Clone, enough::Stop, how_far::Report
 profile::Overlap: Clone, Debug, PartialEq
 profile::Profiler: Clone
+profile::ReportGap: Clone, Debug
 profile::SiteStats: Clone, Debug
+profile::SourceSite: Clone, Copy, Debug, Eq, PartialEq
 profile::Span: Drop
 profile::SpanKind: Clone, Copy, Debug, Eq, PartialEq
 profile::SpanRecord: Clone, Debug
@@ -121,7 +166,8 @@ profile::Trace: Clone, Debug, Display
 
 ## auto traits
 
-7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+12 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+diagnostics::DiagnosticPulse<'a>: !Freeze !RefUnwindSafe !UnwindSafe
 profile::Instrumented<T>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 profile::Profiler: !RefUnwindSafe !UnwindSafe
 profile::Span: !RefUnwindSafe !UnwindSafe

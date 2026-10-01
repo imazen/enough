@@ -10,6 +10,8 @@
 extern crate alloc;
 pub use enough::{Stop, StopReason, Unstoppable};
 pub use how_far::{IgnoreProgress, ProgressExt, Report};
+#[cfg(feature = "diagnostics")]
+pub mod diagnostics;
 pub mod ext;
 mod json;
 pub mod poll;
