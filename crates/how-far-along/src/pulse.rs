@@ -174,14 +174,22 @@ impl Report for TreePulse {
         if completed == 0 {
             return;
         }
-        match self.activity.compare_exchange(
-            UNPLANNED,
-            COUNTING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) | Err(COUNTING) => self.reporter.advance(completed),
-            Err(_) => {} // A branch or finished phase does not count units.
+        // A counting leaf stays counting until it finishes, so a load settles
+        // every report after the first; only the first needs the exchange
+        // that claims the phase as a leaf. A branch or finished phase does
+        // not count units.
+        if self.activity.load(Ordering::Acquire) == COUNTING
+            || matches!(
+                self.activity.compare_exchange(
+                    UNPLANNED,
+                    COUNTING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ),
+                Ok(_) | Err(COUNTING)
+            )
+        {
+            self.reporter.advance(completed);
         }
     }
     fn may_report(&self) -> bool {

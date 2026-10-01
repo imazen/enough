@@ -464,7 +464,11 @@ impl Report for Reporter {
         if completed == 0 || self.node.branch.load(Ordering::Relaxed) {
             return;
         }
-        self.node.issued.store(true, Ordering::Relaxed);
+        // Store only once, so workers sharing a phase do not keep taking
+        // its cache line for a flag that is already set.
+        if !self.node.issued.load(Ordering::Relaxed) {
+            self.node.issued.store(true, Ordering::Relaxed);
+        }
         match self.node.state.load(Ordering::Acquire) {
             2 => return,
             0 => {
