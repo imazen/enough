@@ -49,7 +49,7 @@ jobs:
 
       - name: Test at the 1.85 MSRV (how-far-along needs 1.88)
         if: matrix.rust == '1.85'
-        run: cargo test --workspace --exclude how-far-along
+        run: cargo test --workspace --exclude how-far-along --exclude test-how-far-app
 
       - name: Test (no default features)
         run: |
