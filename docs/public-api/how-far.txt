@@ -34,7 +34,7 @@ pub use StopReason
 pub use Unstoppable
 pub mod prelude
 pub use prelude::Stop
-pub fn prelude::ProgressExt::gated(&self) -> core::option::Option<&Self>
+pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub fn prelude::Pulse::handle(&self) -> PulseHandle
@@ -103,7 +103,7 @@ pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOn
 pub trait ChildPulse: Pulse
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]
-pub fn ProgressExt::gated(&self) -> core::option::Option<&Self>
+pub fn ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub trait Pulse: enough::Stop + Report [also: prelude]

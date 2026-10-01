@@ -68,7 +68,7 @@ pub use stages::{RunError, Stages};
 /// The traits whose methods library code calls: `use how_far::prelude::*;`.
 ///
 /// Trait methods need their trait in scope. `&dyn Pulse` brings its own, but
-/// values such as [`ProgressExt::gated`]'s `Option` or a [`PulseHandle`] need
+/// values such as [`ProgressExt::live`]'s `Option` or a [`PulseHandle`] need
 /// `Stop`, `Report` and `ProgressExt` imported to call `check`, `advance` and
 /// `step`.
 pub mod prelude {

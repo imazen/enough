@@ -157,7 +157,7 @@ compiler cannot inline forces the loop's live values out of caller-saved
 registers, dynamic or not. The fix is cadence, not dispatch:
 
 - Check once per row, block, or tile, not per pixel or byte.
-- Gate no-op pulses. `let pulse = pulse.gated();` gives an
+- Gate no-op pulses. `let pulse = pulse.live();` gives an
   `Option<&dyn Pulse>`, still two words, whose `check()`, `advance()` and
   `step()` make no call at all when the pulse neither stops nor reports, as
   with `NoPulse`. Bring the methods into scope with `use how_far::prelude::*;`.

@@ -14,7 +14,7 @@
   sequential plans; owned `Child` handles make finishing a phase owner-only and
   once-only, so libraries built on `Stages` can call one another;
   `Pulse::handle` gives `'static` code an owned stop and counter; and
-  `ProgressExt::gated` plus `how_far::prelude` make a hot loop's checkpoints
+  `ProgressExt::live` plus `how_far::prelude` make a hot loop's checkpoints
   free when nobody listens (a967c21, c421c45, fc36c54).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with

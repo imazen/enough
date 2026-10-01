@@ -15,7 +15,8 @@ benchmark and waits 30 s per round; interleaved rounds and paired statistics
 still protect comparisons within a group. Three runs follow: run A is the
 bench without the gated variants, run B adds them written out as
 `(pulse.may_stop() || pulse.may_report()).then_some(pulse)`, and run C is the
-bench as committed, which calls `ProgressExt::gated` (that same expression).
+bench calling the method form of that expression (`ProgressExt::live`, then
+named `gated`).
 Times are per benchmark call: 10,000 calls in the isolated groups, one 256 KiB
 buffer in the loop groups.
 
@@ -50,7 +51,7 @@ is: the defilter itself ran at different speeds in the two builds, while the
 added cost per checkpoint stayed between 1.6 and 3.1 ns. Checking once per few
 kilobytes of work keeps a live tree within about 2%.
 
-A library can gate its calls: `pulse.gated()` gives an `Option<&dyn Pulse>`
+A library can gate its calls: `pulse.live()` gives an `Option<&dyn Pulse>`
 whose `check` and `step` make no call at all for `NoPulse`. That gated loop
 took 16.0 µs (run B) and 16.7 µs (run C) against 17.2 and 17.5 µs for a
 monomorphized `impl Pulse` loop over `NoPulse`, so the no-observer path costs

@@ -545,10 +545,10 @@ fn a_tree_shares_its_stop_policy_with_every_phase_and_handle() {
 fn gating_a_tree_follows_what_it_can_still_do() {
     // A never-stopping leaf still counts, so it stays.
     let tree = PulseTree::new(Phase::new("job", Total::Unknown), Unstoppable);
-    assert!(tree.gated().is_some());
+    assert!(tree.live().is_some());
     // A failed split leaves it a counting leaf.
     assert!(tree.split(Execution::Sequence, &[]).is_err());
-    assert!(tree.may_report() && tree.gated().is_some());
+    assert!(tree.may_report() && tree.live().is_some());
     // Once split, a never-stopping branch can do nothing: gate it away.
     let [child] = tree
         .split_array(
@@ -557,9 +557,9 @@ fn gating_a_tree_follows_what_it_can_still_do() {
         )
         .unwrap();
     assert!(!tree.may_report());
-    assert!(tree.gated().is_none());
-    assert!(child.gated().is_some());
-    child.gated().step(1).unwrap();
+    assert!(tree.live().is_none());
+    assert!(child.live().is_some());
+    child.live().step(1).unwrap();
     child.finish(Outcome::Succeeded).unwrap();
     tree.finish(Outcome::Succeeded).unwrap();
 
@@ -574,6 +574,6 @@ fn gating_a_tree_follows_what_it_can_still_do() {
             &[PhaseSpec::new("child", 1, Total::Exact(1))],
         )
         .unwrap();
-    assert!(stoppable.gated().is_some());
+    assert!(stoppable.live().is_some());
     drop(children);
 }

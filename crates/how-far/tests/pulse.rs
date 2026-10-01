@@ -179,11 +179,11 @@ fn gating_drops_only_pulses_that_can_neither_stop_nor_report() {
     }
 
     let inert: &dyn Pulse = &NoPulse;
-    assert!(inert.gated().is_none());
-    assert!(NoPulse.gated().is_none());
+    assert!(inert.live().is_none());
+    assert!(NoPulse.live().is_none());
     assert!(
         ProgressWithStop::new(Unstoppable, NoReport)
-            .gated()
+            .live()
             .is_none()
     );
     let [child] = NoPulse
@@ -192,24 +192,24 @@ fn gating_drops_only_pulses_that_can_neither_stop_nor_report() {
             [PhaseSpec::new("child", 1, Total::Unknown)],
         )
         .unwrap();
-    assert!(child.gated().is_none());
+    assert!(child.live().is_none());
     // `None` checks and steps like the original, without a call.
-    let gated = inert.gated();
-    gated.check().unwrap();
-    gated.advance(5);
-    gated.step(5).unwrap();
-    assert!(!gated.may_stop() && !gated.may_report());
+    let live = inert.live();
+    live.check().unwrap();
+    live.advance(5);
+    live.step(5).unwrap();
+    assert!(!live.may_stop() && !live.may_report());
 
     let count = Count(AtomicU64::new(0));
     let counting = ProgressWithStop::new(Unstoppable, &count);
-    let gated = counting.gated();
-    assert!(gated.is_some());
-    gated.step(3).unwrap();
-    gated.advance(2);
+    let live = counting.live();
+    assert!(live.is_some());
+    live.step(3).unwrap();
+    live.advance(2);
     assert_eq!(count.0.load(Ordering::Relaxed), 5);
 
     let stopping = ProgressWithStop::new(Stopping, NoReport);
-    assert_eq!(stopping.gated().check(), Err(StopReason::Cancelled));
+    assert_eq!(stopping.live().check(), Err(StopReason::Cancelled));
 }
 
 #[test]
@@ -218,10 +218,10 @@ fn the_prelude_brings_every_checkpoint_method_into_scope() {
         use how_far::prelude::*;
 
         pub fn run(pulse: &dyn Pulse) -> Result<(), how_far::StopReason> {
-            let gated = pulse.gated();
-            gated.check()?;
-            gated.advance(1);
-            gated.step(1)?;
+            let live = pulse.live();
+            live.check()?;
+            live.advance(1);
+            live.step(1)?;
             let handle = pulse.handle();
             handle.check()?;
             handle.advance(1);

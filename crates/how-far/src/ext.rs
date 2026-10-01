@@ -19,7 +19,8 @@ pub trait ProgressExt: Stop + Report {
         self.check()
     }
 
-    /// This value, or `None` when it can neither stop nor report.
+    /// The live pulse: this value, or `None` when it can neither stop nor
+    /// report.
     ///
     /// Call it once before a hot loop. `Option<&P>` implements `Stop` and
     /// `Report`, so `check`, `advance` and `step` work on the result: they
@@ -32,7 +33,7 @@ pub trait ProgressExt: Stop + Report {
     /// use how_far::prelude::*;
     ///
     /// fn decode(rows: &[Vec<u8>], pulse: &dyn Pulse) -> Result<u64, how_far::StopReason> {
-    ///     let pulse = pulse.gated();
+    ///     let pulse = pulse.live();
     ///     pulse.check()?;
     ///     let mut sum = 0;
     ///     for row in rows {
@@ -42,11 +43,11 @@ pub trait ProgressExt: Stop + Report {
     ///     Ok(sum)
     /// }
     ///
-    /// assert!(how_far::NoPulse.gated().is_none());
+    /// assert!(how_far::NoPulse.live().is_none());
     /// assert_eq!(decode(&[vec![1, 2], vec![3]], &how_far::NoPulse), Ok(6));
     /// ```
     #[inline]
-    fn gated(&self) -> Option<&Self> {
+    fn live(&self) -> Option<&Self> {
         (self.may_stop() || self.may_report()).then_some(self)
     }
 

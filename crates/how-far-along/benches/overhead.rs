@@ -60,11 +60,11 @@ fn decode_generic<P: Pulse>(buf: &mut [u8], chunk: usize, pulse: &P) -> Result<(
     Ok(())
 }
 
-/// The `&dyn` loop gated with `ProgressExt::gated`: no calls at all when the
+/// The `&dyn` loop gated with `ProgressExt::live`: no calls at all when the
 /// pulse neither stops nor reports.
 #[inline(never)]
-fn decode_gated(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
-    let pulse = pulse.gated();
+fn decode_live(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
+    let pulse = pulse.live();
     pulse.check()?;
     for part in buf.chunks_mut(chunk) {
         sub_defilter(part);
@@ -239,7 +239,7 @@ fn main() {
             group.bench("gated &dyn Pulse → NoPulse", |b| {
                 let mut work = make_buf();
                 b.iter(|| {
-                    let _ = decode_gated(&mut work, 256, &NoPulse);
+                    let _ = decode_live(&mut work, 256, &NoPulse);
                     zenbench::black_box(&work);
                 })
             });
@@ -247,7 +247,7 @@ fn main() {
                 let pulse = tree(Stopper::new());
                 let mut work = make_buf();
                 b.iter(|| {
-                    let _ = decode_gated(&mut work, 256, &pulse);
+                    let _ = decode_live(&mut work, 256, &pulse);
                     zenbench::black_box(&work);
                 })
             });
