@@ -106,7 +106,10 @@ again for the generic `how-far` code compiled into the library itself.
 `how-far` gains a feature, a build script, or a dependency other than
 `enough`, or if one `Stages::run_*` call site adds more than 120 lines of
 `how-far`'s unoptimized LLVM IR to the caller's crate (81 with rustc
-1.98.1, 91 with 1.88).
+1.98.1, 91 with 1.88). It also fails if `how-far-along` itself compiles to
+more than 18,000 lines of unoptimized IR with default features (15,530 with
+1.98.1, 16,722 with 1.88; 19,048 before the reductions below) or 55,000 with
+`diagnostics` (43,748 and 45,976; 85,667 before).
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
@@ -117,6 +120,8 @@ rustc 1.98.1, medians of five, in millions:
 | --- | ---: | ---: | ---: |
 | An empty `no_std` crate | 14.2 | 16.4 | 19.1 |
 | `how-far` | 161.3 | 312.6 | 399.4 |
+| `how-far-along`, default features | 315.2 | 846.2 | 1816.9 |
+| `how-far-along` with `diagnostics` | 747.3 | 2243.1 | 5986.7 |
 | A plain function call, per call site | 4.5 | 8.1 | 45.5 |
 | A `Stages::run_stoppable` call site | 5.6 | 12.2 | 59.6 |
 
@@ -132,6 +137,31 @@ added 312 lines of IR and cost 16.7 and 70.5 million instructions in debug
 and release builds; `how-far` itself cost 161.1, 302.8 and 382.0. The
 reasoning is in [the design notes](how-far-design.md#compile-time-cost).
 
+`how-far-along` is what applications and tests compile. Before its analysis
+code moved from iterator adapters and per-type sorts to loops and one merge
+sort, it cost 322.8, 1004.0 and 2275.1 million instructions with default
+features, 566.0, 1825.6 and 4872.4 with `profile`, and 798.6, 3609.2 and
+12669.4 with `diagnostics`; with `profile` it now costs 561.8, 1517.6 and
+3537.8.
+
 Reproduce with `python3 dev/bench-how-far-build.py --runs 5`.
+
+### In a real library
+
+`dev/bench-how-far-adopter.py` builds
+[zenresize](https://github.com/imazen/zenresize) before and after it adopted
+`how-far`, against this checkout. On 2026-10-01
+([results](../benchmarks/how-far-adopter-2026-10-01.md)):
+
+- A clean build of zenresize's dependency graph took the same time either way
+  (7.0 s debug, 6.8 s release). `how-far` finished 0.2 to 0.3 s in, while
+  zenresize itself could not start before 4.9 s.
+- zenresize's own compile grew by 1.1% to check and under 0.2% to build.
+- Its resize methods are generic, so they compile in the caller's crate. A
+  caller of the new `Pulse` API compiled 146 million more instructions in
+  debug and 209 million more in release than one calling the old `Stop` API.
+  About a third of that is `how-far`'s `Stages`; the rest is zenresize's own
+  pulse path, mostly a second copy of its row loop made by a helper generic
+  over its report sink.
 
 Runtime cost is in [the overhead results](../benchmarks/how-far-overhead.md).
