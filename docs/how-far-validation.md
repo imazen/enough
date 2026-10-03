@@ -175,5 +175,9 @@ does. [The 2026-10-01 counts](../benchmarks/how-far-checkpoint-cost-2026-10-01.m
 put a paced step at about 5 instructions and 1 cycle, a plain `step` into a
 live tree at about 58 and 16, a step through a stage at about 47
 instructions, and a live tree's three-stage plan at about 6,800 instructions
-per operation. Wall-time results from zenbench are in
-[the overhead results](../benchmarks/how-far-overhead.md).
+per operation. `measure.py matrix` crosses report sinks (none, a tree
+counter, a report callback) with stop policies (`Unstoppable`, an `AtomicBool`,
+a stop callback); [its 2026-10-03 counts](../benchmarks/how-far-checkpoint-matrix-2026-10-03.md)
+put a `step` checkpoint at 14 to 65 instructions depending on what the pulse
+does, and a `Paced` step at about 5 whatever it does. Wall-time results from
+zenbench are in [the overhead results](../benchmarks/how-far-overhead.md).

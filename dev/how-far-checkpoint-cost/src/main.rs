@@ -3,9 +3,12 @@
 //!
 //! usage: how-far-checkpoint-cost VARIANT CHUNK ITERATIONS (buffer size from
 //! `BUF`, 256 KiB by default)
-use almost_enough::Stopper;
+use almost_enough::{FnStop, Stopper};
 use how_far::prelude::*;
-use how_far::{NoPulse, Outcome, PhaseSpec, RunError, Stages, StopReason};
+use how_far::{
+    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, PulseHandle, RunError,
+    Stages, StopReason, Unstoppable,
+};
 use how_far_along::{Phase, PulseTree, Total};
 use std::hint::black_box;
 
@@ -112,11 +115,142 @@ fn operation_none(buf: &mut [u8], chunk: usize) {
     }
 }
 
+// ── Report × stop matrix ─────────────────────────────────────────────────────
+
+/// One stop policy and one report sink behind the same `&dyn Pulse` shell, so
+/// matrix variants differ only in what the stop and the report do.
+struct Combo<S, R> {
+    stop: S,
+    report: R,
+}
+impl<S: Stop, R: Report> Stop for Combo<S, R> {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        self.stop.check()
+    }
+    #[inline]
+    fn may_stop(&self) -> bool {
+        self.stop.may_stop()
+    }
+}
+impl<S: Stop, R: Report> Report for Combo<S, R> {
+    #[inline]
+    fn advance(&self, completed: u64) {
+        self.report.advance(completed);
+    }
+    #[inline]
+    fn may_report(&self) -> bool {
+        self.report.may_report()
+    }
+}
+impl<S: Stop, R: Report> Pulse for Combo<S, R> {
+    fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
+        Err(PlanError::Unsupported)
+    }
+    fn handle(&self) -> PulseHandle {
+        PulseHandle::default()
+    }
+}
+
+/// A report callback as an application installs one: boxed, so every report
+/// is an indirect call into user code (here a cold function doing nothing).
+struct CallbackReport(Box<dyn Fn(u64) + Send + Sync>);
+impl Report for CallbackReport {
+    fn advance(&self, completed: u64) {
+        (self.0)(completed);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn report_callback(completed: u64) {
+    black_box(completed);
+}
+
+#[cold]
+#[inline(never)]
+fn stop_callback() -> bool {
+    black_box(false)
+}
+
+type StopCallback = FnStop<Box<dyn Fn() -> bool + Send + Sync>>;
+fn callback_stop() -> StopCallback {
+    FnStop::new(Box::new(stop_callback))
+}
+
+/// A live counter: the reporter of a tree phase that stays open.
+fn counter() -> how_far_along::Reporter {
+    let phase = Phase::new("bench", Total::Unknown);
+    let reporter = phase.reporter();
+    std::mem::forget(phase); // Finishing or dropping it would end the counting.
+    reporter
+}
+
+fn matrix_pulse(report: &str, stop: &str) -> Box<dyn Pulse> {
+    fn with<R: Report + 'static>(report: R, stop: &str) -> Box<dyn Pulse> {
+        match stop {
+            "none" => Box::new(Combo {
+                stop: Unstoppable,
+                report,
+            }),
+            "flag" => Box::new(Combo {
+                stop: Stopper::new(),
+                report,
+            }),
+            "call" => Box::new(Combo {
+                stop: callback_stop(),
+                report,
+            }),
+            _ => panic!("unknown stop {stop}"),
+        }
+    }
+    match report {
+        "none" => with(NoReport, stop),
+        "count" => with(counter(), stop),
+        "call" => with(CallbackReport(Box::new(report_callback)), stop),
+        _ => panic!("unknown report {report}"),
+    }
+}
+
+fn tree_pulse(stop: &str) -> Box<dyn Pulse> {
+    let phase = Phase::new("bench", Total::Unknown);
+    match stop {
+        "none" => Box::new(PulseTree::new(phase, Unstoppable)),
+        "flag" => Box::new(PulseTree::new(phase, Stopper::new())),
+        "call" => Box::new(PulseTree::new(phase, callback_stop())),
+        _ => panic!("unknown stop {stop}"),
+    }
+}
+
+/// `m-STYLE-REPORT-STOP` (the matrix shell) or `t-STYLE-STOP` (a `PulseTree`).
+fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
+    let parts: Vec<&str> = variant.split('-').collect();
+    let (style, pulse) = match parts.as_slice() {
+        ["m", style, report, stop] => (*style, matrix_pulse(report, stop)),
+        ["t", style, stop] => (*style, tree_pulse(stop)),
+        _ => return false,
+    };
+    for _ in 0..iters {
+        let result = match style {
+            "step" => step(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
+            "live" => live(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
+            "paced" => paced(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
+            _ => panic!("unknown style {style}"),
+        };
+        black_box(result).unwrap();
+    }
+    true
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (variant, chunk, iters) = (args[1].as_str(), args[2].parse().unwrap(), args[3].parse::<u64>().unwrap());
     let size = std::env::var("BUF").map_or(BUF, |b| b.parse().unwrap());
     let mut buf: Vec<u8> = (0..size).map(|i| (i.wrapping_mul(0x9E37_79B9) >> 24) as u8).collect();
+    if run_matrix(variant, &mut buf, chunk, iters) {
+        black_box(&buf);
+        return;
+    }
     let tree = PulseTree::new(Phase::new("bench", Total::Unknown), Stopper::new());
     let (kind, target) = variant.split_once('-').unwrap_or((variant, ""));
     let pulse: &dyn Pulse = if target == "tree" { &tree } else { &NoPulse };
