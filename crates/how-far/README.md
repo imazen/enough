@@ -50,7 +50,7 @@ pub fn thumbnail(rows: &[Vec<u8>], pulse: &dyn Pulse) -> Result<Vec<u8>, RunErro
     Ok(resized)
 }
 
-// Callers that don't care pass `NoPulse`, which costs nothing.
+// Callers that don't care pass `&NoPulse`, which checkpoints skip without a call.
 let _pixels = thumbnail(&vec![vec![8; 16]; 4], &how_far::NoPulse)?;
 # Ok::<(), RunError<StopReason>>(())
 ```
@@ -150,9 +150,18 @@ sizes are asserted at compile time on 32- and 64-bit targets:
 | Value | Size |
 | --- | --- |
 | `&dyn Pulse`, `Child`, `Box<dyn Pulse>` | 2 words |
+| `Paced` | 2 words + 16 bytes |
 | `Result<(), StopReason>`, `Outcome` | 1 byte |
 | `PulseHandle` | 4 words |
-| `NoPulse`, `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
+| `NoPulse`, one static | 1 byte |
+| `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
+
+When nobody listens, steps cost nothing. There is exactly one `NoPulse`, a
+static, and `step`, `live()` and `Paced` recognize it by its address, so a
+loop that steps on every iteration compiles to the bare loop: the one test
+moves out of it. Where it cannot move, the test is two comparisons and no call.
+Children and stages planned under `NoPulse` are the same static. A bare
+`check()` through `&dyn Pulse` still makes one call.
 
 `&dyn` does not stop a hot loop from spilling registers: any call the
 compiler cannot inline forces the loop's live values out of caller-saved
@@ -161,25 +170,25 @@ registers, dynamic or not. The fix is cadence, not dispatch:
 - Pace checkpoints. `let mut pace = pulse.paced(64 * 1024);` counts each
   `pace.step(n)?` in a local and reaches the pulse once per 64 Ki units: it
   reports them, then checks for cancellation. A step that does not reach the
-  pulse is an addition and a comparison. Choose the interval so the work
+  pulse is a subtraction and a branch. Choose the interval so the work
   between reaches takes at least a microsecond, and no longer than the
   cancellation latency you need. Give each worker its own.
-- Gate no-op pulses where pacing does not fit. `let pulse = pulse.live();`
+- Gate other no-op pulses where pacing does not fit. `let pulse = pulse.live();`
   gives an `Option<&dyn Pulse>`, still two words, whose `check()`,
   `advance()` and `step()` make no call at all when the pulse neither stops
-  nor reports, as with `NoPulse`. Bring the methods into scope with
-  `use how_far::prelude::*;`.
+  nor reports. Bring the methods into scope with `use how_far::prelude::*;`.
 - Otherwise check once per row, block, or tile, not per pixel or byte.
 
-Counted with perf on one machine (a Ryzen 9 5900XT), a checkpoint into a live
-tree costs about 58 instructions and 16 cycles with `step`, and about 5
-instructions and 1 cycle with `Paced`. On a 256 KiB PNG-style defilter checked
-every 256 bytes, that is 13.0% more instructions with `step` and 1.2% with
-`Paced`; every 4 KiB, 0.94% and 0.18%. Unobserved, `live()` adds nothing and
-`Paced` 5 instructions per step. A three-stage `Stages` plan adds about 850
-instructions per operation with `NoPulse` and about 6,800 with a live tree, so
-a live tree costs under 1% of operations longer than about 70 µs. The
-[perf counts](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md)
+Counted with perf on one machine (a Ryzen 9 5900XT, rustc 1.99), a checkpoint
+into a live tree costs about 56 instructions with `step` and about 2 with
+`Paced`. On a 256 KiB PNG-style defilter checked every 256 bytes, that is
+13.9% more instructions with `step` and 0.6% with `Paced`; every 4 KiB, 0.92%
+and 0.13%. With `&NoPulse`, `step`, `live()` and `Paced` add no instructions.
+A three-stage `Stages` plan adds about 870 instructions per operation with
+`NoPulse` and about 7,000 with a live tree, so a live tree costs under 1% of
+operations longer than about 70 µs. The perf counts
+([2026-10-03](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-nopulse-2026-10-03.md),
+[2026-10-01](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md))
 and earlier [wall-time results](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
 are committed.
 
@@ -191,7 +200,7 @@ the caller's crate; CI fails if that grows. See the
 
 ## No-op and count-only use
 
-`NoPulse` never stops, discards reports, and still validates plans, so
+`&NoPulse` never stops, discards reports, and still validates plans, so
 planning mistakes surface even when nobody watches. Algorithms that only
 count can accept `impl Report` instead; `NoReport` discards counts, and
 references, `Box`, `Arc`, and `Option` forward them. `ProgressWithStop`

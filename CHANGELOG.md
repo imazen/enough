@@ -19,10 +19,12 @@
   `&dyn Pulse` compiles once whatever pulse is passed, a `Stages::run_*` call
   site adds 81 lines of IR to the caller's crate, and CI guards both
   (ecf2e72). `pulse.paced(every)` counts in a local and reaches the pulse once
-  per `every` units, so a checkpoint costs about 5 instructions instead of 58
-  (d3797cf). With Rust 1.86 trait upcasting, `Stages` hands each stage its own
-  pulse, and a `&dyn Pulse` passes as a `&dyn Stop` or `&dyn Report`
-  (c398ed3).
+  per `every` units, so a checkpoint costs about 2 instructions instead of 58
+  (d3797cf, 47c7e9c). `NoPulse` is one static that `step`, `live()` and
+  `Paced` recognize by its address, so a loop stepping into `&NoPulse`
+  compiles to the bare loop; a `step` into it was 14 instructions (e14e223).
+  With Rust 1.86 trait upcasting, `Stages` hands each stage its own pulse,
+  and a `&dyn Pulse` passes as a `&dyn Stop` or `&dyn Report` (c398ed3).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span

@@ -106,11 +106,12 @@ again for the generic `how-far` code compiled into the library itself.
 `dev/bench-how-far-build.py` measures both and runs in CI. It fails if
 `how-far` gains a feature, a build script, or a dependency other than
 `enough`, or if one `Stages::run_*` call site adds more than 120 lines of
-`how-far`'s unoptimized LLVM IR to the caller's crate (81 with rustc
-1.98.1, 91 with 1.88). It also fails if `how-far-along` itself compiles to
-more than 18,000 lines of unoptimized IR with default features (15,530 with
-1.98.1, 16,722 with 1.88; 19,048 before the reductions below) or 55,000 with
-`diagnostics` (43,748 and 45,976; 85,667 before).
+`how-far`'s unoptimized LLVM IR to the caller's crate (64 with rustc
+1.99.0 on 2026-10-03, 81 with 1.98.1, 91 with 1.88). It also fails if
+`how-far-along` itself compiles to more than 18,000 lines of unoptimized IR
+with default features (15,773 with 1.99.0, 15,530 with 1.98.1, 16,722 with
+1.88; 19,048 before the reductions below) or 55,000 with `diagnostics`
+(43,691, 43,748 and 45,976; 85,667 before).
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
@@ -179,5 +180,11 @@ per operation. `measure.py matrix` crosses report sinks (none, a tree
 counter, a report callback) with stop policies (`Unstoppable`, an `AtomicBool`,
 a stop callback); [its 2026-10-03 counts](../benchmarks/how-far-checkpoint-matrix-2026-10-03.md)
 put a `step` checkpoint at 14 to 65 instructions depending on what the pulse
-does, and a `Paced` step at about 5 whatever it does. Wall-time results from
-zenbench are in [the overhead results](../benchmarks/how-far-overhead.md).
+does, and a `Paced` step at about 5 whatever it does. Since `NoPulse` became
+one static that checkpoints recognize by its address,
+[the `&NoPulse` counts](../benchmarks/how-far-checkpoint-nopulse-2026-10-03.md)
+leave no checkpoint code in a loop stepping into `&NoPulse` with `step`,
+`live()` or `Paced` (`step` was 14 instructions), and put a paced step into a
+live pulse at about 2 and a plain `step` into a live tree at about 56.
+Wall-time results from zenbench are in
+[the overhead results](../benchmarks/how-far-overhead.md).
