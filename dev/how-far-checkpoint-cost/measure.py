@@ -14,8 +14,8 @@ Two tables:
 `measure.py matrix [CHUNKS]` instead crosses report sinks (none, a tree
 counter, a boxed callback) with stop policies (`Unstoppable`, an `AtomicBool`
 `Stopper`, an `FnStop` calling a boxed callback) behind one `&dyn Pulse`
-shell, for `step`, `live()` and `Paced`, plus a `PulseTree` with each stop
-and `&NoPulse` itself. Callbacks are cold functions that do nothing, so the
+shell, for `step`, `live()`, `Paced` and a bare `check()` per chunk, plus a
+`PulseTree` with each stop, `&NoPulse` itself, and `FnPulse`. Callbacks are cold functions that do nothing, so the
 grids show what reaching them costs, not what they do.
 
 Every variant calls the same `#[inline(never)]` defilter, so all run the same
@@ -62,7 +62,7 @@ def sample(variants, chunk, size):
     return samples
 
 
-STYLES = ["step", "live", "paced"]
+STYLES = ["step", "live", "paced", "check"]
 REPORTS = [("none", "no report"), ("count", "tree counter"), ("call", "report callback")]
 STOPS = [("none", "`Unstoppable`"), ("flag", "`AtomicBool`"), ("call", "stop callback")]
 

@@ -43,6 +43,16 @@ fn step(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReaso
     Ok(())
 }
 
+/// Checks for cancellation on every chunk and never reports.
+#[inline(never)]
+fn check(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
+    for part in buf.chunks_mut(chunk) {
+        sub_defilter(part);
+        pulse.check()?;
+    }
+    Ok(())
+}
+
 #[inline(never)]
 fn live(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
     let pulse = pulse.live();
@@ -216,7 +226,7 @@ fn matrix_pulse(report: &str, stop: &str) -> Box<dyn Pulse> {
 /// nothing, so the numbers are the cost of reaching it.
 #[cold]
 #[inline(never)]
-fn fn_callback(progress: &Progress<'_>) -> Result<(), StopReason> {
+fn fn_callback(progress: Option<&Progress<'_>>) -> Result<(), StopReason> {
     black_box(progress);
     Ok(())
 }
@@ -241,6 +251,7 @@ fn run_style(
         "step" => step(black_box(buf), black_box(chunk), black_box(pulse)),
         "live" => live(black_box(buf), black_box(chunk), black_box(pulse)),
         "paced" => paced(black_box(buf), black_box(chunk), black_box(pulse)),
+        "check" => check(black_box(buf), black_box(chunk), black_box(pulse)),
         _ => panic!("unknown style {style}"),
     }
 }

@@ -64,6 +64,90 @@ dependencies; nothing is compiled per call site, which costs the same as
 before. `how-far-along` now calls `PhaseSpec::validate_split` instead of its
 own copy, so its unoptimized IR shrank from 15,773 to 14,923 lines.
 
+## Checks call the callback (8075c46)
+
+After `8075c46` the callback also runs, with `None`, on every check. The
+harness gains a `check` style that calls only `pulse.check()` per chunk.
+Command: `python3 dev/how-far-checkpoint-cost/measure.py matrix 64,256,4096`,
+rustc 1.99.0, same machine, load average about 26.
+
+| Per checkpoint, 64-byte chunks | Instructions |
+| --- | ---: |
+| `check()` into `&NoPulse` | 6 |
+| `check()` into the shell with an `AtomicBool` stop | 10 |
+| `check()` into the shell with a stop callback | 18 |
+| `check()` into a `PulseTree`, `Unstoppable` / `AtomicBool` / stop callback | 14 / 18 / 26 |
+| `check()` into an `FnPulse` stage / unplanned `FnPulse` | 26 / 34 |
+| `step` into an `FnPulse` stage / unplanned `FnPulse` | 106 / 112 |
+| A `Paced` step into an `FnPulse` | 2.2 |
+
+A check into an `FnPulse` costs about as much as one into a tree whose stop
+policy is a callback, since both make one indirect call into user code. A
+`step` reports and then checks, so it calls the callback twice and costs
+about 15 instructions more than before.
+
+```text
+### One checkpoint per 64 bytes (4096 per 256 KiB)
+No checkpoints at all: 471,085 instructions, 301,103 cycles per buffer.
+`FnPulse`, no plan (one cold callback): 112.02 instructions, 56.12 cycles per checkpoint (+97.40% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.02 instructions, 54.75 cycles per checkpoint (+92.18% instructions).
+`FnPulse`, no plan (one cold callback): 112.02 instructions, 59.04 cycles per checkpoint (+97.40% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.02 instructions, 55.30 cycles per checkpoint (+92.18% instructions).
+`FnPulse`, no plan (one cold callback): 2.16 instructions, 0.48 cycles per checkpoint (+1.87% instructions).
+`FnPulse` stage, exact total (one cold callback): 2.15 instructions, 0.60 cycles per checkpoint (+1.87% instructions).
+
+`check`, extra per checkpoint, instructions / cycles:
+| | `Unstoppable` | `AtomicBool` | stop callback |
+| --- | ---: | ---: | ---: |
+| no report | 6.0 / 8.5 | 10.0 / 8.8 | 18.0 / 15.7 |
+| tree counter | 6.0 / 8.8 | 10.0 / 9.0 | 18.0 / 17.6 |
+| report callback | 6.0 / 9.4 | 10.0 / 8.9 | 18.0 / 15.7 |
+| `PulseTree` | 14.0 / 12.5 | 18.0 / 11.0 | 26.0 / 19.6 |
+`&NoPulse` (no stop, no report): 6.01 instructions, 9.11 cycles per checkpoint (+5.22% instructions).
+`FnPulse`, no plan (one cold callback): 34.01 instructions, 20.78 cycles per checkpoint (+29.57% instructions).
+`FnPulse` stage, exact total (one cold callback): 26.01 instructions, 20.64 cycles per checkpoint (+22.61% instructions).
+
+### One checkpoint per 256 bytes (1024 per 256 KiB)
+No checkpoints at all: 412,717 instructions, 293,024 cycles per buffer.
+`FnPulse`, no plan (one cold callback): 112.07 instructions, 57.14 cycles per checkpoint (+27.81% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.05 instructions, 51.67 cycles per checkpoint (+26.31% instructions).
+`FnPulse`, no plan (one cold callback): 112.07 instructions, 57.36 cycles per checkpoint (+27.81% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.06 instructions, 56.65 cycles per checkpoint (+26.32% instructions).
+`FnPulse`, no plan (one cold callback): 2.62 instructions, 1.16 cycles per checkpoint (+0.65% instructions).
+`FnPulse` stage, exact total (one cold callback): 2.58 instructions, 0.81 cycles per checkpoint (+0.64% instructions).
+
+`check`, extra per checkpoint, instructions / cycles:
+| | `Unstoppable` | `AtomicBool` | stop callback |
+| --- | ---: | ---: | ---: |
+| no report | 6.0 / 7.2 | 10.0 / 7.7 | 18.0 / 14.2 |
+| tree counter | 6.0 / 7.4 | 10.0 / 7.7 | 18.0 / 16.3 |
+| report callback | 6.0 / 7.6 | 10.0 / 7.7 | 18.0 / 14.6 |
+| `PulseTree` | 14.0 / 9.9 | 18.0 / 10.3 | 26.0 / 18.0 |
+`&NoPulse` (no stop, no report): 6.03 instructions, 7.56 cycles per checkpoint (+1.50% instructions).
+`FnPulse`, no plan (one cold callback): 34.03 instructions, 19.77 cycles per checkpoint (+8.44% instructions).
+`FnPulse` stage, exact total (one cold callback): 26.03 instructions, 19.09 cycles per checkpoint (+6.46% instructions).
+
+### One checkpoint per 4096 bytes (64 per 256 KiB)
+No checkpoints at all: 394,478 instructions, 286,826 cycles per buffer.
+`FnPulse`, no plan (one cold callback): 113.04 instructions, 80.70 cycles per checkpoint (+1.83% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.83 instructions, 77.17 cycles per checkpoint (+1.73% instructions).
+`FnPulse`, no plan (one cold callback): 113.15 instructions, 65.42 cycles per checkpoint (+1.84% instructions).
+`FnPulse` stage, exact total (one cold callback): 106.94 instructions, 75.65 cycles per checkpoint (+1.74% instructions).
+`FnPulse`, no plan (one cold callback): 11.93 instructions, 29.74 cycles per checkpoint (+0.19% instructions).
+`FnPulse` stage, exact total (one cold callback): 11.35 instructions, 19.36 cycles per checkpoint (+0.18% instructions).
+
+`check`, extra per checkpoint, instructions / cycles:
+| | `Unstoppable` | `AtomicBool` | stop callback |
+| --- | ---: | ---: | ---: |
+| no report | 6.5 / 22.9 | 10.5 / 24.3 | 18.5 / 28.0 |
+| tree counter | 6.5 / 18.1 | 10.5 / 17.8 | 18.5 / 26.5 |
+| report callback | 6.5 / 6.2 | 10.5 / 4.5 | 18.5 / 28.6 |
+| `PulseTree` | 14.5 / 10.6 | 18.5 / 16.2 | 26.5 / 28.4 |
+`&NoPulse` (no stop, no report): 6.51 instructions, 24.33 cycles per checkpoint (+0.11% instructions).
+`FnPulse`, no plan (one cold callback): 34.50 instructions, 19.96 cycles per checkpoint (+0.56% instructions).
+`FnPulse` stage, exact total (one cold callback): 26.42 instructions, 43.27 cycles per checkpoint (+0.43% instructions).
+```
+
 ## Raw output
 
 The matrix run keeps the per-checkpoint tables and the `&NoPulse` and
