@@ -14,9 +14,9 @@ Two tables:
 `measure.py matrix [CHUNKS]` instead crosses report sinks (none, a tree
 counter, a boxed callback) with stop policies (`Unstoppable`, an `AtomicBool`
 `Stopper`, an `FnStop` calling a boxed callback) behind one `&dyn Pulse`
-shell, for `step`, `live()` and `Paced`, plus a `PulseTree` with each stop.
-Callbacks are cold functions that do nothing, so the grids show what reaching
-them costs, not what they do.
+shell, for `step`, `live()` and `Paced`, plus a `PulseTree` with each stop
+and `&NoPulse` itself. Callbacks are cold functions that do nothing, so the
+grids show what reaching them costs, not what they do.
 
 Every variant calls the same `#[inline(never)]` defilter, so all run the same
 hot loop at the same address. Counts are the slope between two iteration
@@ -70,6 +70,7 @@ STOPS = [("none", "`Unstoppable`"), ("flag", "`AtomicBool`"), ("call", "stop cal
 def matrix(chunks):
     variants = ["none"] + [f"m-{style}-{r}-{s}" for style in STYLES for r, _ in REPORTS for s, _ in STOPS]
     variants += [f"t-{style}-{s}" for style in STYLES for s, _ in STOPS]
+    variants += [f"n-{style}" for style in STYLES]
     for chunk in chunks:
         samples = sample(variants, chunk, 256 * 1024)
         checkpoints = 256 * 1024 // chunk
@@ -88,6 +89,11 @@ def matrix(chunks):
                 cells = [f"{(med[variant(style, r, s), 'instructions'] - base_i) / checkpoints:.1f} / "
                          f"{(med[variant(style, r, s), 'cycles'] - base_c) / checkpoints:.1f}" for s, _ in STOPS]
                 print(f"| {label} | " + " | ".join(cells) + " |")
+            nopulse = (f"`&NoPulse` (no stop, no report): "
+                       f"{(med[f'n-{style}', 'instructions'] - base_i) / checkpoints:.2f} instructions, "
+                       f"{(med[f'n-{style}', 'cycles'] - base_c) / checkpoints:.2f} cycles per checkpoint "
+                       f"({100 * (med[f'n-{style}', 'instructions'] / base_i - 1):+.2f}% instructions).")
+            print(f"\n{nopulse}")
             print(f"\n`{style}`, overhead against no checkpoints, instructions / cycles:\n")
             print("| | " + " | ".join(label for _, label in STOPS) + " |")
             print("| --- | " + " | ".join("---:" for _ in STOPS) + " |")

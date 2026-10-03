@@ -222,19 +222,21 @@ fn tree_pulse(stop: &str) -> Box<dyn Pulse> {
     }
 }
 
-/// `m-STYLE-REPORT-STOP` (the matrix shell) or `t-STYLE-STOP` (a `PulseTree`).
+/// `m-STYLE-REPORT-STOP` (the matrix shell), `t-STYLE-STOP` (a `PulseTree`),
+/// or `n-STYLE` (`&NoPulse`, which `step` recognizes by address).
 fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
     let parts: Vec<&str> = variant.split('-').collect();
-    let (style, pulse) = match parts.as_slice() {
-        ["m", style, report, stop] => (*style, matrix_pulse(report, stop)),
-        ["t", style, stop] => (*style, tree_pulse(stop)),
+    let (style, pulse): (&str, &dyn Pulse) = match parts.as_slice() {
+        ["m", style, report, stop] => (*style, Box::leak(matrix_pulse(report, stop))),
+        ["t", style, stop] => (*style, Box::leak(tree_pulse(stop))),
+        ["n", style] => (*style, &NoPulse),
         _ => return false,
     };
     for _ in 0..iters {
         let result = match style {
-            "step" => step(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
-            "live" => live(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
-            "paced" => paced(black_box(&mut *buf), black_box(chunk), black_box(&*pulse)),
+            "step" => step(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
+            "live" => live(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
+            "paced" => paced(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
             _ => panic!("unknown style {style}"),
         };
         black_box(result).unwrap();
