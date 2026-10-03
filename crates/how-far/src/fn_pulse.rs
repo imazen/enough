@@ -4,7 +4,7 @@ use crate::{
     Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressWithStop, Pulse,
     PulseHandle, Report, Total,
 };
-use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     fmt,
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
@@ -123,9 +123,8 @@ struct Node {
     /// multiplication instead of a division.
     rate: u128,
     total: Total,
-    /// The name followed by the units, in one allocation.
-    labels: Box<str>,
-    name_len: usize,
+    name: Box<str>,
+    units: Box<str>,
     completed: AtomicU64,
     state: AtomicU8,
     /// Children not yet finished.
@@ -141,9 +140,6 @@ impl Node {
         share: u64,
         part: &PhaseSpec<'_>,
     ) -> Self {
-        let mut labels = String::with_capacity(part.name.len() + part.units.len());
-        labels.push_str(part.name);
-        labels.push_str(part.units);
         let cap = match part.total {
             Total::Exact(total) | Total::Estimated(total) => total,
             Total::Unknown => 0,
@@ -159,8 +155,8 @@ impl Node {
             cap,
             rate,
             total: part.total,
-            labels: labels.into_boxed_str(),
-            name_len: part.name.len(),
+            name: Box::from(part.name),
+            units: Box::from(part.units),
             completed: AtomicU64::new(0),
             state: AtomicU8::new(FRESH),
             running: AtomicUsize::new(0),
@@ -188,11 +184,10 @@ impl Node {
             return;
         }
         let done = shared.done.load(Ordering::Relaxed).min(SCALE);
-        let (phase, units) = self.labels.split_at(self.name_len);
         let progress = Progress {
             fraction: done as f64 / SCALE as f64,
-            phase,
-            units,
+            phase: &self.name,
+            units: &self.units,
             completed,
             total: self.total,
             outcome,
