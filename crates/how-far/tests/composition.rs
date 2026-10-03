@@ -82,9 +82,7 @@ impl Report for Recorder {
 
 impl Pulse for Recorder {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        if parts.is_empty() || parts.iter().any(|part| part.weight == 0) {
-            return Err(PlanError::EmptyOrZeroWeight);
-        }
+        PhaseSpec::validate_split(parts)?;
         Ok(parts
             .iter()
             .map(|part| {

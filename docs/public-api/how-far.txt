@@ -6,15 +6,15 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 122 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 124 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)        20
-#   pub consts/statics                          6
+#   pub consts/statics                          7
 #   free functions                              8
-#   inherent methods                           29
+#   inherent methods                           30
 #   struct fields                               8
 #   enum variants                              24
 #   re-exports                                  4
@@ -23,10 +23,10 @@
 #   auto-trait exceptions                       5
 #
 # per-module pub lines:
-#   (root)                           90
+#   (root)                           92
 #   prelude                          11
 
-## items (94 lines)
+## items (96 lines)
 
 pub mod how_far
 pub use Stop
@@ -80,6 +80,7 @@ pub Total::Unknown
 pub struct Child<'a>
 pub fn Child<'_>::paced(&self, u64) -> Paced<'_>
 pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
+pub const fn Child<'a>::inert() -> Self
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
 pub struct Inert
 pub struct NoReport
@@ -97,6 +98,7 @@ pub PhaseSpec::weight: u64
 pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
 pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
 pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
+pub fn PhaseSpec<'a>::validate_split(&[PhaseSpec<'_>]) -> core::result::Result<u64, PlanError>
 pub struct ProgressWithStop<S, R>
 pub ProgressWithStop::report: R
 pub ProgressWithStop::stop: S

@@ -175,22 +175,28 @@ impl<'a> PhaseSpec<'a> {
         self.execution = execution;
         self
     }
-}
 
-/// Check a split's parts the way every `Pulse` does. Plain loops keep this
-/// crate's compiled code small.
-pub(crate) fn validate(parts: &[PhaseSpec<'_>]) -> Result<(), PlanError> {
-    if parts.is_empty() {
-        return Err(PlanError::EmptyOrZeroWeight);
-    }
-    let mut sum = 0_u64;
-    for part in parts {
-        if part.weight == 0 {
+    /// Check a split's parts the way every [`Pulse::split`] must, and return
+    /// the sum of their weights.
+    ///
+    /// Fails with [`PlanError::EmptyOrZeroWeight`] for no parts or a zero
+    /// weight, and [`PlanError::Overflow`] if the weights' sum overflows. Call
+    /// it first in a `split` implementation, so every pulse rejects the same
+    /// plans with the same errors.
+    pub fn validate_split(parts: &[PhaseSpec<'_>]) -> Result<u64, PlanError> {
+        // Plain loops keep this crate's compiled code small.
+        if parts.is_empty() {
             return Err(PlanError::EmptyOrZeroWeight);
         }
-        sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
+        let mut sum = 0_u64;
+        for part in parts {
+            if part.weight == 0 {
+                return Err(PlanError::EmptyOrZeroWeight);
+            }
+            sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
+        }
+        Ok(sum)
     }
-    Ok(())
 }
 
 /// Cancellation, completed work, and nested phase planning, in one value.
@@ -209,6 +215,26 @@ pub(crate) fn validate(parts: &[PhaseSpec<'_>]) -> Result<(), PlanError> {
 ///
 /// Wrappers that add measurement or forwarding implement this trait, so it is
 /// open. Methods added in later compatible releases will have default bodies.
+///
+/// # Implementing
+///
+/// An implementation must keep these rules, which no type enforces:
+///
+/// - `check` and `advance` may run on many threads at once, and `advance` must
+///   not block. `may_stop` and `may_report` return `false` only when that can
+///   never change.
+/// - `split` starts with [`PhaseSpec::validate_split`]. It fails with
+///   [`PlanError::AlreadyInUse`] if this phase already counted work or split,
+///   and otherwise returns one [`Child::new`] per part, in order, each
+///   checking and counting like any pulse. Children from [`Child::inert`]
+///   cannot be stopped or observed, so they suit only parts nobody watches.
+/// - `handle` returns an owned handle that checks the same stop and counts
+///   into the same phase, or [`PulseHandle::default()`], documented as such.
+/// - [`ChildPulse::finish`] fails with [`PlanError::UnfinishedChildren`] while
+///   one of the child's own children is unfinished, and with
+///   [`PlanError::UnsuccessfulChildren`] for `Succeeded` or `Skipped` while
+///   one of them did not succeed. A child dropped unfinished is
+///   `Outcome::Abandoned`.
 pub trait Pulse: Stop + Report {
     /// Split this phase into weighted children, in declared order.
     ///
@@ -329,6 +355,14 @@ impl<'a> Child<'a> {
         Self {
             pulse: Some(Box::new(pulse)),
         }
+    }
+
+    /// A child like those [`NoPulse`] hands out: it never stops, discards
+    /// reports, and finishing it does nothing. Its work cannot be stopped
+    /// through it and nobody sees its progress, so return it from
+    /// [`Pulse::split`] only for parts that nobody needs to observe or stop.
+    pub const fn inert() -> Self {
+        Self { pulse: None }
     }
 
     /// Publish this child's outcome. Its parent can finish only after every
@@ -462,10 +496,10 @@ impl Report for Inert {
 
 impl Pulse for Inert {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        validate(parts)?;
+        PhaseSpec::validate_split(parts)?;
         let mut children = Vec::with_capacity(parts.len());
         for _ in parts {
-            children.push(Child { pulse: None });
+            children.push(Child::inert());
         }
         Ok(children)
     }

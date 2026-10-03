@@ -324,18 +324,7 @@ impl Phase {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Phase>, PlanError> {
         self.ensure_unused()?;
-        if parts.is_empty() {
-            return Err(PlanError::EmptyOrZeroWeight);
-        }
-        // Checked in one pass, in the order `how-far`'s `NoPulse` checks, so
-        // both report the same error for the same plan.
-        let mut sum = 0_u64;
-        for part in parts {
-            if part.weight == 0 {
-                return Err(PlanError::EmptyOrZeroWeight);
-            }
-            sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
-        }
+        PhaseSpec::validate_split(parts)?;
         let first = self
             .node
             .next_id
