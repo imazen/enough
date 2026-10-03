@@ -1,6 +1,6 @@
 //! Checkpoint helpers for every value that checks and counts.
 
-use crate::{Child, Execution, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason};
+use crate::{Child, Execution, NoPulse, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason};
 
 /// Checkpoints for anything that both checks cancellation and counts work,
 /// including `&dyn Pulse`, [`Child`], and
@@ -8,12 +8,17 @@ use crate::{Child, Execution, PhaseSpec, PlanError, Pulse, Report, Stop, StopRea
 pub trait ProgressExt: Stop + Report {
     /// Count `completed` finished units, then check for cancellation.
     ///
-    /// Work finished before a stop request is still counted. `check()` alone
-    /// stays the cheapest stop-only checkpoint; check once before a loop and
-    /// `step` after each finished unit or batch.
+    /// Work finished before a stop request is still counted. Check once
+    /// before a loop and `step` after each finished unit or batch; `check()`
+    /// alone is the stop-only checkpoint. With
+    /// [`NoPulse`](struct@crate::NoPulse), `step` makes no call: the pulse is
+    /// recognized by its address, a comparison a loop moves out of its body.
     #[inline]
     #[track_caller]
     fn step(&self, completed: u64) -> Result<(), StopReason> {
+        if is_no_pulse(self) {
+            return Ok(());
+        }
         self.advance(completed);
         self.check()
     }
@@ -21,12 +26,15 @@ pub trait ProgressExt: Stop + Report {
     /// The live pulse: this value, or `None` when it can neither stop nor
     /// report.
     ///
-    /// Call it once before a hot loop. `Option<&P>` implements `Stop` and
-    /// `Report`, so `check`, `advance` and `step` work on the result: they
-    /// forward when the pulse may stop or report, and cost a branch instead
-    /// of a call when it can do neither, as with [`NoPulse`](crate::NoPulse).
-    /// `may_stop` and `may_report` return `false` only for permanent no-ops, so
-    /// gating early never drops a report or a stop request.
+    /// [`step`](Self::step) already skips [`NoPulse`](struct@crate::NoPulse)
+    /// without a call. `live` extends that to any pulse whose `may_stop` and
+    /// `may_report` both return `false`, for the price of asking it once. Call
+    /// it once before a hot loop. `Option<&P>` implements `Stop` and `Report`,
+    /// so `check`, `advance` and `step` work on the result: they forward when
+    /// the pulse may stop or report, and cost a branch, which a loop hoists,
+    /// instead of a call when it can do neither. `may_stop` and `may_report`
+    /// return `false` only for permanent no-ops, so gating early never drops a
+    /// report or a stop request.
     ///
     /// ```
     /// use how_far::prelude::*;
@@ -47,7 +55,7 @@ pub trait ProgressExt: Stop + Report {
     /// ```
     #[inline]
     fn live(&self) -> Option<&Self> {
-        if self.may_stop() || self.may_report() {
+        if !is_no_pulse(self) && (self.may_stop() || self.may_report()) {
             Some(self)
         } else {
             None
@@ -87,6 +95,16 @@ pub trait ProgressExt: Stop + Report {
 }
 
 impl<T: Stop + Report + ?Sized> ProgressExt for T {}
+
+/// Whether `value` is the one [`NoPulse`](static@NoPulse), whatever reference
+/// it arrived as. The size rules out a zero-sized value at the same address,
+/// such as one ending another allocation. For a sized type the size is a
+/// constant, so the test compiles away unless the type is one byte.
+#[inline]
+fn is_no_pulse<T: ?Sized>(value: &T) -> bool {
+    core::ptr::addr_eq(value, &NoPulse)
+        && core::mem::size_of_val(value) == core::mem::size_of::<NoPulse>()
+}
 
 /// Kept out of `split_array`, which is instantiated for every pulse type and
 /// length it is called with.

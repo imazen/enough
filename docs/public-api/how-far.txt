@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 115 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 16 lines (16 hidden + 0 excluded-feature)
+# files: how-far.txt 116 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)        20
-#   pub consts/statics                          5
+#   pub consts/statics                          6
 #   free functions                              4
 #   inherent methods                           29
 #   struct fields                               8
 #   enum variants                              24
 #   re-exports                                  4
-#   trait roster entries (type × trait)        77
+#   trait roster entries (type × trait)        70
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       5
 #
 # per-module pub lines:
-#   (root)                           85
+#   (root)                           86
 #   prelude                          11
 
-## items (91 lines)
+## items (92 lines)
 
 pub mod how_far
 pub use Stop
@@ -106,6 +106,7 @@ pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pu
 pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub static NoPulse: NoPulse
 pub trait ChildPulse: Pulse
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]
@@ -126,7 +127,7 @@ pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dy
 &mut T: Report
 Child<'_>: Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
-NoPulse: ChildPulse, Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Pulse, Report, enough::Stop
+NoPulse: Debug, Pulse, Report, enough::Stop
 NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
 Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
 Paced<'_>: Debug, Drop

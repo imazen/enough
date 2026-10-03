@@ -255,14 +255,15 @@ pub trait ChildPulse: Pulse {
 /// its work has joined. A tracker records `Outcome::Abandoned` for a child that
 /// is dropped unfinished, including on unwinding. It is two words wide.
 pub struct Child<'a> {
-    pulse: Box<dyn ChildPulse + 'a>,
+    /// `None` for a child of [`NoPulse`](struct@NoPulse), which needs no allocation.
+    pulse: Option<Box<dyn ChildPulse + 'a>>,
 }
 
 impl<'a> Child<'a> {
     /// Wrap one child returned from a [`Pulse::split`] implementation.
     pub fn new(pulse: impl ChildPulse + 'a) -> Self {
         Self {
-            pulse: Box::new(pulse),
+            pulse: Some(Box::new(pulse)),
         }
     }
 
@@ -273,13 +274,20 @@ impl<'a> Child<'a> {
     /// running, or if `outcome` is `Succeeded` or `Skipped` while one of them
     /// did not succeed; a tracker then records the child as abandoned.
     pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
-        self.pulse.finish(outcome)
+        match self.pulse {
+            Some(pulse) => pulse.finish(outcome),
+            None => Ok(()),
+        }
     }
 
     /// The child's own pulse, without the forwarding a `Child` adds when it is
-    /// itself used as a `&dyn Pulse`.
+    /// itself used as a `&dyn Pulse`: the static [`NoPulse`](static@NoPulse) for its children.
+    #[inline]
     pub(crate) fn pulse(&self) -> &(dyn Pulse + 'a) {
-        &*self.pulse
+        match &self.pulse {
+            Some(pulse) => &**pulse,
+            None => &NoPulse,
+        }
     }
 }
 
@@ -293,11 +301,14 @@ impl Stop for Child<'_> {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        self.pulse.check()
+        match &self.pulse {
+            Some(pulse) => pulse.check(),
+            None => Ok(()),
+        }
     }
     #[inline]
     fn may_stop(&self) -> bool {
-        self.pulse.may_stop()
+        matches!(&self.pulse, Some(pulse) if pulse.may_stop())
     }
 }
 
@@ -305,11 +316,13 @@ impl Report for Child<'_> {
     #[inline]
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.pulse.advance(completed);
+        if let Some(pulse) = &self.pulse {
+            pulse.advance(completed);
+        }
     }
     #[inline]
     fn may_report(&self) -> bool {
-        self.pulse.may_report()
+        matches!(&self.pulse, Some(pulse) if pulse.may_report())
     }
 }
 
@@ -319,10 +332,10 @@ impl Pulse for Child<'_> {
         execution: Execution,
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'_>>, PlanError> {
-        self.pulse.split(execution, parts)
+        self.pulse().split(execution, parts)
     }
     fn handle(&self) -> PulseHandle {
-        self.pulse.handle()
+        self.pulse().handle()
     }
 }
 
@@ -335,10 +348,31 @@ pub type PulseHandle = ProgressWithStop<Option<Arc<dyn Stop>>, Option<Arc<dyn Re
 
 /// Never stops and discards reports, including in every nested phase.
 ///
-/// It still validates plans, so a library's planning mistakes surface even
-/// when nobody observes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct NoPulse;
+/// There is exactly one, a static: pass `&NoPulse`.
+/// [`step`](crate::ProgressExt::step), [`live`](crate::ProgressExt::live) and
+/// [`Paced`](crate::Paced) recognize it by its address, so a loop that steps on
+/// every iteration runs with no checkpoint code when nobody listens: the one
+/// comparison moves out of the loop. Where it cannot, it is a comparison and a
+/// branch. A bare `check()` or `advance()` through a `&dyn Pulse` still makes
+/// one call, to a function that returns at once.
+///
+/// Its children and stages are free the same way and need no allocation. It
+/// still validates plans, so a library's planning mistakes surface even when
+/// nobody observes it.
+pub struct NoPulse {
+    /// One byte, so that the static has an address of its own.
+    _unique: u8,
+}
+
+/// The one [`NoPulse`](struct@NoPulse).
+#[allow(non_upper_case_globals)]
+pub static NoPulse: NoPulse = NoPulse { _unique: 0 };
+
+impl fmt::Debug for NoPulse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("NoPulse")
+    }
+}
 
 impl Stop for NoPulse {
     #[inline(always)]
@@ -365,7 +399,7 @@ impl Pulse for NoPulse {
         validate(parts)?;
         let mut children = Vec::with_capacity(parts.len());
         for _ in parts {
-            children.push(Child::new(Self));
+            children.push(Child { pulse: None });
         }
         Ok(children)
     }
@@ -374,9 +408,34 @@ impl Pulse for NoPulse {
     }
 }
 
-impl ChildPulse for NoPulse {
-    #[inline]
-    fn finish(self: Box<Self>, _: Outcome) -> Result<(), PlanError> {
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProgressExt;
+    use alloc::format;
+
+    #[test]
+    fn no_pulse_children_are_the_static_and_need_no_allocation() {
+        let parts = [
+            PhaseSpec::new("a", 1, Total::Exact(1)),
+            PhaseSpec::new("b", 1, Total::Exact(1)),
+        ];
+        let children = NoPulse.split(Execution::Sequence, &parts).unwrap();
+        for child in children {
+            assert!(child.pulse.is_none(), "no boxed pulse");
+            assert!(core::ptr::addr_eq(child.pulse(), &NoPulse));
+            assert!(!child.may_stop() && !child.may_report());
+            assert!(child.live().is_none());
+            assert_eq!(child.step(5), Ok(()));
+            assert_eq!(
+                format!("{:?}", child.paced(1)),
+                "Paced { live: false, pending: 0, every: 1 }"
+            );
+            child.finish(Outcome::Succeeded).unwrap();
+        }
+        assert_eq!(
+            NoPulse.split(Execution::Sequence, &[]).err(),
+            Some(PlanError::EmptyOrZeroWeight)
+        );
     }
 }

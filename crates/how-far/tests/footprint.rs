@@ -29,7 +29,8 @@ const _: () = {
     assert!(size_of::<Result<(), PlanError>>() == 1);
     assert!(size_of::<Outcome>() == 1);
     assert!(size_of::<PulseHandle>() == 4 * WORD);
-    assert!(size_of::<NoPulse>() == 0);
+    // One byte, so the one static `NoPulse` has an address of its own.
+    assert!(size_of::<NoPulse>() == 1);
     assert!(size_of::<NoReport>() == 0);
     assert!(size_of::<ProgressWithStop<Unstoppable, NoReport>>() == 0);
 };

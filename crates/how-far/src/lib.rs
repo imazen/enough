@@ -2,7 +2,7 @@
 //!
 //! A library accepts `&dyn Pulse`. Through it the library checks for
 //! cancellation, reports completed work, and declares weighted phases. The
-//! caller decides what happens to those reports: nothing ([`NoPulse`]), a live
+//! caller decides what happens to those reports: nothing ([`NoPulse`](struct@NoPulse)), a live
 //! tree with snapshots and callbacks (the `how-far-along` crate), or its own
 //! [`Pulse`] implementation.
 //!
