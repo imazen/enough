@@ -218,7 +218,10 @@ impl<'a> PhaseSpec<'a> {
 ///
 /// # Implementing
 ///
-/// An implementation must keep these rules, which no type enforces:
+/// Before writing one, check whether [`FnPulse`](crate::FnPulse) does the job:
+/// it turns one callback into a pulse that plans, shares progress out by
+/// weight, and stops the work when the callback says so. An implementation
+/// must keep these rules, which no type enforces:
 ///
 /// - `check` and `advance` may run on many threads at once, and `advance` must
 ///   not block. `may_stop` and `may_report` return `false` only when that can

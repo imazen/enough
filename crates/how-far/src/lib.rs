@@ -54,12 +54,17 @@ extern crate alloc;
 pub use enough::{Stop, StopReason, Unstoppable};
 
 mod ext;
+// Its counters are 64-bit atomics, which some embedded targets lack.
+#[cfg(target_has_atomic = "64")]
+mod fn_pulse;
 mod paced;
 mod pulse;
 mod report;
 mod stages;
 
 pub use ext::ProgressExt;
+#[cfg(target_has_atomic = "64")]
+pub use fn_pulse::{FnPulse, Progress};
 pub use paced::Paced;
 pub use pulse::{
     Child, ChildPulse, Execution, Inert, NoPulse, Outcome, PhaseSpec, PlanError, Pulse,
