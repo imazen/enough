@@ -1,16 +1,17 @@
 //! Checkpoints that reach the pulse only every so many units.
 
-use crate::{Pulse, StopReason};
+use crate::{ProgressExt, Pulse, StopReason};
 use core::fmt;
 
 /// Counts completed work locally and reaches its pulse once every `every`
 /// units: it reports the units counted so far, then checks for cancellation.
 ///
 /// Reaching a live tree costs a few nanoseconds per checkpoint; a step that
-/// does not reach it costs an addition and a comparison. Choose `every` so
-/// that the work between checkpoints takes at least a microsecond, and no
-/// longer than the cancellation latency you need. A pulse that can neither
-/// stop nor report, such as [`NoPulse`](crate::NoPulse), is never reached.
+/// does not reach it is a subtraction and a branch. Choose `every` so that the
+/// work between checkpoints takes at least a microsecond, and no longer than
+/// the cancellation latency you need. A pulse that can neither stop nor
+/// report, such as [`NoPulse`](struct@crate::NoPulse), is never reached, and in a
+/// loop its steps compile to nothing.
 ///
 /// Make one per worker, from the `&dyn Pulse` the work was given:
 ///
@@ -37,7 +38,9 @@ use core::fmt;
 /// splitting the pulse it reports to: a phase that split ignores reports.
 pub struct Paced<'a> {
     pulse: Option<&'a dyn Pulse>,
-    pending: u64,
+    /// Units still to count before the next reach: `every` minus the pending
+    /// units, so a step is one comparison and one subtraction.
+    left: u64,
     every: u64,
 }
 
@@ -45,7 +48,7 @@ impl fmt::Debug for Paced<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Paced")
             .field("live", &self.pulse.is_some())
-            .field("pending", &self.pending)
+            .field("pending", &(self.every - self.left))
             .field("every", &self.every)
             .finish()
     }
@@ -54,18 +57,11 @@ impl fmt::Debug for Paced<'_> {
 impl<'a> Paced<'a> {
     /// Reach `pulse` once every `every` units (at least 1).
     pub fn new(pulse: &'a dyn Pulse, every: u64) -> Self {
-        if pulse.may_stop() || pulse.may_report() {
-            Self {
-                pulse: Some(pulse),
-                pending: 0,
-                every: if every == 0 { 1 } else { every },
-            }
-        } else {
-            Self {
-                pulse: None,
-                pending: 0,
-                every: u64::MAX,
-            }
+        let every = every.max(1);
+        Self {
+            pulse: pulse.live(),
+            left: every,
+            every,
         }
     }
 
@@ -74,11 +70,18 @@ impl<'a> Paced<'a> {
     #[inline]
     #[track_caller]
     pub fn step(&mut self, completed: u64) -> Result<(), StopReason> {
-        self.pending = self.pending.saturating_add(completed);
-        if self.pending < self.every {
+        // Nothing below writes `pulse`, so in a loop this test is hoisted and
+        // a pulse that cannot stop or report costs nothing per step.
+        let Some(pulse) = self.pulse else {
+            return Ok(());
+        };
+        if completed < self.left {
+            self.left -= completed;
             Ok(())
         } else {
-            self.reach()
+            let pending = (self.every - self.left).saturating_add(completed);
+            self.left = self.every;
+            reach(pulse, pending)
         }
     }
 
@@ -93,34 +96,31 @@ impl<'a> Paced<'a> {
     }
 
     /// Report every pending unit now.
+    #[inline]
     #[track_caller]
     pub fn flush(&mut self) {
         if let Some(pulse) = self.pulse {
-            if self.pending != 0 {
-                pulse.advance(core::mem::take(&mut self.pending));
-            }
-        }
-    }
-
-    /// The slow path of [`step`](Self::step), kept out of the caller's loop.
-    #[cold]
-    #[inline(never)]
-    #[track_caller]
-    fn reach(&mut self) -> Result<(), StopReason> {
-        match self.pulse {
-            Some(pulse) => {
-                pulse.advance(core::mem::take(&mut self.pending));
-                pulse.check()
-            }
-            None => {
-                self.pending = 0;
-                Ok(())
+            if self.left != self.every {
+                pulse.advance(self.every - self.left);
+                self.left = self.every;
             }
         }
     }
 }
 
+/// The slow path of [`Paced::step`], kept out of the caller's loop. It takes
+/// the units by value, so no `Paced` escapes into it and the caller can keep
+/// one in registers.
+#[cold]
+#[inline(never)]
+#[track_caller]
+fn reach(pulse: &dyn Pulse, pending: u64) -> Result<(), StopReason> {
+    pulse.advance(pending);
+    pulse.check()
+}
+
 impl Drop for Paced<'_> {
+    #[inline]
     fn drop(&mut self) {
         self.flush();
     }
