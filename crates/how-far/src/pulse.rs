@@ -237,6 +237,70 @@ pub trait Pulse: Stop + Report {
     fn handle(&self) -> PulseHandle;
 }
 
+// A reference, box or `Arc` of a pulse is a pulse, as for `Stop` and `Report`,
+// so generic and owned code can hold any pulse. Checkpoints recognize only
+// `&NoPulse` itself, so `&&NoPulse` works but pays for its calls.
+
+impl<P: Pulse + ?Sized> Pulse for &P {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for &mut P {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for Box<P> {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for Arc<P> {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
 /// What a pulse's children add: publishing a terminal outcome.
 ///
 /// Implement this for the type your [`Pulse::split`] returns, and wrap each

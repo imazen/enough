@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 116 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 122 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)        20
 #   pub consts/statics                          6
-#   free functions                              4
+#   free functions                              8
 #   inherent methods                           29
 #   struct fields                               8
 #   enum variants                              24
 #   re-exports                                  4
-#   trait roster entries (type × trait)        70
+#   trait roster entries (type × trait)        74
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       5
 #
 # per-module pub lines:
-#   (root)                           86
+#   (root)                           90
 #   prelude                          11
 
-## items (92 lines)
+## items (94 lines)
 
 pub mod how_far
 pub use Stop
@@ -39,6 +39,8 @@ pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [Phas
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub fn prelude::Pulse::handle(&self) -> PulseHandle
 pub fn prelude::Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
+pub fn &mut P::handle(&self) -> PulseHandle [also: (root)]
+pub fn &mut P::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError> [also: (root)]
 pub fn prelude::Report::advance(&self, u64)
 pub fn prelude::Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64) [also: (root)]
@@ -121,9 +123,11 @@ pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
-## trait impls (18 types)
+## trait impls (22 types)
 
+&P: Pulse
 &T: Report
+&mut P: Pulse
 &mut T: Report
 Child<'_>: Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
@@ -138,7 +142,9 @@ RunError<E>: Debug, Display, Eq, Error, From<PlanError>, PartialEq
 Stages<'_>: Debug
 T: ProgressExt
 Total: Clone, Copy, Debug, Eq, PartialEq
+alloc::boxed::Box<P>: Pulse
 alloc::boxed::Box<T>: Report
+alloc::sync::Arc<P>: Pulse
 alloc::sync::Arc<T>: Report
 core::option::Option<T>: Report
 
