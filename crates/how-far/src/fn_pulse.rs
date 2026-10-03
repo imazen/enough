@@ -11,8 +11,8 @@ use core::{
 };
 use enough::{Stop, StopReason};
 
-/// What an [`FnPulse`] callback sees: the whole job's progress, and the phase
-/// that just reported.
+/// What an [`FnPulse`] callback sees after a report: the whole job's
+/// progress, and the phase that just reported.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Progress<'a> {
@@ -36,14 +36,19 @@ pub struct Progress<'a> {
     pub outcome: Option<Outcome>,
 }
 
-/// A pulse made from one callback, which sees every report and can stop the
-/// work.
+/// A pulse made from one callback, which hears every check and report and can
+/// stop the work.
 ///
-/// The callback runs after each report and when a phase finishes, on the
-/// thread that reported, possibly on several threads at once. Returning an
-/// error stops the work: from then on every check, in every phase, returns
-/// that reason, so the library stops at its next checkpoint, and the callback
-/// is not called again. The first error wins.
+/// The callback gets `None` on every check, and `Some(progress)` after each
+/// report and when a phase finishes. It runs on the thread that called,
+/// possibly on several threads at once. Returning an error stops the work:
+/// that check returns it, and so does every later check in every phase, so
+/// the library stops where it checks. After the first error the callback is
+/// not called again, and that first reason is kept.
+///
+/// Libraries may check often, so keep the `None` path cheap, such as loading
+/// one flag, and do slower work, such as drawing, only for `Some`. A `step`
+/// reports and then checks, so it calls the callback twice.
 ///
 /// ```
 /// use how_far::{FnPulse, Pulse, StopReason};
@@ -53,7 +58,9 @@ pub struct Progress<'a> {
 /// let interrupted = Arc::new(AtomicBool::new(false));
 /// let flag = Arc::clone(&interrupted);
 /// let pulse = FnPulse::new(move |progress| {
-///     eprint!("\r{:3.0}%", progress.fraction * 100.0);
+///     if let Some(progress) = progress {
+///         eprint!("\r{:3.0}%", progress.fraction * 100.0);
+///     }
 ///     if flag.load(Ordering::Relaxed) {
 ///         Err(StopReason::Cancelled)
 ///     } else {
@@ -66,9 +73,7 @@ pub struct Progress<'a> {
 /// ```
 ///
 /// It plans like any tracker: splits are validated, a phase splits once and
-/// before it counts, and children finish before their parent. Libraries that
-/// report rarely, or pace their checkpoints, call it rarely; a library that
-/// steps on every row calls it on every row.
+/// before it counts, and children finish before their parent.
 pub struct FnPulse {
     node: Arc<Node>,
 }
@@ -77,7 +82,7 @@ pub struct FnPulse {
 /// deeply nested splits exact enough, and converts to `f64` without rounding.
 const SCALE: u64 = 1 << 48;
 
-type Callback = dyn Fn(&Progress<'_>) -> Result<(), StopReason> + Send + Sync;
+type Callback = dyn Fn(Option<&Progress<'_>>) -> Result<(), StopReason> + Send + Sync;
 
 /// The callback, the stop it latched, and the job's completed share.
 struct Shared {
@@ -102,6 +107,36 @@ fn decode(code: u8) -> StopReason {
         StopReason::TimedOut
     } else {
         StopReason::Cancelled
+    }
+}
+
+impl Shared {
+    /// The reason the callback stopped the work, without calling it.
+    fn stopped(&self) -> Option<StopReason> {
+        match self.stopped.load(Ordering::Acquire) {
+            0 => None,
+            code => Some(decode(code)),
+        }
+    }
+
+    /// Run the callback, unless the work is already stopped, and latch its
+    /// error. Returns the reason that stopped the work, the first one if
+    /// several threads stopped it at once.
+    fn call(&self, progress: Option<&Progress<'_>>) -> Result<(), StopReason> {
+        if let Some(reason) = self.stopped() {
+            return Err(reason);
+        }
+        (self.callback)(progress).map_err(|reason| {
+            match self.stopped.compare_exchange(
+                0,
+                encode(reason),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => reason,
+                Err(first) => decode(first),
+            }
+        })
     }
 }
 
@@ -176,11 +211,11 @@ impl Node {
         ((u128::from(completed.min(self.cap)) * self.rate) >> 64) as u64
     }
 
-    /// Run the callback, unless the work is already stopped, and latch its
-    /// error.
+    /// Tell the callback about a report or a finish. A report cannot fail, so
+    /// an error only latches, for the next check to return.
     fn notify(&self, completed: u64, outcome: Option<Outcome>) {
         let shared = &*self.shared;
-        if shared.stopped.load(Ordering::Acquire) != 0 {
+        if shared.stopped().is_some() {
             return;
         }
         let done = shared.done.load(Ordering::Relaxed).min(SCALE);
@@ -192,14 +227,7 @@ impl Node {
             total: self.total,
             outcome,
         };
-        if let Err(reason) = (shared.callback)(&progress) {
-            let _ = shared.stopped.compare_exchange(
-                0,
-                encode(reason),
-                Ordering::Release,
-                Ordering::Relaxed,
-            );
-        }
+        let _ = shared.call(Some(&progress));
     }
 
     fn split<'a>(
@@ -251,10 +279,7 @@ impl Node {
 impl Stop for Node {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
-        match self.shared.stopped.load(Ordering::Acquire) {
-            0 => Ok(()),
-            code => Err(decode(code)),
-        }
+        self.shared.call(None)
     }
 }
 
@@ -316,10 +341,10 @@ node_pulse!(FnPulse);
 node_pulse!(FnChild);
 
 impl FnPulse {
-    /// A pulse that calls `callback` with each report. Return an error from
-    /// it to stop the work.
+    /// A pulse that calls `callback` with `None` on each check and with the
+    /// progress after each report. Return an error from it to stop the work.
     pub fn new(
-        callback: impl Fn(&Progress<'_>) -> Result<(), StopReason> + Send + Sync + 'static,
+        callback: impl Fn(Option<&Progress<'_>>) -> Result<(), StopReason> + Send + Sync + 'static,
     ) -> Self {
         let shared = Arc::new(Shared {
             callback: Box::new(callback),
@@ -342,7 +367,7 @@ impl fmt::Debug for FnPulse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnPulse")
             .field("fraction", &self.fraction())
-            .field("stopped", &self.node.check().err())
+            .field("stopped", &self.node.shared.stopped())
             .finish_non_exhaustive()
     }
 }

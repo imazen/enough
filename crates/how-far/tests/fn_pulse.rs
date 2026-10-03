@@ -31,15 +31,19 @@ impl From<&Progress<'_>> for Seen {
     }
 }
 
-/// A pulse that records every callback, and stops once `stop_at` says so.
+/// A pulse that records every report, and stops once `stop_at` says so after
+/// one. Checks pass.
 fn recording(
     stop_at: impl Fn(&Progress<'_>) -> Option<StopReason> + Send + Sync + 'static,
 ) -> (FnPulse, Arc<Mutex<Vec<Seen>>>) {
     let log = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&log);
-    let pulse = FnPulse::new(move |progress| {
-        sink.lock().unwrap().push(Seen::from(progress));
-        stop_at(progress).map_or(Ok(()), Err)
+    let pulse = FnPulse::new(move |progress| match progress {
+        Some(progress) => {
+            sink.lock().unwrap().push(Seen::from(progress));
+            stop_at(progress).map_or(Ok(()), Err)
+        }
+        None => Ok(()),
     });
     (pulse, log)
 }
@@ -146,6 +150,45 @@ fn an_error_from_the_callback_stops_the_work_at_the_next_check() {
     assert_eq!(log.len(), 3);
     assert_eq!(pulse.check(), Err(StopReason::Cancelled));
     assert_eq!(pulse.handle().check(), Err(StopReason::Cancelled));
+}
+
+#[test]
+fn a_library_that_only_checks_can_be_stopped() {
+    let checks = Arc::new(AtomicU64::new(0));
+    let seen = Arc::clone(&checks);
+    let pulse = FnPulse::new(move |progress| {
+        assert!(progress.is_none(), "this library never reports");
+        if seen.fetch_add(1, Ordering::Relaxed) + 1 == 5 {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+    // Checks every row and never reports.
+    let work = |pulse: &dyn Pulse| -> Result<(), StopReason> {
+        loop {
+            pulse.check()?;
+        }
+    };
+    assert_eq!(work(&pulse), Err(StopReason::Cancelled));
+    assert_eq!(checks.load(Ordering::Relaxed), 5);
+    // The reason stays, without calling the callback again.
+    assert_eq!(pulse.check(), Err(StopReason::Cancelled));
+    assert_eq!(pulse.handle().check(), Err(StopReason::Cancelled));
+    assert_eq!(checks.load(Ordering::Relaxed), 5);
+}
+
+#[test]
+fn a_step_reports_then_checks() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let pulse = FnPulse::new(move |progress| {
+        sink.lock().unwrap().push(progress.map(|p| p.completed));
+        Ok(())
+    });
+    pulse.step(3).unwrap();
+    pulse.check().unwrap();
+    assert_eq!(*events.lock().unwrap(), [Some(3), None, None]);
 }
 
 #[test]

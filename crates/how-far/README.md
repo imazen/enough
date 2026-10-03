@@ -188,8 +188,8 @@ and 0.13%. With `&NoPulse`, `step`, `live()` and `Paced` add no instructions.
 A three-stage `Stages` plan adds about 870 instructions per operation with
 `NoPulse` and about 7,000 with a live tree, so a live tree costs under 1% of
 operations longer than about 70 µs. An `FnPulse` reaches its callback in
-about 90 instructions per report plus what the callback does, and plans for
-about 3,800 per three-stage operation
+about 90 instructions per report and 26 to 34 per check, plus what the
+callback does, and plans for about 3,800 per three-stage operation
 ([measured](https://github.com/imazen/enough/blob/main/benchmarks/how-far-fnpulse-2026-10-03.md)). The perf counts
 ([2026-10-03](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-nopulse-2026-10-03.md),
 [2026-10-01](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md))
@@ -206,10 +206,12 @@ the caller's crate; CI fails if that grows. `FnPulse` is about 40% of
 ## One callback for progress and cancellation
 
 An application that wants a progress bar and a way to stop passes an
-`FnPulse`. Its callback runs after each report and when a phase finishes. It
-sees the whole job's fraction, weighted by every plan the libraries made, and
-the phase that reported. Return an error to stop the work: from then on every
-check returns it, so the library stops at its next checkpoint.
+`FnPulse`. Its one callback gets `None` on every check, and `Some(progress)`
+after each report and when a phase finishes. The progress is the whole job's
+fraction, weighted by every plan the libraries made, and the phase that
+reported. Return an error to stop the work: the check that called it returns
+the error, and so does every later one, so the library stops where it
+checks.
 
 ```rust
 use how_far::{FnPulse, Pulse, StopReason};
@@ -220,7 +222,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 let interrupted = Arc::new(AtomicBool::new(false)); // set from a Ctrl-C handler
 let flag = Arc::clone(&interrupted);
 let pulse = FnPulse::new(move |progress| {
-    eprint!("\r{:3.0}% {}", progress.fraction * 100.0, progress.phase);
+    if let Some(progress) = progress {
+        eprint!("\r{:3.0}% {}", progress.fraction * 100.0, progress.phase);
+    }
     if flag.load(Ordering::Relaxed) {
         Err(StopReason::Cancelled)
     } else {
@@ -231,13 +235,15 @@ thumbnail(&[vec![8; 16]], &pulse)?;
 # Ok::<(), StopReason>(())
 ```
 
-- The callback may run on several threads at once. It must be `'static`,
-  because handles given to spawned threads reach it too.
+- It runs as often as the library checks and reports, and `step` does both,
+  so it runs twice per step. Keep the `None` path to a flag load, and do
+  slower work, such as drawing, only for `Some`, or throttle it there.
+- It may run on several threads at once, so avoid taking a lock on every
+  call. It must be `'static`, because handles given to spawned threads reach
+  it too.
 - After it returns an error it is not called again; the first error wins.
 - A phase with an `Exact` or `Estimated` total moves the fraction as it
   counts; one with an `Unknown` total moves it when it finishes.
-- It runs as often as the library reports. A library that steps on every row
-  calls it on every row, so keep it cheap or throttle inside it.
 
 ## No-op and count-only use
 

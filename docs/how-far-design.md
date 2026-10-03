@@ -66,12 +66,15 @@ can move one into a worker thread and keep only the observer.
 Most applications want a progress bar and a way to stop, not a tree.
 `FnPulse` gives them one function, `Fn(&Progress) -> Result<(), StopReason>`.
 
-- **When it runs.** After every report and when a phase finishes, on the
-  thread that reported. Checks never call it. An error it returns is latched,
-  and every later check, in every phase and every handle, returns it with one
-  atomic load. The work stops at its next checkpoint after a report, and
-  `check()` stays as cheap as the trait promises. A phase that checks but
-  never reports cannot be stopped this way, and shows no progress either.
+- **When it runs.** With `None` on every check, and with `Some(progress)`
+  after every report and when a phase finishes, on the thread that called.
+  An error it returns stops the work where the library checks: the check
+  returns it, and every later check, in every phase and every handle,
+  returns it with one atomic load, without calling again. Calling on checks
+  makes a phase that only checks stoppable, at the price of one indirect
+  call per check: 26 to 34 instructions with a callback that does nothing,
+  against 18 for a live tree's flag, and `step`, which reports and then
+  checks, calls it twice.
 - **The fraction.** Each phase owns a share of the job, in 2^48 fixed point.
   A split divides its phase's share by weight, and the last child takes what
   rounding leaves, so shares add up exactly. A leaf with an `Exact` or

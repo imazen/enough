@@ -203,7 +203,9 @@ impl<'a> PhaseSpec<'a> {
 ///
 /// A library accepts `&dyn Pulse` and uses it three ways:
 ///
-/// - `check()` asks whether to stop. It is the cheapest call; use it freely.
+/// - `check()` asks whether to stop. It is the cheapest call, unless the
+///   caller made it run code of its own, as an [`FnPulse`](crate::FnPulse)
+///   callback does; check once per row, block or tile, not per byte.
 /// - `advance(n)` counts finished units; [`ProgressExt::step`](crate::ProgressExt::step)
 ///   counts and then checks.
 /// - [`split`](Self::split) declares weighted children. The library owns the

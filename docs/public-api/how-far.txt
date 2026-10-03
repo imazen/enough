@@ -84,7 +84,7 @@ pub const fn Child<'a>::inert() -> Self
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
 pub struct FnPulse
 pub fn FnPulse::fraction(&self) -> f64
-pub fn FnPulse::new(impl core::ops::function::Fn(&Progress<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn FnPulse::new(impl core::ops::function::Fn(core::option::Option<&Progress<'_>>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub struct Inert
 pub struct NoReport
 pub struct Paced<'a>
