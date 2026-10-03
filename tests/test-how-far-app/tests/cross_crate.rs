@@ -107,9 +107,9 @@ fn cancelling_inside_the_codec_records_each_level_and_returns_the_stop() {
     assert_eq!(find(&root, &[&image(1), "analyze"]).completed, 5);
     assert_eq!(
         status(&[&image(1), "transform"]),
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
-    assert_eq!(status(&[&image(2)]), Status::Finished(Outcome::Skipped));
+    assert_eq!(status(&[&image(2)]), Status::Finished(Outcome::NotRun));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn corrupt_input_is_recorded_as_a_failure_not_a_cancellation() {
     );
     assert_eq!(
         find(&root, &["image 2"]).status,
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
 }
 
@@ -179,7 +179,7 @@ fn parallel_images_each_get_an_outcome_when_one_is_cancelled() {
     );
     assert_eq!(
         find(&root, &["pack"]).status,
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
 }
 

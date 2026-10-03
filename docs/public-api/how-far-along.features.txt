@@ -1,5 +1,5 @@
 # how-far-along public API — additions from non-default features
-# features: diagnostics,profile,std
+# features: adapters,callback,diagnostics,json,profile,std
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -10,22 +10,24 @@
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        18
+#   pub types (struct/enum/trait/alias)        20
 #   pub consts/statics                          1
-#   inherent methods                           28
+#   inherent methods                           38
 #   struct fields                              66
 #   enum variants                              13
-#   trait roster entries (type × trait)        67
-#   auto-trait-complete types                  13
-#   auto-trait exceptions                       4
+#   re-exports                                  1
+#   trait roster entries (type × trait)        71
+#   auto-trait-complete types                  14
+#   auto-trait exceptions                       5
 #
 # per-module pub lines:
-#   (root)                            3
+#   (root)                           16
 #   diagnostics                      29
 #   profile                          96
 
-## items (128 lines)
+## items (141 lines)
 
+pub use WithStop
 pub mod diagnostics
 #[non_exhaustive] pub enum diagnostics::Kind
 pub diagnostics::Kind::CallbackDuration
@@ -154,9 +156,22 @@ pub fn profile::Trace::write_json(&self, &mut impl core::fmt::Write) -> core::fm
 pub fn profile::Trace::diagnose(&self, &diagnostics::Options) -> alloc::vec::Vec<diagnostics::Finding>
 pub trait profile::Clock: core::marker::Send + core::marker::Sync
 pub fn profile::Clock::now(&self) -> core::time::Duration
+pub struct Checkpoint<'a>
+pub fn Checkpoint<'_>::phase_id(&self) -> NodeId
+pub fn Checkpoint<'_>::phase_name(&self) -> &str
+pub fn Checkpoint<'_>::snapshot(&self) -> Snapshot
+pub fn Checkpoint<'_>::summary(&self) -> Summary
+pub fn Checkpoint<'_>::try_snapshot(&self) -> core::option::Option<Snapshot>
+pub fn Checkpoint<'_>::try_summary(&self) -> core::option::Option<Summary>
+pub struct FnPulse
+pub fn FnPulse::finish(self, how_far::pulse::Outcome) -> core::result::Result<(), how_far::pulse::PlanError>
+pub fn FnPulse::new(&str, impl core::ops::function::Fn(&Checkpoint<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn FnPulse::observer(&self) -> Observer
+pub fn FnPulse::with_phase(Phase, impl core::ops::function::Fn(&Checkpoint<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
 
-## trait impls (18 types)
+## trait impls (19 types)
 
+FnPulse: Debug, enough::Stop, how_far::pulse::Pulse, how_far::report::Report
 alloc::sync::Arc<C>: profile::Clock
 diagnostics::DiagnosticPulse: Debug, enough::Stop, how_far::pulse::Pulse, how_far::report::Report
 diagnostics::Finding: Clone, Debug, Display
@@ -178,8 +193,9 @@ profile::Trace: Clone, Debug, Display
 
 ## auto traits
 
-13 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
-diagnostics::DiagnosticPulse: !Freeze !RefUnwindSafe !UnwindSafe
+14 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+FnPulse: !RefUnwindSafe !UnwindSafe
+diagnostics::DiagnosticPulse: !RefUnwindSafe !UnwindSafe
 profile::Instrumented<T>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 profile::Profiler: !RefUnwindSafe !UnwindSafe
 profile::Span: !RefUnwindSafe !UnwindSafe

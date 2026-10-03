@@ -45,6 +45,39 @@ pub enum Status {
     Finished(Outcome),
 }
 
+/// A lightweight observation of weighted progress, without names or allocations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Summary {
+    /// None when some required count is unknown or overflowed.
+    pub fraction: Option<f64>,
+    /// Share whose denominator is unknown or invalid.
+    pub unresolved_fraction: f64,
+    /// State of the observed phase, independent of its fraction.
+    pub status: Status,
+}
+impl Summary {
+    fn leaf(status: Status, total: Total, completed: u64, overflow: bool) -> Self {
+        let fraction = match status {
+            Status::Finished(Outcome::Succeeded | Outcome::Skipped) => Some(1.0),
+            Status::Finished(Outcome::NotRun) => Some(0.0),
+            _ if overflow => None,
+            _ => match total {
+                Total::Exact(0) | Total::Estimated(0) => Some(0.0),
+                Total::Exact(n) | Total::Estimated(n) => {
+                    Some((completed as f64 / n as f64).min(1.0))
+                }
+                _ => None,
+            },
+        };
+        Self {
+            fraction,
+            unresolved_fraction: if fraction.is_some() { 0.0 } else { 1.0 },
+            status,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Metadata {
     units: String,
@@ -67,6 +100,7 @@ fn encode(outcome: Outcome) -> u8 {
         Outcome::Cancelled => 2,
         Outcome::Failed => 3,
         Outcome::Abandoned => 4,
+        Outcome::NotRun => 5,
         _ => UNKNOWN,
     }
 }
@@ -77,6 +111,7 @@ fn decode(code: u8) -> Option<Outcome> {
         2 => Some(Outcome::Cancelled),
         3 => Some(Outcome::Failed),
         4 => Some(Outcome::Abandoned),
+        5 => Some(Outcome::NotRun),
         _ => None,
     }
 }
@@ -179,6 +214,65 @@ impl Node {
                 result.status = Status::Running;
             }
             result.children.push(child);
+        }
+        Some(result)
+    }
+    fn summary(&self, nonblocking: bool) -> Option<Summary> {
+        // Acquire pairs with terminal publication; counters themselves are
+        // numeric observations, never synchronization for application data.
+        let state = self.state.load(Ordering::Acquire);
+        let meta = if nonblocking {
+            self.meta.try_get()?
+        } else {
+            self.meta.get()
+        };
+        if let Some(frozen) = &meta.frozen {
+            return Some(Summary {
+                fraction: frozen.fraction(),
+                unresolved_fraction: frozen.unresolved_fraction(),
+                status: frozen.status,
+            });
+        }
+        let (status, counter) = match state {
+            0 => (Status::Pending, &self.completed),
+            1 => (Status::Running, &self.completed),
+            _ => (
+                Status::Finished(
+                    decode(self.outcome.load(Ordering::Relaxed)).unwrap_or(Outcome::Abandoned),
+                ),
+                &self.final_count,
+            ),
+        };
+        let mut result = Summary::leaf(status, meta.total, counter.get(), counter.overflowed());
+        if meta.children.is_empty() {
+            return Some(result);
+        }
+        let terminal_credit = matches!(
+            status,
+            Status::Finished(Outcome::Succeeded | Outcome::Skipped | Outcome::NotRun)
+        );
+        let mut sum = 0.0;
+        for child in &meta.children {
+            sum += child.weight as f64;
+        }
+        let mut fraction = 0.0;
+        let mut unresolved = 0.0;
+        for child in &meta.children {
+            let observed = child.summary(nonblocking)?;
+            if result.status == Status::Pending && observed.status != Status::Pending {
+                result.status = Status::Running;
+            }
+            let weight = child.weight as f64 / sum;
+            fraction += weight * observed.fraction.unwrap_or(0.0);
+            unresolved += weight * observed.unresolved_fraction;
+        }
+        if !terminal_credit {
+            result.fraction = if unresolved == 0.0 {
+                Some(fraction.clamp(0.0, 1.0))
+            } else {
+                None
+            };
+            result.unresolved_fraction = unresolved;
         }
         Some(result)
     }
@@ -412,10 +506,7 @@ impl Phase {
     }
     fn ensure_unused(&self) -> Result<(), PlanError> {
         self.ensure_live()?;
-        if self.node.issued.load(Ordering::Relaxed)
-            || self.node.state.load(Ordering::Relaxed) != 0
-            || self.node.branch.load(Ordering::Relaxed)
-        {
+        if self.node.issued.load(Ordering::Relaxed) || self.node.branch.load(Ordering::Relaxed) {
             Err(PlanError::AlreadyInUse)
         } else {
             Ok(())
@@ -431,7 +522,7 @@ impl Drop for Phase {
 }
 /// A cloneable, thread-safe counter for one phase, from [`Phase::reporter`].
 ///
-/// `advance` is one atomic add: no clock, callback, lock, or tree walk.
+/// `advance` is a saturating atomic update: no clock, callback, lock, or tree walk.
 /// Counts saturate and record the overflow. Reports after the phase finishes,
 /// and reports to a phase that split, are ignored.
 #[derive(Clone)]
@@ -497,6 +588,20 @@ impl Observer {
     pub fn id(&self) -> NodeId {
         self.node.id
     }
+    /// Read weighted progress without allocating or copying phase names.
+    /// Walks this subtree; sample at a display cadence, not on every report.
+    pub fn summary(&self) -> Summary {
+        self.node.summary(false).expect("blocking read")
+    }
+    /// Read a summary without waiting for a metadata lock. Retry on a later turn.
+    pub fn try_summary(&self) -> Option<Summary> {
+        self.node.summary(true)
+    }
+    /// This phase's stable name; duplicate names are distinguished by `id`.
+    pub fn name(&self) -> &str {
+        &self.node.name
+    }
+
     /// Take a snapshot now.
     ///
     /// Each phase's metadata is internally consistent; counters in different
@@ -562,11 +667,13 @@ impl Snapshot {
     /// Counts and weights are decimal strings, so 64-bit values survive
     /// JavaScript. Later versions may add keys; readers should ignore keys they
     /// do not know.
+    #[cfg(feature = "json")]
     pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         out.write_str("{\"schema_version\":1,\"root\":")?;
         self.write_node_json(out)?;
         out.write_char('}')
     }
+    #[cfg(feature = "json")]
     pub(crate) fn write_node_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         use crate::json::{outcome_name, quote};
         write!(out, "{{\"id\":{},\"parent\":", self.id)?;
@@ -653,6 +760,9 @@ impl Snapshot {
     /// Work fraction in [0, 1], or None when any required denominator is unknown
     /// or invalid. Success/skipping discharges the obligation, including zero work.
     pub fn fraction(&self) -> Option<f64> {
+        if self.status == Status::Finished(Outcome::NotRun) {
+            return Some(0.0);
+        }
         if matches!(
             self.status,
             Status::Finished(Outcome::Succeeded | Outcome::Skipped)
@@ -707,6 +817,7 @@ impl Snapshot {
     }
 }
 
+#[cfg(feature = "json")]
 fn write_total(out: &mut impl fmt::Write, total: Total) -> fmt::Result {
     match total {
         Total::Unknown => out.write_str("{\"kind\":\"Unknown\"}"),

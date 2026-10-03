@@ -29,6 +29,7 @@ pub(crate) fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Cancelled => "Cancelled",
         Outcome::Failed => "Failed",
         Outcome::Abandoned => "Abandoned",
+        Outcome::NotRun => "NotRun",
         _ => "Other",
     }
 }

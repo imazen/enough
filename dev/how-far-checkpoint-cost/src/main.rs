@@ -6,10 +6,10 @@
 use almost_enough::{FnStop, Stopper};
 use how_far::prelude::*;
 use how_far::{
-    Child, Execution, FnPulse, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, Progress,
-    PulseHandle, RunError, Stages, StopReason, Unstoppable,
+    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, PulseHandle, RunError,
+    Stages, StopReason, Unstoppable,
 };
-use how_far_along::{Phase, PulseTree, Total};
+use how_far_along::{Checkpoint, FnPulse, Phase, PulseTree, Total};
 use std::hint::black_box;
 
 const BUF: usize = 256 * 1024;
@@ -72,7 +72,7 @@ fn paced(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReas
         sub_defilter(part);
         pace.step(part.len() as u64)?;
     }
-    Ok(())
+    pace.finish()
 }
 
 /// One operation in three stages, each paced over a third of the buffer, or
@@ -101,6 +101,7 @@ fn operation(
                     sub_defilter(piece);
                     pace.step(piece.len() as u64)?;
                 }
+                pace.finish()?;
             } else {
                 for piece in part.chunks_mut(chunk) {
                     sub_defilter(piece);
@@ -226,7 +227,7 @@ fn matrix_pulse(report: &str, stop: &str) -> Box<dyn Pulse> {
 /// nothing, so the numbers are the cost of reaching it.
 #[cold]
 #[inline(never)]
-fn fn_callback(progress: Option<&Progress<'_>>) -> Result<(), StopReason> {
+fn fn_callback(progress: &Checkpoint<'_>) -> Result<(), StopReason> {
     black_box(progress);
     Ok(())
 }
@@ -267,9 +268,12 @@ fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
         ["m", style, report, stop] => (*style, Box::leak(matrix_pulse(report, stop))),
         ["t", style, stop] => (*style, Box::leak(tree_pulse(stop))),
         ["n", style] => (*style, &NoPulse),
-        ["f", style] => (*style, Box::leak(Box::new(FnPulse::new(fn_callback)))),
+        ["f", style] => (
+            *style,
+            Box::leak(Box::new(FnPulse::new("bench", fn_callback))),
+        ),
         ["fs", style] => {
-            let pulse = FnPulse::new(fn_callback);
+            let pulse = FnPulse::new("bench", fn_callback);
             let total = buf.len() as u64 * iters;
             let mut stages =
                 Stages::new(&pulse, &[PhaseSpec::new("buffers", 1, Total::Exact(total))]).unwrap();
@@ -329,7 +333,7 @@ fn main() {
             .map_err(|_| StopReason::Cancelled),
             "op" | "opstep" if target == "fn" => {
                 // An application watches each operation with its own callback.
-                let pulse = FnPulse::new(fn_callback);
+                let pulse = FnPulse::new("bench", fn_callback);
                 operation(black_box(&mut buf), black_box(chunk), &pulse, kind == "op")
                     .map_err(|_| StopReason::Cancelled)
             }

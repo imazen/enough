@@ -233,9 +233,9 @@ fn a_nested_stop_keeps_its_error_and_marks_each_level() {
         outcome(&log, "job/resize/horizontal"),
         Some(Outcome::Cancelled)
     );
-    assert_eq!(outcome(&log, "job/resize/vertical"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/resize/vertical"), Some(Outcome::NotRun));
     assert_eq!(outcome(&log, "job/resize"), Some(Outcome::Cancelled));
-    assert_eq!(outcome(&log, "job/encode"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/encode"), Some(Outcome::NotRun));
     assert_eq!(log.counts.lock().unwrap()["job/resize/horizontal"], 2);
 }
 
@@ -247,7 +247,7 @@ fn a_cancellation_request_surfaces_through_both_libraries() {
     let error = thumbnail(&root, false, None).unwrap_err();
     assert_eq!(error, CodecError::Stopped(StopReason::Cancelled));
     assert_eq!(outcome(&log, "job/decode"), Some(Outcome::Cancelled));
-    assert_eq!(outcome(&log, "job/resize"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/resize"), Some(Outcome::NotRun));
 }
 
 #[test]
@@ -256,8 +256,8 @@ fn a_failure_is_not_recorded_as_a_cancellation() {
     let root = Recorder::root(&log, &stop);
     assert_eq!(thumbnail(&root, true, None), Err(CodecError::Corrupt));
     assert_eq!(outcome(&log, "job/decode"), Some(Outcome::Failed));
-    assert_eq!(outcome(&log, "job/resize"), Some(Outcome::Skipped));
-    assert_eq!(outcome(&log, "job/encode"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/resize"), Some(Outcome::NotRun));
+    assert_eq!(outcome(&log, "job/encode"), Some(Outcome::NotRun));
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn run_nested_classifies_inline_children_and_flattens_errors() {
         assert!(matches!(result, Err(RunError::Work(_))), "flat error");
         assert_eq!(outcome(&log, "job/tiles"), Some(expected));
         assert_eq!(outcome(&log, "job/tiles/left"), Some(Outcome::Succeeded));
-        assert_eq!(outcome(&log, "job/pack"), Some(Outcome::Skipped));
+        assert_eq!(outcome(&log, "job/pack"), Some(Outcome::NotRun));
     }
 }
 
@@ -321,7 +321,7 @@ fn a_stage_that_cannot_finish_reports_a_plan_error_and_skips_the_rest() {
         Ok::<(), PlanError>(())
     });
     assert_eq!(result, Err(RunError::Plan(PlanError::UnfinishedChildren)));
-    assert_eq!(outcome(&log, "job/later"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/later"), Some(Outcome::NotRun));
     assert_eq!(stages.finish(), Err(PlanError::Finished));
 }
 
@@ -366,7 +366,7 @@ fn after_a_caught_panic_the_plan_is_over() {
         Err(RunError::Plan(PlanError::Finished))
     );
     assert_eq!(outcome(&log, "job/first"), Some(Outcome::Abandoned));
-    assert_eq!(outcome(&log, "job/second"), Some(Outcome::Skipped));
+    assert_eq!(outcome(&log, "job/second"), Some(Outcome::NotRun));
     assert_eq!(stages.finish(), Err(PlanError::Finished));
 }
 

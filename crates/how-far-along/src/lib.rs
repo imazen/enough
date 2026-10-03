@@ -47,10 +47,15 @@
 
 extern crate alloc;
 
+#[cfg(feature = "callback")]
+mod callback;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 pub mod ext;
+#[cfg(feature = "json")]
 mod json;
+#[cfg(feature = "callback")]
+pub use callback::{Checkpoint, FnPulse};
 pub mod poll;
 #[cfg(feature = "profile")]
 pub mod profile;
@@ -58,13 +63,15 @@ mod pulse;
 mod sync;
 mod tree;
 
+#[cfg(feature = "adapters")]
+pub use how_far::WithStop;
 pub use how_far::{
     Child, ChildPulse, Execution, Inert, NoPulse, NoReport, Outcome, PhaseSpec, PlanError,
-    ProgressExt, ProgressWithStop, Pulse, PulseHandle, Report, RunError, Stages, Stop, StopReason,
-    Total, Unstoppable, prelude,
+    ProgressExt, ProgressWithStop, Pulse, PulseHandle, Report, RunError, SharedPulse, Stages, Stop,
+    StopReason, Total, Unstoppable, prelude,
 };
 pub use pulse::PulseTree;
-pub use tree::{NodeId, Observer, Phase, Reporter, Snapshot, Status};
+pub use tree::{NodeId, Observer, Phase, Reporter, Snapshot, Status, Summary};
 
 /// The README's examples, compiled and run as doctests.
 #[cfg(doctest)]

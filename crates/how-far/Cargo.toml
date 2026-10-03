@@ -9,6 +9,10 @@ description = "Cancellation, progress, and weighted phases through one interface
 keywords = ["progress", "cancellation", "no_std"]
 categories = ["concurrency", "no-std"]
 
+[features]
+# Only convenience implementations; Pulse and its behavior never vary.
+adapters = []
+
 [dependencies]
 # `alloc` gives `Arc<dyn Stop>` its `Stop` impl, which `PulseHandle` relies on.
 enough = { workspace = true, features = ["alloc"] }

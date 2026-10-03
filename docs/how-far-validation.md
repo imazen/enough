@@ -1,5 +1,8 @@
 # how-far validation
 
+The current redesign results are in [the validation report](../benchmarks/howfar-v2-validation.md).
+The dated build/runtime tables below describe the earlier baseline.
+
 What is tested, where, and what the tests do not cover. See
 [the design notes](how-far-design.md) for why things work the way they do.
 
@@ -9,7 +12,7 @@ What is tested, where, and what the tests do not cover. See
 | --- | --- |
 | Counting through every sink shape; original call sites survive forwarding | `crates/how-far/tests/interface.rs` |
 | The `Pulse` contract on `NoPulse`: nested plans, validation, handles, `split_array`, outcomes from results; `PhaseSpec::validate_split` and `Child::inert` for implementors | `crates/how-far/tests/pulse.rs` |
-| `FnPulse`: weighted and nested fractions, each kind of total, failed phases, stopping at the next check and at the next paced reach, the first reason kept, the planning rules, four threads reporting into one phase, handles on spawned threads | `crates/how-far/tests/fn_pulse.rs` |
+| `FnPulse`: checkpoint-only callbacks, lazy observation, reentrant observation, final paced cancellation, concurrent first-stop latching, no callback from Drop; shares accounting with the tree tests | `crates/how-far-along/tests/redesign.rs` |
 | References, boxes and `Arc`s of a pulse: generic code taking `&NoPulse` by value, an owned `Box<dyn Pulse>` defaulting to it, stops, reports, splits and handles forwarded | `crates/how-far/tests/forwarding.rs` |
 | `Paced`: never reaching a no-op pulse, exact counts per interval, stops seen at the next reach, pending units counted after an early return, saturation, call sites | `crates/how-far/tests/paced.rs` |
 | A hand-written `Pulse` shared by scoped threads; `'static` threads through handles | `crates/how-far/tests/pulse_threads.rs` |
@@ -28,7 +31,7 @@ What is tested, where, and what the tests do not cover. See
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |
-| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M (without `FnPulse`, which needs 64-bit atomics) and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
+| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M (including optional callbacks with native-width counters) and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
 
 No test suite proves every consumer's behavior. There is no built-in ETA
 model or executor; exported observations support them without claiming that
@@ -106,7 +109,7 @@ traces from the UI with `Profiler::try_snapshot`.
 A library that adopts `how-far` pays twice: once to compile `how-far`, and
 again for the generic `how-far` code compiled into the library itself.
 `dev/bench-how-far-build.py` measures both and runs in CI. It fails if
-`how-far` gains a feature, a build script, or a dependency other than
+`how-far` gains features other than additive `adapters`, a build script, or a dependency other than
 `enough`, or if one `Stages::run_*` call site adds more than 120 lines of
 `how-far`'s unoptimized LLVM IR to the caller's crate (64 with rustc
 1.99.0 on 2026-10-03, 81 with 1.98.1, 91 with 1.88). It also fails if

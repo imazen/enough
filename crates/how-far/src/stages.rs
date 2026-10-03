@@ -55,7 +55,7 @@ impl<E> RunError<RunError<E>> {
 /// [`Stages::new`] splits a pulse into the declared stages. Each `run` method
 /// hands its closure the next stage as `&dyn Pulse`, then finishes that stage:
 /// `Succeeded` if the closure returned `Ok`, otherwise the outcome its error
-/// maps to. After an error, every later stage is finished as `Skipped`, and
+/// maps to. After an error, every later stage is finished as `NotRun`, and
 /// the original error is returned unchanged. If the closure panics, the stage
 /// and every later one are recorded as abandoned when `Stages` is dropped. A
 /// caller that catches the panic and calls a `run` method again gets
@@ -136,6 +136,12 @@ impl<'a> Stages<'a> {
             running: false,
             stopped: false,
         })
+    }
+
+    /// Discharge an intentionally unnecessary stage, without running it.
+    pub fn skip(&mut self) -> Result<(), PlanError> {
+        self.next_stage()?;
+        self.end_stage(Outcome::Skipped)
     }
 
     /// Run the next stage. Any error from `work` marks it `Failed`.
@@ -238,6 +244,7 @@ impl<'a> Stages<'a> {
         match self.pending.front() {
             _ if self.stopped => Err(PlanError::Finished),
             Some(stage) => {
+                stage.start()?;
                 self.running = true;
                 Ok(stage.pulse())
             }
@@ -246,7 +253,7 @@ impl<'a> Stages<'a> {
     }
 
     /// Finish the current stage. After anything but success, finish the rest
-    /// as `Skipped`.
+    /// as `NotRun`.
     #[inline(never)]
     fn end_stage(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.running = false;
@@ -254,10 +261,10 @@ impl<'a> Stages<'a> {
             return Err(PlanError::NoMoreStages);
         };
         let finished = stage.finish(outcome);
-        if finished.is_err() || outcome != Outcome::Succeeded {
+        if finished.is_err() || !matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
             self.stopped = true;
             while let Some(stage) = self.pending.pop_front() {
-                let _ = stage.finish(Outcome::Skipped);
+                let _ = stage.finish(Outcome::NotRun);
             }
         }
         finished

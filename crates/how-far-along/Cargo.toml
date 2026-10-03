@@ -11,9 +11,12 @@ categories = ["concurrency", "no-std"]
 
 [features]
 # Features are additive: they add items and fields and never remove or retype any.
-default = ["std"]
+default = ["std", "json"]
 std = ["enough/std"]
-profile = ["std"]
+callback = []
+adapters = ["how-far/adapters"]
+json = []
+profile = ["std", "json"]
 diagnostics = ["profile"]
 
 [dependencies]
@@ -47,3 +50,7 @@ required-features = ["std"]
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[example]]
+name = "contention"
+required-features = ["std"]

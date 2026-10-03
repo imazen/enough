@@ -2,11 +2,11 @@
 use almost_enough::Stopper;
 use how_far_along::profile::{Clock, Profiler, SpanKind};
 use how_far_along::{
-    Execution, Observer, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Report, Stop,
+    Execution, Observer, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, Report, Stop,
     Total,
 };
-use std::num::NonZeroUsize;
 use rayon::prelude::*;
+use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
@@ -27,7 +27,7 @@ impl Clock for BrowserClock {
 }
 
 struct Job {
-    phase: Mutex<Option<Phase>>,
+    phase: Mutex<Option<PulseTree>>,
     observer: Observer,
     stop: Stopper,
     profiler: Profiler,
@@ -37,12 +37,14 @@ static JOB: OnceLock<Job> = OnceLock::new();
 #[wasm_bindgen]
 pub fn prepare() {
     let phase = Phase::new("browser encode", Total::Unknown);
+    let stop = Stopper::new();
+    let phase = PulseTree::new(phase, stop.clone());
     let observer = phase.observer();
     assert!(
         JOB.set(Job {
             phase: Mutex::new(Some(phase)),
             observer,
-            stop: Stopper::new(),
+            stop,
             profiler: Profiler::new(BrowserClock, 4)
         })
         .is_ok()
@@ -53,45 +55,59 @@ pub fn prepare() {
 #[wasm_bindgen]
 pub fn run(items: u32) -> String {
     let job = JOB.get().unwrap();
-    let mut root = job.phase.lock().unwrap().take().unwrap();
-    let [mut before, mut middle, mut after] = root
-        .split(
+    let root = job.phase.lock().unwrap().take().unwrap();
+    let [before, middle, after] = root
+        .split_array(
             Execution::Sequence,
             [
                 PhaseSpec::new("prepare", 35, Total::Exact(1)),
                 PhaseSpec::new("search", 30, Total::Exact(u64::from(items))).execution(
                     Execution::work_pool(
-                        NonZeroUsize::new(rayon::current_num_threads()).unwrap_or(NonZeroUsize::MIN),
+                        NonZeroUsize::new(rayon::current_num_threads())
+                            .unwrap_or(NonZeroUsize::MIN),
                     ),
                 ),
                 PhaseSpec::new("write", 35, Total::Exact(1)),
             ],
         )
         .unwrap();
-    before.reporter().advance(1);
-    before.finish().unwrap();
+    before.advance(1);
+    before.finish(Outcome::Succeeded).unwrap();
     middle.start().unwrap();
-    let progress = ProgressWithStop::new(&job.stop, middle.reporter());
-    let join = job.profiler.span(middle.id(), "Rayon join", SpanKind::Wait);
-    let result = (0..items).into_par_iter().try_for_each(|item| {
-        job.stop.check()?;
-        // Content-dependent work, counted once per accepted logical item.
-        let mut value = u64::from(item);
-        for _ in 0..(128 + item % 997) {
-            value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
-        }
-        std::hint::black_box(value);
-        progress.step(1)
-    }); // Rayon joins all in-flight work before returning.
+    let shared = middle.share().unwrap();
+    let join = job.profiler.span(
+        job.observer.snapshot().children[1].id,
+        "Rayon join",
+        SpanKind::Wait,
+    );
+    let result = (0..items)
+        .into_par_iter()
+        .chunks(256)
+        .try_for_each(|chunk| {
+            let mut progress = shared.as_pulse().paced(64);
+            for item in chunk {
+                job.stop.check()?;
+                // Content-dependent work, counted once per accepted logical item.
+                let mut value = u64::from(item);
+                for _ in 0..(128 + item % 997) {
+                    value = std::hint::black_box(
+                        value.wrapping_mul(6364136223846793005).wrapping_add(1),
+                    );
+                }
+                std::hint::black_box(value);
+                progress.step(1)?;
+            }
+            progress.finish()
+        }); // Rayon joins all in-flight work before returning.
     if result.is_ok() {
-        middle.finish().unwrap();
-        after.reporter().advance(1);
-        after.finish().unwrap();
-        root.finish().unwrap();
+        middle.finish(Outcome::Succeeded).unwrap();
+        after.advance(1);
+        after.finish(Outcome::Succeeded).unwrap();
+        root.finish(Outcome::Succeeded).unwrap();
     } else {
-        middle.finish_with(Outcome::Cancelled).unwrap();
-        after.finish_with(Outcome::Skipped).unwrap();
-        root.finish_with(Outcome::Cancelled).unwrap();
+        middle.finish(Outcome::Cancelled).unwrap();
+        after.finish(Outcome::NotRun).unwrap();
+        root.finish(Outcome::Cancelled).unwrap();
     }
     join.finish(if result.is_ok() {
         Outcome::Succeeded

@@ -26,7 +26,7 @@ use core::fmt;
 ///         }
 ///         pace.step(row.len() as u64)?;
 ///     }
-///     Ok(())
+///     pace.finish()
 /// }
 ///
 /// defilter(&mut vec![vec![0; 64]; 3], &how_far::NoPulse)?;
@@ -95,14 +95,23 @@ impl<'a> Paced<'a> {
         }
     }
 
+    /// Flush the final batch and check cancellation before returning success.
+    /// Drop only flushes counts and cannot propagate cancellation.
+    #[track_caller]
+    pub fn finish(mut self) -> Result<(), StopReason> {
+        self.flush();
+        self.check()
+    }
+
     /// Report every pending unit now.
     #[inline]
     #[track_caller]
     pub fn flush(&mut self) {
         if let Some(pulse) = self.pulse {
             if self.left != self.every {
-                pulse.advance(self.every - self.left);
+                let pending = self.every - self.left;
                 self.left = self.every;
+                pulse.advance(pending);
             }
         }
     }

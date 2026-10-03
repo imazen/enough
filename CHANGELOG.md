@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased how-far redesign
+
+- Move FnPulse to how-far-along's optional callback feature. Checkpoints invoke
+  callbacks once; reports and Drop only count. Callback and tree accounting share
+  the same lifecycle, native counters and revisions.
+- Add full-capability SharedPulse, explicit sharing failure, start/set_total,
+  Paced::finish and Stages::skip. NotRun distinguishes prevented work from skipped
+  work and does not manufacture progress after failure.
+- Freeze abandoned owners even when shared workers remain. Add allocation-free
+  summaries and optional JSON export. Optional adapters compose stop policies
+  through child plans and shared handles.
+- Validate native threads, browser Rayon shared progress, cold builds and an
+  isolated feature-gated adoption in the real zenpng encoder.
+
+
 ## [Unreleased]
 
 ### QUEUED BREAKING CHANGES

@@ -32,9 +32,7 @@ const _: () = {
     // One byte, so the one static `NoPulse` has an address of its own.
     assert!(size_of::<Inert>() == 1);
     assert!(size_of::<NoReport>() == 0);
-    // One `Arc`: the callback and every phase live behind it.
-    #[cfg(target_has_atomic = "64")]
-    assert!(size_of::<how_far::FnPulse>() == WORD);
+    assert!(size_of::<how_far::SharedPulse>() == 2 * WORD);
     assert!(size_of::<ProgressWithStop<Unstoppable, NoReport>>() == 0);
 };
 

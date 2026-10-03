@@ -181,7 +181,7 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 /// Creating one turns on [`Profiler::set_report_timing`].
 pub struct DiagnosticPulse {
     tree: PulseTree,
-    meter: Meter,
+    meter: MeterOwner,
 }
 
 impl fmt::Debug for DiagnosticPulse {
@@ -199,7 +199,7 @@ impl DiagnosticPulse {
         let observer = tree.observer();
         let snapshot = observer.snapshot();
         Self {
-            meter: Meter {
+            meter: MeterOwner(Arc::new(Meter {
                 observer,
                 profiler: profiler.clone(),
                 node: snapshot.id,
@@ -208,7 +208,8 @@ impl DiagnosticPulse {
                 entered: None,
                 exited: None,
                 has_children: AtomicBool::new(false),
-            },
+                closed: AtomicBool::new(false),
+            })),
             tree,
         }
     }
@@ -232,6 +233,18 @@ impl DiagnosticPulse {
 }
 
 /// The measurement state shared by the root wrapper and every child.
+struct MeterOwner(Arc<Meter>);
+impl core::ops::Deref for MeterOwner {
+    type Target = Meter;
+    fn deref(&self) -> &Meter {
+        &self.0
+    }
+}
+impl Drop for MeterOwner {
+    fn drop(&mut self) {
+        self.close(Outcome::Abandoned);
+    }
+}
 struct Meter {
     observer: Observer,
     profiler: Profiler,
@@ -244,6 +257,7 @@ struct Meter {
     exited: Option<Arc<Mutex<Duration>>>,
     /// A phase that split: its time belongs to its children's spans.
     has_children: AtomicBool,
+    closed: AtomicBool,
 }
 
 impl Meter {
@@ -297,7 +311,7 @@ impl Meter {
         for (index, child) in children.into_iter().enumerate() {
             measured.push(Child::new(DiagnosticChild {
                 inner: child,
-                meter: Meter {
+                meter: MeterOwner(Arc::new(Meter {
                     observer: self.observer.clone(),
                     profiler: self.profiler.clone(),
                     node: match nodes.get(index) {
@@ -309,7 +323,8 @@ impl Meter {
                     entered: cells.get(index).cloned(),
                     exited: cells.get(index + 1).cloned(),
                     has_children: AtomicBool::new(false),
-                },
+                    closed: AtomicBool::new(false),
+                })),
             }));
         }
         Ok(measured)
@@ -325,6 +340,9 @@ impl Meter {
     }
 
     fn close(&self, outcome: Outcome) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let mut owner = self.span.lock();
         if owner.is_none()
             && outcome == Outcome::Succeeded
@@ -388,12 +406,25 @@ impl Pulse for DiagnosticPulse {
     fn handle(&self) -> PulseHandle {
         self.meter.handle(&self.tree)
     }
+    fn start(&self) -> Result<(), PlanError> {
+        self.tree.start()
+    }
+    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
+        Ok(crate::SharedPulse::new(DiagnosticView {
+            inner: self.tree.share()?,
+            meter: Arc::clone(&self.meter.0),
+            span: self.meter.span(),
+        }))
+    }
+    fn set_total(&self, total: crate::Total) -> Result<(), PlanError> {
+        self.tree.set_total(total)
+    }
 }
 
 /// A measured child phase.
 struct DiagnosticChild<'a> {
     inner: Child<'a>,
-    meter: Meter,
+    meter: MeterOwner,
 }
 
 impl Stop for DiagnosticChild<'_> {
@@ -427,6 +458,19 @@ impl Pulse for DiagnosticChild<'_> {
     fn handle(&self) -> PulseHandle {
         self.meter.handle(&self.inner)
     }
+    fn start(&self) -> Result<(), PlanError> {
+        self.inner.start()
+    }
+    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
+        Ok(crate::SharedPulse::new(DiagnosticView {
+            inner: self.inner.share()?,
+            meter: Arc::clone(&self.meter.0),
+            span: self.meter.span(),
+        }))
+    }
+    fn set_total(&self, total: crate::Total) -> Result<(), PlanError> {
+        self.inner.set_total(total)
+    }
 }
 
 impl ChildPulse for DiagnosticChild<'_> {
@@ -439,6 +483,57 @@ impl ChildPulse for DiagnosticChild<'_> {
             Outcome::Abandoned
         });
         result
+    }
+}
+
+// A non-owning measurement view keeps the original span, including after close.
+// SpanInner ignores late measurements; dropping this view never ends the span.
+struct DiagnosticView {
+    inner: crate::SharedPulse,
+    meter: Arc<Meter>,
+    span: Arc<SpanInner>,
+}
+impl Stop for DiagnosticView {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        checked(&self.span, &self.inner)
+    }
+    fn may_stop(&self) -> bool {
+        true
+    }
+}
+impl Report for DiagnosticView {
+    #[track_caller]
+    fn advance(&self, n: u64) {
+        advanced(&self.span, &self.inner, n)
+    }
+    fn may_report(&self) -> bool {
+        true
+    }
+}
+impl Pulse for DiagnosticView {
+    fn split(&self, e: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
+        self.meter.split(&self.inner, e, parts)
+    }
+    fn handle(&self) -> PulseHandle {
+        let handle = self.inner.handle();
+        ProgressWithStop::new(
+            Some(Arc::new(Instrumented::new(handle.stop, self.span.clone())) as Arc<dyn Stop>),
+            Some(Arc::new(Instrumented::new(handle.report, self.span.clone())) as Arc<dyn Report>),
+        )
+    }
+    fn start(&self) -> Result<(), PlanError> {
+        self.inner.start()
+    }
+    fn set_total(&self, t: crate::Total) -> Result<(), PlanError> {
+        self.inner.set_total(t)
+    }
+    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
+        Ok(crate::SharedPulse::new(Self {
+            inner: self.inner.clone(),
+            meter: self.meter.clone(),
+            span: self.span.clone(),
+        }))
     }
 }
 

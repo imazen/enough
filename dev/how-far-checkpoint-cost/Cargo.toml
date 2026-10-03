@@ -8,6 +8,6 @@ description = "Checkpoint and per-operation costs of how-far, counted with perf"
 [dependencies]
 almost-enough = { path = "../../crates/almost-enough" }
 how-far = { path = "../../crates/how-far" }
-how-far-along = { path = "../../crates/how-far-along" }
+how-far-along = { path = "../../crates/how-far-along", features = ["callback"] }
 
 [workspace]

@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 120 lines (supported surface) | how-far-along.features.txt 151 added (features: diagnostics,profile,std) | how-far-along.internal.txt 15 lines (15 hidden + 0 excluded-feature)
+# files: how-far-along.txt 129 lines (supported surface) | how-far-along.features.txt 166 added (features: adapters,callback,diagnostics,json,profile,std) | how-far-along.internal.txt 16 lines (16 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 3
-#   pub types (struct/enum/trait/alias)        14
+#   pub types (struct/enum/trait/alias)        15
 #   pub consts/statics                          3
-#   inherent methods                           42
-#   struct fields                              13
+#   inherent methods                           45
+#   struct fields                              16
 #   enum variants                               3
-#   re-exports                                 21
-#   trait roster entries (type × trait)        41
-#   auto-trait-complete types                   7
+#   re-exports                                 22
+#   trait roster entries (type × trait)        45
+#   auto-trait-complete types                   8
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                           74
+#   (root)                           82
 #   ext                               6
 #   poll                             19
 
-## items (99 lines)
+## items (107 lines)
 
 pub mod how_far_along
 pub use Child
@@ -44,6 +44,7 @@ pub use Pulse
 pub use PulseHandle
 pub use Report
 pub use RunError
+pub use SharedPulse
 pub use Stages
 pub use Stop
 pub use StopReason
@@ -87,8 +88,11 @@ pub const fn NodeId::get(self) -> usize
 pub struct Observer
 pub fn Observer::id(&self) -> NodeId
 pub fn Observer::is_finished(&self) -> bool
+pub fn Observer::name(&self) -> &str
 pub fn Observer::snapshot(&self) -> Snapshot
+pub fn Observer::summary(&self) -> Summary
 pub fn Observer::try_snapshot(&self) -> core::option::Option<Snapshot>
+pub fn Observer::try_summary(&self) -> core::option::Option<Summary>
 pub struct Phase
 pub fn Phase::finish(&mut self) -> core::result::Result<(), how_far::pulse::PlanError>
 pub fn Phase::finish_with(&mut self, how_far::pulse::Outcome) -> core::result::Result<(), how_far::pulse::PlanError>
@@ -127,8 +131,12 @@ pub fn Snapshot::fraction(&self) -> core::option::Option<f64>
 pub fn Snapshot::overrun(&self) -> bool
 pub fn Snapshot::unresolved_fraction(&self) -> f64
 pub fn Snapshot::write_json(&self, &mut impl core::fmt::Write) -> core::fmt::Result
+#[non_exhaustive] pub struct Summary
+pub Summary::fraction: core::option::Option<f64>
+pub Summary::status: Status
+pub Summary::unresolved_fraction: f64
 
-## trait impls (14 types)
+## trait impls (15 types)
 
 NodeId: Clone, Copy, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd
 Observer: Clone, Debug
@@ -137,6 +145,7 @@ PulseTree: Debug, enough::Stop, how_far::pulse::Pulse, how_far::report::Report
 Reporter: Clone, Debug, how_far::report::Report
 Snapshot: Clone, Debug, PartialEq
 Status: Clone, Copy, Debug, Eq, PartialEq
+Summary: Clone, Copy, Debug, PartialEq
 T: ext::ReportExt
 ext::Batch<R>: Debug, Drop
 poll::LocalPoller<'_>: Debug
@@ -147,8 +156,8 @@ poll::SubscriptionId: Clone, Copy, Debug, Eq, Hash, PartialEq
 
 ## auto traits
 
-7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
-PulseTree: !Freeze !RefUnwindSafe !UnwindSafe
+8 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+PulseTree: !RefUnwindSafe !UnwindSafe
 ext::Batch<R>: !Freeze !RefUnwindSafe !Unpin !UnwindSafe
 poll::LocalPoller<'a>: !RefUnwindSafe !Send !Sync !UnwindSafe
 poll::PollEvent<'a>: !Freeze !RefUnwindSafe !Sync

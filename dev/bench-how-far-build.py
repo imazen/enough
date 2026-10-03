@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard the build cost of how-far and how-far-along.
 
-Fails the run if how-far gains features, a build script or a dependency other
+Fails the run if how-far gains features beyond additive adapters, a build script or a dependency other
 than `enough`; if one `Stages::run_*` call site adds more than --ir-budget
 lines of how-far's unoptimized LLVM IR to the caller's crate; or if
 how-far-along's own unoptimized IR, with default features or with
@@ -34,7 +34,7 @@ root = Path(__file__).resolve().parent.parent
 meta = json.loads(subprocess.check_output(
     ["cargo", "metadata", "--format-version=1", "--no-deps"], cwd=root))
 how_far = next(p for p in meta["packages"] if p["name"] == "how-far")
-assert how_far["features"] == {}, "how-far's interface must not vary with features"
+assert how_far["features"] == {"adapters": []}, "only additive adapters are allowed in core"
 assert [(d["name"], d["kind"]) for d in how_far["dependencies"] if d["kind"] != "dev"] \
     == [("enough", None)], "how-far may depend only on the lightweight enough interface"
 assert all("custom-build" not in t["kind"] for t in how_far["targets"]), \

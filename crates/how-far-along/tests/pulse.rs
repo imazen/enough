@@ -250,7 +250,7 @@ fn stages_finish_each_stage_and_classify_stops_apart_from_failures() {
         assert_eq!(snapshot.children[1].status, Status::Finished(outcome));
         assert_eq!(
             snapshot.children[2].status,
-            Status::Finished(Outcome::Skipped)
+            Status::Finished(Outcome::NotRun)
         );
         tree.finish(outcome).unwrap();
         assert_eq!(observer.snapshot().status, Status::Finished(outcome));
@@ -298,7 +298,7 @@ fn a_classified_stage_keeps_codec_failure_apart_from_cancellation() {
         assert_eq!(snapshot.children[0].status, Status::Finished(expected));
         assert_eq!(
             snapshot.children[1].status,
-            Status::Finished(Outcome::Skipped)
+            Status::Finished(Outcome::NotRun)
         );
     }
 }
@@ -393,7 +393,7 @@ fn a_nested_plan_error_fails_the_stage_and_skips_the_rest() {
     );
     assert_eq!(
         snapshot.children[1].status,
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
 }
 
@@ -482,11 +482,11 @@ fn cancelling_a_nested_library_records_every_level_and_keeps_the_error() {
     );
     assert_eq!(
         snapshot.children[1].children[1].status,
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
     assert_eq!(
         snapshot.children[2].status,
-        Status::Finished(Outcome::Skipped)
+        Status::Finished(Outcome::NotRun)
     );
 }
 

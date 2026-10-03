@@ -11,6 +11,8 @@ it from any thread. Reading never blocks the workers' counting.
 ```toml
 [dependencies]
 how-far-along = "0.1"
+# features = ["callback"]      # callbacks at checks, lazy progress
+# features = ["adapters"]      # compose additional cancellation policies
 # Optional, usually as dev-dependencies:
 #   features = ["profile"]      # time checks and reports per task
 #   features = ["diagnostics"]  # turn traces into source-located advice
@@ -57,9 +59,36 @@ library returns; dropping it unfinished records `Abandoned`.
 [`Outcome::from_result`](https://docs.rs/how-far/latest/how_far/enum.Outcome.html#method.from_result)
 turns a library's result into an outcome.
 
+## Share work and revise totals
+
+`pulse.share()?` retains the complete Pulse interface for spawned tasks. The
+original owner finishes after they join. `pulse.start()` marks active work;
+`pulse.set_total(total)` revises a leaf denominator. `Stages` starts its stages.
+Reports after owner completion or abandonment cannot change terminal views.
+
+## Checkpoint callbacks
+
+Enable `callback` and construct `FnPulse::new("job", |checkpoint| ...)`. The
+callback runs at checks, including checks from owned handles and nested phases.
+`checkpoint.summary()` walks the shared accounting tree only when requested;
+`try_summary()` is available for nonblocking observations. Return a StopReason
+to stop the job. Callbacks may overlap on workers. Reports, completion and Drop
+never call user code; `Paced::finish()` flushes and checks the final short batch.
+Keep an observer and read it once after finishing the root for the final display.
+Use LocalPoller for callbacks that capture UI objects or other thread-local state.
+
+## Features and embedded targets
+
+Defaults are `std` and `json`. With both disabled, tracking needs only alloc,
+pointer atomics, and an application critical-section provider. `callback` works
+without std or native 64-bit atomics. Counters saturate at the native target limit
+and mark overflow. JSON export, callbacks, cancellation adapters and profiling
+can each be absent from a minimal build. Profiling requires std.
+
 ## Read progress
 
-`Observer::snapshot()` returns an owned tree of `Snapshot`s: names, weights,
+`Observer::summary()` reads fraction, unresolved share and status without
+allocating. `try_summary()` skips busy metadata. `Observer::snapshot()` returns an owned tree of `Snapshot`s: names, weights,
 units, totals and their revisions, counts, statuses and outcomes.
 
 - `fraction()` is the weighted share of counted work, from 0 to 1, or `None`
@@ -144,14 +173,17 @@ weights that differ from measured time. See the
 
 | Build | What you get |
 | --- | --- |
-| default (`std`) | Trees, observers, and pollers; metadata behind short standard mutexes |
-| `default-features = false` | The same API on `no_std + alloc`, through the application's [`critical-section`](https://docs.rs/critical-section) provider |
+| default (`std`, `json`) | Trees, observers, pollers and JSON; metadata behind short standard mutexes |
+| `default-features = false` | Tracking on `no_std + alloc`, through the application's [`critical-section`](https://docs.rs/critical-section) provider |
+| `callback` | Synchronous checkpoint callbacks and lazy observation; no std requirement |
+| `adapters` | Additional cancellation policies preserved through splitting and sharing |
+| `json` | Snapshot JSON export without requiring std |
 | `profile` | The span profiler; requires `std` |
 | `diagnostics` | `DiagnosticPulse` and `Trace::diagnose`; implies `profile` |
 
 Features only add items. No feature changes what another one records.
-With `diagnostics`, rustc does 2.4 to 3.3 times the work of a default build
-(check to release), so keep it in dev-dependencies.
+Keep profiling and diagnostics in application or dev-dependencies. See the
+[measured build costs](../../benchmarks/howfar-v2-validation.md) for each layer.
 
 Counting and cancellation use atomics only. Metadata (plans, totals,
 outcomes) lives in immutable `Arc`s; a short lock guards only the swap of

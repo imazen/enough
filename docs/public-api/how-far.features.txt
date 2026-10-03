@@ -1,5 +1,5 @@
 # how-far public API — additions from non-default features
-# features: (none)
+# features: adapters
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -7,4 +7,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 
-(no additional public surface)
+## summary
+#
+#   pub types (struct/enum/trait/alias)         1
+#   inherent methods                            2
+#   trait roster entries (type × trait)         4
+#   auto-trait exceptions                       1
+#
+# per-module pub lines:
+#   (root)                            3
+
+## items (3 lines)
+
+pub struct WithStop<'a>
+pub fn WithStop<'static>::stop_only(impl enough::Stop + 'static) -> Self
+pub fn WithStop<'a>::new(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
+
+## trait impls (1 types)
+
+WithStop<'_>: ChildPulse, Pulse, Report, enough::Stop
+
+## auto traits
+
+0 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+WithStop<'a>: !RefUnwindSafe !UnwindSafe

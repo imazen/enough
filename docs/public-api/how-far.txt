@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 137 lines (supported surface) | how-far.features.txt 0 added (features: none) | how-far.internal.txt 15 lines (15 hidden + 0 excluded-feature)
+# files: how-far.txt 142 lines (supported surface) | how-far.features.txt 6 added (features: adapters) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        22
+#   pub types (struct/enum/trait/alias)        21
 #   pub consts/statics                          7
-#   free functions                              8
-#   inherent methods                           32
-#   struct fields                              14
-#   enum variants                              24
+#   free functions                             14
+#   inherent methods                           40
+#   struct fields                               8
+#   enum variants                              26
 #   re-exports                                  4
-#   trait roster entries (type × trait)        81
-#   auto-trait-complete types                   8
+#   trait roster entries (type × trait)        80
+#   auto-trait-complete types                   7
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                          102
-#   prelude                          11
+#   (root)                          108
+#   prelude                          14
 
-## items (106 lines)
+## items (112 lines)
 
 pub mod how_far
 pub use Stop
@@ -38,9 +38,15 @@ pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub fn prelude::Pulse::handle(&self) -> PulseHandle
+pub fn prelude::Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
+pub fn prelude::Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
 pub fn prelude::Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
+pub fn prelude::Pulse::start(&self) -> core::result::Result<(), PlanError>
 pub fn &mut P::handle(&self) -> PulseHandle [also: (root)]
+pub fn &mut P::set_total(&self, Total) -> core::result::Result<(), PlanError> [also: (root)]
+pub fn &mut P::share(&self) -> core::result::Result<SharedPulse, PlanError> [also: (root)]
 pub fn &mut P::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError> [also: (root)]
+pub fn &mut P::start(&self) -> core::result::Result<(), PlanError> [also: (root)]
 pub fn prelude::Report::advance(&self, u64)
 pub fn prelude::Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64) [also: (root)]
@@ -56,6 +62,7 @@ pub const fn Execution::work_pool(core::num::nonzero::NonZeroUsize) -> Self
 pub Outcome::Abandoned
 pub Outcome::Cancelled
 pub Outcome::Failed
+pub Outcome::NotRun
 pub Outcome::Skipped
 pub Outcome::Succeeded
 pub fn Outcome::from_result<T, E>(&core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> Self
@@ -66,6 +73,7 @@ pub PlanError::EmptyOrZeroWeight
 pub PlanError::Finished
 pub PlanError::NoMoreStages
 pub PlanError::NotALeaf
+pub PlanError::NotShareable
 pub PlanError::Overflow
 pub PlanError::UnfinishedChildren
 pub PlanError::UnsuccessfulChildren
@@ -82,13 +90,11 @@ pub fn Child<'_>::paced(&self, u64) -> Paced<'_>
 pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
 pub const fn Child<'a>::inert() -> Self
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
-pub struct FnPulse
-pub fn FnPulse::fraction(&self) -> f64
-pub fn FnPulse::new(impl core::ops::function::Fn(core::option::Option<&Progress<'_>>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub struct Inert
 pub struct NoReport
 pub struct Paced<'a>
 pub fn Paced<'a>::check(&self) -> core::result::Result<(), enough::reason::StopReason>
+pub fn Paced<'a>::finish(self) -> core::result::Result<(), enough::reason::StopReason>
 pub fn Paced<'a>::flush(&mut self)
 pub fn Paced<'a>::new(&'a dyn Pulse, u64) -> Self
 pub fn Paced<'a>::step(&mut self, u64) -> core::result::Result<(), enough::reason::StopReason>
@@ -102,17 +108,13 @@ pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
 pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
 pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
 pub fn PhaseSpec<'a>::validate_split(&[PhaseSpec<'_>]) -> core::result::Result<u64, PlanError>
-#[non_exhaustive] pub struct Progress<'a>
-pub Progress::completed: u64
-pub Progress::fraction: f64
-pub Progress::outcome: core::option::Option<Outcome>
-pub Progress::phase: &'a str
-pub Progress::total: Total
-pub Progress::units: &'a str
 pub struct ProgressWithStop<S, R>
 pub ProgressWithStop::report: R
 pub ProgressWithStop::stop: S
 pub const fn ProgressWithStop<S, R>::new(S, R) -> Self
+pub struct SharedPulse(_)
+pub fn SharedPulse::as_pulse(&self) -> &dyn Pulse
+pub fn SharedPulse::new(impl Pulse + 'static) -> Self
 pub struct Stages<'a>
 pub fn Stages<'a>::finish(self) -> core::result::Result<(), PlanError>
 pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
@@ -120,6 +122,7 @@ pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pu
 pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Stages<'a>::skip(&mut self) -> core::result::Result<(), PlanError>
 pub static NoPulse: Inert
 pub trait ChildPulse: Pulse
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
@@ -129,13 +132,16 @@ pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>
 pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub trait Pulse: enough::Stop + Report [also: prelude]
 pub fn Pulse::handle(&self) -> PulseHandle
+pub fn Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
+pub fn Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
 pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
+pub fn Pulse::start(&self) -> core::result::Result<(), PlanError>
 pub trait Report: core::marker::Send + core::marker::Sync [also: prelude]
 pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
-## trait impls (24 types)
+## trait impls (23 types)
 
 &P: Pulse
 &T: Report
@@ -143,16 +149,15 @@ pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dy
 &mut T: Report
 Child<'_>: Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
-FnPulse: Debug, Pulse, Report, enough::Stop
 Inert: Debug, Pulse, Report, enough::Stop
 NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
 Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
 Paced<'_>: Debug, Drop
 PhaseSpec<'a>: Clone, Copy, Debug, Eq, PartialEq
 PlanError: Clone, Copy, Debug, Display, Eq, Error, Hash, PartialEq
-Progress<'a>: Clone, Copy, Debug
 ProgressWithStop<S, R>: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report, enough::Stop
 RunError<E>: Debug, Display, Eq, Error, From<PlanError>, PartialEq
+SharedPulse: Clone, Debug, Default, Pulse, Report, enough::Stop
 Stages<'_>: Debug
 T: ProgressExt
 Total: Clone, Copy, Debug, Eq, PartialEq
@@ -164,10 +169,10 @@ core::option::Option<T>: Report
 
 ## auto traits
 
-8 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Child<'a>: !RefUnwindSafe !UnwindSafe
-FnPulse: !RefUnwindSafe !UnwindSafe
 Paced<'a>: !RefUnwindSafe !UnwindSafe
 ProgressWithStop<S, R>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+SharedPulse: !RefUnwindSafe !UnwindSafe
 Stages<'a>: !RefUnwindSafe !UnwindSafe

@@ -64,6 +64,8 @@ pub enum Outcome {
     Failed,
     /// The phase's owner went away without publishing an outcome.
     Abandoned,
+    /// Prevented from running by an earlier error; earns no completed share.
+    NotRun,
 }
 
 impl Outcome {
@@ -99,6 +101,8 @@ pub enum PlanError {
     NotALeaf,
     /// This pulse cannot plan children.
     Unsupported,
+    /// This borrowed implementation cannot provide an owned pulse.
+    NotShareable,
     /// The phase already has an outcome.
     Finished,
     /// Every child must finish before its parent.
@@ -119,6 +123,7 @@ impl fmt::Display for PlanError {
             Self::AlreadyInUse => "the phase already counted work or planned children",
             Self::NotALeaf => "only a leaf phase has its own total",
             Self::Unsupported => "this pulse cannot plan children",
+            Self::NotShareable => "this pulse cannot provide an owned handle",
             Self::Finished => "the phase already has an outcome",
             Self::UnfinishedChildren => "every child must finish before its parent",
             Self::UnsuccessfulChildren => "a phase cannot succeed while a child did not",
@@ -204,7 +209,7 @@ impl<'a> PhaseSpec<'a> {
 /// A library accepts `&dyn Pulse` and uses it three ways:
 ///
 /// - `check()` asks whether to stop. It is the cheapest call, unless the
-///   caller made it run code of its own, as an [`FnPulse`](crate::FnPulse)
+///   caller made it run code of its own, as a checkpoint
 ///   callback does; check once per row, block or tile, not per byte.
 /// - `advance(n)` counts finished units; [`ProgressExt::step`](crate::ProgressExt::step)
 ///   counts and then checks.
@@ -220,10 +225,8 @@ impl<'a> PhaseSpec<'a> {
 ///
 /// # Implementing
 ///
-/// Before writing one, check whether [`FnPulse`](crate::FnPulse) does the job:
-/// it turns one callback into a pulse that plans, shares progress out by
-/// weight, and stops the work when the callback says so. An implementation
-/// must keep these rules, which no type enforces:
+/// A tracker or checkpoint callback adapter from `how-far-along` usually
+/// suffices. Implementations must keep these rules:
 ///
 /// - `check` and `advance` may run on many threads at once, and `advance` must
 ///   not block. `may_stop` and `may_report` return `false` only when that can
@@ -266,6 +269,25 @@ pub trait Pulse: Stop + Report {
     /// [`PulseHandle::default()`], which never stops and discards reports;
     /// such a pulse should document that.
     fn handle(&self) -> PulseHandle;
+
+    /// Mark this phase running, without counting or ending planning.
+    /// Implementations without lifecycle observations may ignore this.
+    fn start(&self) -> Result<(), PlanError> {
+        Ok(())
+    }
+
+    /// Revise a leaf's denominator without changing completed units or weights.
+    /// Unsupported implementations return an error instead of losing the update.
+    fn set_total(&self, _total: Total) -> Result<(), PlanError> {
+        Err(PlanError::Unsupported)
+    }
+
+    /// Share all pulse capabilities with owned work, but never completion rights.
+    /// Join such work before finishing the original owner. Unsupported ownership
+    /// is explicit; this method never silently replaces cancellation with a no-op.
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Err(PlanError::NotShareable)
+    }
 }
 
 // A reference, box or `Arc` of a pulse is a pulse, as for `Stop` and `Report`,
@@ -285,6 +307,15 @@ impl<P: Pulse + ?Sized> Pulse for &P {
     fn handle(&self) -> PulseHandle {
         (**self).handle()
     }
+    fn start(&self) -> Result<(), PlanError> {
+        (**self).start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        (**self).set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        (**self).share()
+    }
 }
 
 impl<P: Pulse + ?Sized> Pulse for &mut P {
@@ -299,6 +330,15 @@ impl<P: Pulse + ?Sized> Pulse for &mut P {
     #[inline]
     fn handle(&self) -> PulseHandle {
         (**self).handle()
+    }
+    fn start(&self) -> Result<(), PlanError> {
+        (**self).start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        (**self).set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        (**self).share()
     }
 }
 
@@ -315,6 +355,15 @@ impl<P: Pulse + ?Sized> Pulse for Box<P> {
     fn handle(&self) -> PulseHandle {
         (**self).handle()
     }
+    fn start(&self) -> Result<(), PlanError> {
+        (**self).start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        (**self).set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        (**self).share()
+    }
 }
 
 impl<P: Pulse + ?Sized> Pulse for Arc<P> {
@@ -329,6 +378,15 @@ impl<P: Pulse + ?Sized> Pulse for Arc<P> {
     #[inline]
     fn handle(&self) -> PulseHandle {
         (**self).handle()
+    }
+    fn start(&self) -> Result<(), PlanError> {
+        (**self).start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        (**self).set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        (**self).share()
     }
 }
 
@@ -440,6 +498,15 @@ impl Pulse for Child<'_> {
     fn handle(&self) -> PulseHandle {
         self.pulse().handle()
     }
+    fn start(&self) -> Result<(), PlanError> {
+        self.pulse().start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        self.pulse().set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        self.pulse().share()
+    }
 }
 
 /// An owned, cloneable, `'static` view of a pulse's stop policy and counter.
@@ -511,6 +578,12 @@ impl Pulse for Inert {
     fn handle(&self) -> PulseHandle {
         ProgressWithStop::new(None, None)
     }
+    fn set_total(&self, _: Total) -> Result<(), PlanError> {
+        Ok(())
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Ok(SharedPulse::default())
+    }
 }
 
 #[cfg(test)]
@@ -542,5 +615,70 @@ mod tests {
             NoPulse.split(Execution::Sequence, &[]).err(),
             Some(PlanError::EmptyOrZeroWeight)
         );
+    }
+}
+
+/// An owned, cloneable pulse that retains planning and cancellation capabilities.
+/// The original phase owner alone may finish it. Requires pointer atomics.
+#[derive(Clone, Default)]
+pub struct SharedPulse(Option<Arc<dyn Pulse>>);
+impl SharedPulse {
+    /// Erase an owned implementation. The implementation must not own the
+    /// phase's completion token: dropping clones must not finish the phase.
+    pub fn new(pulse: impl Pulse + 'static) -> Self {
+        Self(Some(Arc::new(pulse)))
+    }
+    /// Borrow the underlying pulse, preserving the canonical no-op fast path.
+    pub fn as_pulse(&self) -> &dyn Pulse {
+        match &self.0 {
+            Some(p) => &**p,
+            None => &NoPulse,
+        }
+    }
+}
+impl fmt::Debug for SharedPulse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedPulse")
+            .field("live", &self.0.is_some())
+            .finish()
+    }
+}
+impl Stop for SharedPulse {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        self.as_pulse().check()
+    }
+    fn may_stop(&self) -> bool {
+        self.as_pulse().may_stop()
+    }
+}
+impl Report for SharedPulse {
+    #[track_caller]
+    fn advance(&self, n: u64) {
+        self.as_pulse().advance(n)
+    }
+    fn may_report(&self) -> bool {
+        self.as_pulse().may_report()
+    }
+}
+impl Pulse for SharedPulse {
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        self.as_pulse().split(execution, parts)
+    }
+    fn handle(&self) -> PulseHandle {
+        self.as_pulse().handle()
+    }
+    fn start(&self) -> Result<(), PlanError> {
+        self.as_pulse().start()
+    }
+    fn set_total(&self, total: Total) -> Result<(), PlanError> {
+        self.as_pulse().set_total(total)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Ok(self.clone())
     }
 }
