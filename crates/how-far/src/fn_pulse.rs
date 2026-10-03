@@ -116,8 +116,12 @@ struct Node {
     parent: Option<Arc<Node>>,
     /// This phase's part of the job, in units of `1 / SCALE`.
     share: u64,
-    /// The part already added to the job's progress.
-    credited: AtomicU64,
+    /// The units at which a leaf has earned its whole share: its total, or 0
+    /// for an `Unknown` one.
+    cap: u64,
+    /// `share * 2^64 / cap`, so a report earns `units * rate >> 64` with a
+    /// multiplication instead of a division.
+    rate: u128,
     total: Total,
     /// The name followed by the units, in one allocation.
     labels: Box<str>,
@@ -140,11 +144,20 @@ impl Node {
         let mut labels = String::with_capacity(part.name.len() + part.units.len());
         labels.push_str(part.name);
         labels.push_str(part.units);
+        let cap = match part.total {
+            Total::Exact(total) | Total::Estimated(total) => total,
+            Total::Unknown => 0,
+        };
+        let rate = match cap {
+            0 => 0,
+            cap => (u128::from(share) << 64) / u128::from(cap),
+        };
         Self {
             shared,
             parent,
             share,
-            credited: AtomicU64::new(0),
+            cap,
+            rate,
             total: part.total,
             labels: labels.into_boxed_str(),
             name_len: part.name.len(),
@@ -157,20 +170,14 @@ impl Node {
 
     fn credit(&self, amount: u64) {
         if amount != 0 {
-            self.credited.fetch_add(amount, Ordering::Relaxed);
             self.shared.done.fetch_add(amount, Ordering::Relaxed);
         }
     }
 
-    /// The part of this phase's share that `completed` units have earned.
+    /// The part of this phase's share that `completed` units have earned:
+    /// never more than the share, since `cap * rate >> 64 <= share`.
     fn earned(&self, completed: u64) -> u64 {
-        match self.total {
-            Total::Exact(total) | Total::Estimated(total) if total != 0 => {
-                let units = u128::from(completed.min(total));
-                (u128::from(self.share) * units / u128::from(total)) as u64
-            }
-            _ => 0,
-        }
+        ((u128::from(completed.min(self.cap)) * self.rate) >> 64) as u64
     }
 
     /// Run the callback, unless the work is already stopped, and latch its
@@ -363,8 +370,9 @@ impl ChildPulse for FnChild {
         let state = node.state.swap(FINISHED, Ordering::AcqRel);
         if state != SPLIT && succeeded {
             // A finished leaf has earned its whole share, however it counted.
-            let credited = node.credited.load(Ordering::Relaxed);
-            node.credit(node.share.saturating_sub(credited));
+            // Its reports added what its count earned, so add the rest.
+            let earned = node.earned(node.completed.load(Ordering::Relaxed));
+            node.credit(node.share - earned);
         }
         if let Some(parent) = &node.parent {
             if !succeeded {
