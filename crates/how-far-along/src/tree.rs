@@ -304,6 +304,7 @@ impl Node {
 /// Phases are owned and `'static`: move children into spawned threads or
 /// tasks, or wrap any phase in a [`PulseTree`](crate::PulseTree) to hand it to
 /// a library as `&dyn Pulse`.
+#[must_use = "finish the phase after its work joins; dropping it unfinished records Abandoned"]
 pub struct Phase {
     node: Arc<Node>,
 }

@@ -16,6 +16,13 @@ entry, classifies its result, and preserves the original work error if cleanup
 also fails. Remaining stages become `NotRun`, earning zero weight. Explicit
 `Stages::skip` is for unnecessary work and discharges its weight.
 
+`run_stoppable` accepts only `StopReason`, so ordinary work errors cannot
+accidentally become cancellation. Mixed-error operations use `run_classified`.
+The runner has one private Ready/Running/Stopped state rather than independent
+booleans. Owners and reporting guards are `must_use`: accidental discarded
+construction warns, but retaining a guard does not prove it is eventually
+finished. Compile-fail examples check completion ownership and the error boundary.
+
 `share()` returns a cloneable owned pulse with the same planning, cancellation,
 start and total-revision capabilities. It never transfers completion rights.
 Unsupported ownership returns `NotShareable`. References, boxes, Arcs, children,

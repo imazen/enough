@@ -698,6 +698,7 @@ impl SpanInner {
 /// The owner of one running span. Finish it after its instrumented calls
 /// return; dropping it unfinished, including during unwinding, records
 /// `Abandoned`.
+#[must_use = "finish the span after its instrumented calls return; dropping it unfinished records Abandoned"]
 pub struct Span {
     inner: Arc<SpanInner>,
     finished: bool,

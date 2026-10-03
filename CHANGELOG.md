@@ -2,6 +2,10 @@
 
 ## Unreleased how-far redesign
 
+- Restrict Stages::run_stoppable to StopReason; use run_classified for mixed
+  failures. Replace the runner's lifecycle booleans with one private state enum.
+  Mark owners, stage runners and pacing guards must_use, with explicit Drop
+  guidance and compile-fail coverage for completion ownership.
 - Move FnPulse to how-far-along's optional callback feature. Checkpoints invoke
   callbacks once; reports and Drop only count. Callback and tree accounting share
   the same lifecycle, native counters and revisions.

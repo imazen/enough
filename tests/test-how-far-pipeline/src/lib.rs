@@ -59,6 +59,16 @@ impl From<RunError<PipelineError>> for PipelineError {
     }
 }
 
+impl From<RunError<StopReason>> for PipelineError {
+    fn from(error: RunError<StopReason>) -> Self {
+        match error {
+            RunError::Work(reason) => Self::Stopped(reason),
+            RunError::Plan(error) => Self::Plan(error),
+            _ => Self::Plan(PlanError::Unsupported),
+        }
+    }
+}
+
 /// Validate, encode every image in parallel (one fork-join child per image,
 /// on Rayon), then pack. Each child is handed to the codec, which plans its
 /// own stages inside it.
@@ -76,7 +86,7 @@ pub fn process(images: &[Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>, Pipe
         for _ in images {
             stage.step(1)?;
         }
-        Ok::<_, PipelineError>(())
+        Ok(())
     })?;
     let encoded = stages.run_nested(PipelineError::is_stop, |stage| {
         let names: Vec<String> = (0..images.len()).map(|i| format!("image {i}")).collect();
@@ -112,7 +122,7 @@ pub fn process(images: &[Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>, Pipe
         for bytes in &encoded {
             stage.step(bytes.len() as u64)?;
         }
-        Ok::<_, PipelineError>(())
+        Ok(())
     })?;
     stages.finish()?;
     Ok(encoded)

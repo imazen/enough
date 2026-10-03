@@ -177,6 +177,34 @@ panic abort cannot run Drop cleanup.
 
 ## Reproduction
 
+### API hardening follow-up
+
+After the initial redesign, `run_stoppable` was restricted to `StopReason`, the
+private Stages lifecycle became Ready/Running/Stopped, and owners/reporting
+guards gained `must_use` guidance. Four compile-fail examples cover the error
+boundary, single completion ownership, non-owning shared views, and discarded
+pacing guards. Existing failure, cancellation, skipping and caught-panic tests
+exercise the runner transitions.
+
+The local zenresize source uses `run_stoppable` for resampling, sharpening and
+blur; those operations return StopReason already. That checkout is pinned to an
+older how-far API named Steps: this is a source audit, not a build or migration
+of zenresize against the redesign. The cross-crate pipeline fixture had two
+calls annotated with PipelineError; these now use StopReason and an explicit
+conversion at the enclosing API boundary. The real zenpng fixture uses
+run_classified and required no migration.
+
+The follow-up passes workspace tests, all four compile-fail cases, Clippy,
+MSRV tests, public API regeneration, the real encoder fixture and the release
+checkpoint harness. [The repeated build guard](howfar-hardening-build.txt)
+still measures 64 IR lines per Stages call and unchanged tracker IR. Core rustc
+instructions are 202.0 / 369.5 / 512.2 million for check/debug/release versus
+198.0 / 363.6 / 504.0 in the initial redesign. The full cold-build and runtime
+tables above retain their original measurement scope; they were not rerun for
+this API hardening.
+
+### Initial redesign validation
+
 Completed locally: workspace tests (615 passed), no-default tracker tests (54),
 core 1.86 tests (48), tracker 1.88 tests (103), all-target/all-feature Clippy,
 rustdoc, public API snapshots, formatting, feature matrix and cross-target

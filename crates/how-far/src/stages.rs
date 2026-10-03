@@ -1,6 +1,6 @@
 //! Running a sequential plan.
 
-use crate::{Child, Execution, Outcome, PhaseSpec, PlanError, Pulse};
+use crate::{Child, Execution, Outcome, PhaseSpec, PlanError, Pulse, StopReason};
 use alloc::collections::VecDeque;
 use core::fmt;
 
@@ -60,7 +60,7 @@ impl<E> RunError<RunError<E>> {
 /// and every later one are recorded as abandoned when `Stages` is dropped. A
 /// caller that catches the panic and calls a `run` method again gets
 /// `PlanError::Finished`: that stage is recorded as abandoned and the rest as
-/// skipped.
+/// `NotRun`.
 ///
 /// `Stages` never finishes the pulse it was given. That pulse belongs to the
 /// caller, which finishes it: an application finishes the root, and an outer
@@ -107,19 +107,26 @@ impl<E> RunError<RunError<E>> {
 /// Workers that count one logical stage can share its `&dyn Pulse`; join them
 /// before the closure returns. When workers need their own totals or outcomes,
 /// split the stage and use [`run_nested`](Self::run_nested).
+#[must_use = "run and finish the stages; dropping unfinished stages abandons them"]
 pub struct Stages<'a> {
     /// The stages that have not finished, in declared order.
     pending: VecDeque<Child<'a>>,
+    state: State,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Ready,
     /// The front stage was handed to work that has not returned.
-    running: bool,
-    stopped: bool,
+    Running,
+    Stopped,
 }
 
 impl fmt::Debug for Stages<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Stages")
             .field("remaining", &self.pending.len())
-            .field("stopped", &self.stopped)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -133,8 +140,7 @@ impl<'a> Stages<'a> {
     pub fn new(parent: &'a dyn Pulse, parts: &[PhaseSpec<'_>]) -> Result<Self, PlanError> {
         Ok(Self {
             pending: parent.split(Execution::Sequence, parts)?.into(),
-            running: false,
-            stopped: false,
+            state: State::Ready,
         })
     }
 
@@ -157,11 +163,22 @@ impl<'a> Stages<'a> {
     }
 
     /// Run the next stage whose only errors are stop requests. Any error from
-    /// `work` marks it `Cancelled`.
-    pub fn run_stoppable<T, E>(
+    /// `work` marks it `Cancelled`. Use [`Self::run_classified`] for operations
+    /// that can also fail for other reasons.
+    ///
+    /// Ordinary work errors cannot be classified as cancellation by this helper:
+    ///
+    /// ```compile_fail,E0308
+    /// use how_far::{NoPulse, PhaseSpec, Stages, Total};
+    /// let mut stages = Stages::new(&NoPulse, &[
+    ///     PhaseSpec::new("decode", 1, Total::Unknown),
+    /// ]).unwrap();
+    /// stages.run_stoppable(|_| Err::<(), &str>("invalid image")).unwrap();
+    /// ```
+    pub fn run_stoppable<T>(
         &mut self,
-        work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
-    ) -> Result<T, RunError<E>> {
+        work: impl FnOnce(&dyn Pulse) -> Result<T, StopReason>,
+    ) -> Result<T, RunError<StopReason>> {
         let result = match self.next_stage() {
             Ok(stage) => work(stage),
             Err(error) => return Err(RunError::Plan(error)),
@@ -237,15 +254,15 @@ impl<'a> Stages<'a> {
     }
 
     fn next_stage(&mut self) -> Result<&dyn Pulse, PlanError> {
-        if self.running {
+        if self.state == State::Running {
             // The last stage's work panicked and the caller caught the panic.
             let _ = self.end_stage(Outcome::Abandoned);
         }
         match self.pending.front() {
-            _ if self.stopped => Err(PlanError::Finished),
+            _ if self.state == State::Stopped => Err(PlanError::Finished),
             Some(stage) => {
                 stage.start()?;
-                self.running = true;
+                self.state = State::Running;
                 Ok(stage.pulse())
             }
             None => Err(PlanError::NoMoreStages),
@@ -256,13 +273,13 @@ impl<'a> Stages<'a> {
     /// as `NotRun`.
     #[inline(never)]
     fn end_stage(&mut self, outcome: Outcome) -> Result<(), PlanError> {
-        self.running = false;
+        self.state = State::Ready;
         let Some(stage) = self.pending.pop_front() else {
             return Err(PlanError::NoMoreStages);
         };
         let finished = stage.finish(outcome);
         if finished.is_err() || !matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
-            self.stopped = true;
+            self.state = State::Stopped;
             while let Some(stage) = self.pending.pop_front() {
                 let _ = stage.finish(Outcome::NotRun);
             }
@@ -273,7 +290,7 @@ impl<'a> Stages<'a> {
     /// Confirm that every declared stage ran. Remaining stages are recorded as
     /// abandoned. This does not finish the parent pulse.
     pub fn finish(self) -> Result<(), PlanError> {
-        if self.stopped {
+        if self.state == State::Stopped {
             Err(PlanError::Finished)
         } else if !self.pending.is_empty() {
             Err(PlanError::UnfinishedChildren)

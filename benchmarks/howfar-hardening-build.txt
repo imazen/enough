@@ -1,0 +1,11 @@
+rustc 1.99.0 (b940084d7 2026-09-28)
+how-far IR per Stages::run_stoppable call site: 64 lines (budget 120)
+how-far-along IR, std: 17740 lines (budget 18000)
+how-far-along IR, diagnostics: 47162 lines (budget 55000)
+rustc instructions (millions)                  check   debug release
+empty no_std crate                              13.8    16.1    19.0
+how-far                                        202.0   369.5   512.2
+how-far-along (std)                            325.1   889.7  2210.9
+how-far-along (diagnostics)                    759.4  2274.6  6088.1
+plain function call, per call site               4.4     7.7    57.1
+Stages::run_stoppable, per call site             5.4    10.8    70.4

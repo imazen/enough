@@ -407,6 +407,15 @@ pub trait ChildPulse: Pulse {
 /// or call `check`, `step` and `split` on it directly. Finish it once, after
 /// its work has joined. A tracker records `Outcome::Abandoned` for a child that
 /// is dropped unfinished, including on unwinding. It is two words wide.
+/// Completion consumes the owner, so it cannot be repeated:
+///
+/// ```compile_fail,E0382
+/// use how_far::{Child, Outcome};
+/// let child = Child::inert();
+/// child.finish(Outcome::Succeeded).unwrap();
+/// child.finish(Outcome::Succeeded).unwrap();
+/// ```
+#[must_use = "finish the child after its work joins; dropping a tracked child abandons it"]
 pub struct Child<'a> {
     /// `None` for a child of [`NoPulse`], which needs no allocation.
     pulse: Option<Box<dyn ChildPulse + 'a>>,
@@ -620,6 +629,14 @@ mod tests {
 
 /// An owned, cloneable pulse that retains planning and cancellation capabilities.
 /// The original phase owner alone may finish it. Requires pointer atomics.
+///
+/// A shared view has no completion operation:
+///
+/// ```compile_fail,E0599
+/// use how_far::{Outcome, SharedPulse};
+/// let shared = SharedPulse::default();
+/// shared.finish(Outcome::Succeeded).unwrap();
+/// ```
 #[derive(Clone, Default)]
 pub struct SharedPulse(Option<Arc<dyn Pulse>>);
 impl SharedPulse {

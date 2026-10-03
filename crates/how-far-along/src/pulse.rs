@@ -13,6 +13,7 @@ use core::{
 /// Owns the root of a tracked operation. Workers borrow it or use `share()`.
 /// Finish after joining workers. Dropping this owner freezes abandonment even
 /// when non-owning shared handles remain alive.
+#[must_use = "finish the root after its work joins; dropping it unfinished records Abandoned"]
 pub struct PulseTree {
     node: TreePulse,
 }

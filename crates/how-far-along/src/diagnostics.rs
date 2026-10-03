@@ -179,6 +179,7 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 /// stage that handed it out. `may_stop` and `may_report` are always `true`, so
 /// libraries that skip calls on no-op pulses still make the calls measured.
 /// Creating one turns on [`Profiler::set_report_timing`].
+#[must_use = "finish the measured root after its work joins; dropping it unfinished records Abandoned"]
 pub struct DiagnosticPulse {
     tree: PulseTree,
     meter: MeterOwner,

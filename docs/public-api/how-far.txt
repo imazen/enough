@@ -121,7 +121,7 @@ pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<
 pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
-pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn Stages<'a>::run_stoppable<T>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, enough::reason::StopReason>) -> core::result::Result<T, RunError<enough::reason::StopReason>>
 pub fn Stages<'a>::skip(&mut self) -> core::result::Result<(), PlanError>
 pub static NoPulse: Inert
 pub trait ChildPulse: Pulse

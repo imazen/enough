@@ -36,6 +36,15 @@ use core::fmt;
 /// Units not yet reported are reported when the `Paced` is dropped, including
 /// after an early return, so finished work is always counted. Flush before
 /// splitting the pulse it reports to: a phase that split ignores reports.
+/// Accidentally discarding a new guard is diagnosed; retaining one still
+/// requires an explicit `finish` call to check the final partial batch.
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use how_far::{NoPulse, Paced};
+/// Paced::new(&NoPulse, 64);
+/// ```
+#[must_use = "call finish to flush and check cancellation; Drop only flushes counts"]
 pub struct Paced<'a> {
     pulse: Option<&'a dyn Pulse>,
     /// Units still to count before the next reach: `every` minus the pending

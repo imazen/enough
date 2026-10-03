@@ -29,6 +29,7 @@ impl<T: Report + ?Sized> ReportExt for T {}
 /// It is single-owner by design: `advance` takes `&mut self`. Give each worker
 /// its own batch.
 #[derive(Debug)]
+#[must_use = "report through the batch; dropping it only flushes pending counts"]
 pub struct Batch<R: Report> {
     report: R,
     threshold: NonZeroU64,

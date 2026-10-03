@@ -89,6 +89,7 @@ fn decode(code: u8) -> StopReason {
 /// Callbacks may overlap on different workers; no internal lock is held.
 /// The first stop reason wins. Already-running callbacks may complete.
 /// For thread-affine UI captures use `poll::LocalPoller` with an Observer.
+#[must_use = "finish the root after its work joins; dropping it unfinished records Abandoned"]
 pub struct FnPulse {
     tree: PulseTree,
 }
