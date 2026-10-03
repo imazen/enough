@@ -75,6 +75,22 @@ The live tree's operations cost about 44 instructions more: each stage's
 `Paced::new` tests for `NoPulse`, and finishing or fetching a stage now
 branches on whether the `Child` holds a box.
 
+## Build cost
+
+`python3 dev/bench-how-far-build.py --runs 3` on the same two trees, rustc
+instructions in millions, medians of three:
+
+| | check | debug | release |
+| --- | ---: | ---: | ---: |
+| `how-far`, before | 160.2 | 305.9 | 398.2 |
+| `how-far`, after | 162.3 | 306.5 | 403.0 |
+| A `Stages::run_stoppable` call site, before | 5.4 | 10.8 | 70.1 |
+| A `Stages::run_stoppable` call site, after | 5.4 | 10.8 | 70.3 |
+
+`how-far` itself costs 1.3% more to check and 1.2% more in release; a call
+site costs the same, at 64 lines of IR before and after. `how-far-along` is
+unchanged within 0.2%.
+
 ## Raw output, after
 
 The matrix runs below keep the per-checkpoint tables; the percentage and
