@@ -1,4 +1,4 @@
-# how-far [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/how-far?style=flat-square)](https://crates.io/crates/how-far) [![lib.rs](https://img.shields.io/crates/v/how-far?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/how-far) [![docs.rs](https://img.shields.io/docsrs/how-far?style=flat-square)](https://docs.rs/how-far) [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/how-far?style=flat-square)](#license)
+# how-far [![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/how-far?style=flat-square)](https://crates.io/crates/how-far) [![lib.rs](https://img.shields.io/crates/v/how-far?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/how-far) [![docs.rs](https://img.shields.io/docsrs/how-far?style=flat-square)](https://docs.rs/how-far) [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/crates/l/how-far?style=flat-square)](#license)
 
 One interface for cancellation, progress, and weighted phases in libraries.
 
@@ -50,7 +50,7 @@ pub fn thumbnail(rows: &[Vec<u8>], pulse: &dyn Pulse) -> Result<Vec<u8>, RunErro
     Ok(resized)
 }
 
-// Callers that don't care pass `NoPulse`, which costs nothing.
+// Callers that don't care pass `&NoPulse`, which checkpoints skip without a call.
 let _pixels = thumbnail(&vec![vec![8; 16]; 4], &how_far::NoPulse)?;
 # Ok::<(), RunError<StopReason>>(())
 ```
@@ -97,7 +97,9 @@ returned unchanged.
 
 To call another library inside a stage, pass it the stage:
 `stages.run_classified(CodecError::is_stop, |stage| codec::encode(image, stage))`.
-The codec plans its own stages inside yours.
+The codec plans its own stages inside yours. A `&dyn Pulse` is also a
+`&dyn Stop` and a `&dyn Report`, so code that only checks for cancellation
+takes the stage as it is: `legacy::decode(input, stage)`.
 
 ## Parallel work
 
@@ -148,27 +150,46 @@ sizes are asserted at compile time on 32- and 64-bit targets:
 | Value | Size |
 | --- | --- |
 | `&dyn Pulse`, `Child`, `Box<dyn Pulse>` | 2 words |
+| `Paced` | 2 words + 16 bytes |
 | `Result<(), StopReason>`, `Outcome` | 1 byte |
 | `PulseHandle` | 4 words |
-| `NoPulse`, `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
+| `NoPulse`, one static | 1 byte |
+| `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
+
+When nobody listens, steps cost nothing. There is exactly one `NoPulse`, a
+static, and `step`, `live()` and `Paced` recognize it by its address, so a
+loop that steps on every iteration compiles to the bare loop: the one test
+moves out of it. Where it cannot move, the test is two comparisons and no call.
+Children and stages planned under `NoPulse` are the same static. A bare
+`check()` through `&dyn Pulse` still makes one call.
 
 `&dyn` does not stop a hot loop from spilling registers: any call the
 compiler cannot inline forces the loop's live values out of caller-saved
 registers, dynamic or not. The fix is cadence, not dispatch:
 
-- Check once per row, block, or tile, not per pixel or byte.
-- Gate no-op pulses. `let pulse = pulse.live();` gives an
-  `Option<&dyn Pulse>`, still two words, whose `check()`, `advance()` and
-  `step()` make no call at all when the pulse neither stops nor reports, as
-  with `NoPulse`. Bring the methods into scope with `use how_far::prelude::*;`.
-- Batch reports from many workers with `how_far_along::ext::ReportExt::batched`.
+- Pace checkpoints. `let mut pace = pulse.paced(64 * 1024);` counts each
+  `pace.step(n)?` in a local and reaches the pulse once per 64 Ki units: it
+  reports them, then checks for cancellation. A step that does not reach the
+  pulse is a subtraction and a branch. Choose the interval so the work
+  between reaches takes at least a microsecond, and no longer than the
+  cancellation latency you need. Give each worker its own.
+- Gate other no-op pulses where pacing does not fit. `let pulse = pulse.live();`
+  gives an `Option<&dyn Pulse>`, still two words, whose `check()`,
+  `advance()` and `step()` make no call at all when the pulse neither stops
+  nor reports. Bring the methods into scope with `use how_far::prelude::*;`.
+- Otherwise check once per row, block, or tile, not per pixel or byte.
 
-Measured on one machine (a Ryzen 9 5900XT), a `check()` or `advance()`
-through `&dyn Pulse` costs 1.4 to 3.3 ns. Inside a 256 KiB codec-style loop, a
-live tree added 1.6 to 3.1 ns per checkpoint over `NoPulse`: about 1 to 2% at
-one checkpoint per 4 KiB, and 9 to 13% at one per 256 bytes. With the gate
-above, the no-observer path matched a monomorphized loop. The
-[results, method, and raw output](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
+Counted with perf on one machine (a Ryzen 9 5900XT, rustc 1.99), a checkpoint
+into a live tree costs about 56 instructions with `step` and about 2 with
+`Paced`. On a 256 KiB PNG-style defilter checked every 256 bytes, that is
+13.9% more instructions with `step` and 0.6% with `Paced`; every 4 KiB, 0.92%
+and 0.13%. With `&NoPulse`, `step`, `live()` and `Paced` add no instructions.
+A three-stage `Stages` plan adds about 870 instructions per operation with
+`NoPulse` and about 7,000 with a live tree, so a live tree costs under 1% of
+operations longer than about 70 µs. The perf counts
+([2026-10-03](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-nopulse-2026-10-03.md),
+[2026-10-01](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md))
+and earlier [wall-time results](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
 are committed.
 
 At compile time, `how-far` has no build script, proc macros, or features, and
@@ -179,7 +200,7 @@ the caller's crate; CI fails if that grows. See the
 
 ## No-op and count-only use
 
-`NoPulse` never stops, discards reports, and still validates plans, so
+`&NoPulse` never stops, discards reports, and still validates plans, so
 planning mistakes surface even when nobody watches. Algorithms that only
 count can accept `impl Report` instead; `NoReport` discards counts, and
 references, `Box`, `Arc`, and `Option` forward them. `ProgressWithStop`

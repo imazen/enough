@@ -25,13 +25,17 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, '1.85']
+        rust: [stable, '1.85', '1.86']
         exclude:
-          # MSRV only on Linux
+          # MSRVs only on Linux
           - os: windows-latest
             rust: '1.85'
           - os: macos-latest
             rust: '1.85'
+          - os: windows-latest
+            rust: '1.86'
+          - os: macos-latest
+            rust: '1.86'
 
     steps:
       - uses: actions/checkout@v6
@@ -44,12 +48,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        if: matrix.rust != '1.85'
+        if: matrix.rust == 'stable'
         run: cargo test --workspace --all-features
 
-      - name: Test at the 1.85 MSRV (how-far-along needs 1.88)
+      # enough and almost-enough need 1.85, how-far 1.86, how-far-along 1.88.
+      - name: Test at the 1.85 MSRV
         if: matrix.rust == '1.85'
-        run: cargo test --workspace --exclude how-far-along --exclude test-how-far-app
+        run: >-
+          cargo test --workspace --exclude how-far --exclude how-far-along
+          --exclude test-how-far-codec --exclude test-how-far-pipeline --exclude test-how-far-app
+
+      - name: Test how-far at its 1.86 MSRV
+        if: matrix.rust == '1.86'
+        run: cargo test -p how-far -p test-how-far-codec -p test-how-far-pipeline
 
       - name: Test (no default features)
         run: |
@@ -234,6 +245,8 @@ jobs:
           cargo test -p how-far-along --no-default-features
       - name: Verify interface boundary and report cold builds
         run: python3 dev/bench-how-far-build.py --runs 3
+      - name: Build the checkpoint-cost harness
+        run: cargo build --release --manifest-path dev/how-far-checkpoint-cost/Cargo.toml
 
   how-far-wasm:
     name: how-far WASM host boundaries
@@ -258,7 +271,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       # The consumer's threaded WASM build requires nightly/build-std. The
-      # libraries stay on stable: how-far on 1.85, how-far-along on 1.88.
+      # libraries stay on stable: how-far on 1.86, how-far-along on 1.88.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-09-02

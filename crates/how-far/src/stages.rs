@@ -239,7 +239,7 @@ impl<'a> Stages<'a> {
             _ if self.stopped => Err(PlanError::Finished),
             Some(stage) => {
                 self.running = true;
-                Ok(stage)
+                Ok(stage.pulse())
             }
             None => Err(PlanError::NoMoreStages),
         }

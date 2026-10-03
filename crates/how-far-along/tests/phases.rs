@@ -278,6 +278,53 @@ fn invalid_plan_is_transactional_and_units_cannot_change_after_use() {
 }
 
 #[test]
+fn every_outcome_is_recorded_and_stays_put() {
+    let mut job = Phase::new("job", Total::Unknown);
+    let observer = job.observer();
+    let parts = [
+        PhaseSpec::new("succeeded", 1, Total::Exact(2)),
+        PhaseSpec::new("skipped", 1, Total::Exact(2)),
+        PhaseSpec::new("cancelled", 1, Total::Exact(2)),
+        PhaseSpec::new("failed", 1, Total::Exact(2)),
+        PhaseSpec::new("abandoned", 1, Total::Exact(2)),
+    ];
+    let mut children = job.split_vec(Execution::Sequence, &parts).unwrap();
+    let abandoned = children.pop().unwrap();
+    abandoned.reporter().advance(1);
+    drop(abandoned);
+    let outcomes = [
+        Outcome::Succeeded,
+        Outcome::Skipped,
+        Outcome::Cancelled,
+        Outcome::Failed,
+    ];
+    for (child, outcome) in children.iter_mut().zip(outcomes) {
+        child.reporter().advance(1);
+        child.finish_with(outcome).unwrap();
+    }
+    assert_eq!(job.finish(), Err(PlanError::UnsuccessfulChildren));
+    job.finish_with(Outcome::Failed).unwrap();
+    let snapshot = observer.snapshot();
+    assert_eq!(snapshot.status, Status::Finished(Outcome::Failed));
+    let statuses: Vec<_> = snapshot.children.iter().map(|c| c.status).collect();
+    assert_eq!(
+        statuses,
+        [
+            Status::Finished(Outcome::Succeeded),
+            Status::Finished(Outcome::Skipped),
+            Status::Finished(Outcome::Cancelled),
+            Status::Finished(Outcome::Failed),
+            Status::Finished(Outcome::Abandoned),
+        ]
+    );
+    assert!(snapshot.children.iter().all(|c| c.completed == 1));
+    for child in &children {
+        child.reporter().advance(1);
+    }
+    assert_eq!(observer.snapshot(), snapshot);
+}
+
+#[test]
 fn abandoning_owner_freezes_even_if_child_owner_lives_on() {
     let mut job = Phase::new("parent", Total::Unknown);
     let observer = job.observer();

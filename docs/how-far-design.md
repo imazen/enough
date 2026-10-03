@@ -9,8 +9,9 @@ they are built the way they are. The crate READMEs show how to use them;
 **`how-far`** is the interface a library depends on. It defines `Pulse`
 (cancellation, counting, and phase planning in one object-safe trait),
 `Report`, `Stages`, and the no-op `NoPulse`. It is `no_std + alloc`, has no
-feature flags, depends only on `enough`, and builds on Rust 1.85, the same
-as `enough`. Adding it to a library adds one small crate to the build.
+feature flags, depends only on `enough`, and needs Rust 1.86 for trait
+upcasting, which lets a `&dyn Pulse` be passed as a `&dyn Stop` and lets
+`Stages` hand each stage its own pulse. Adding it to a library adds one small crate to the build.
 
 **`how-far-along`** is what applications and tests depend on. `PulseTree`
 implements `Pulse` over a tree of phases that observers read from any
@@ -141,13 +142,50 @@ time on every target.
 
 Dynamic dispatch does not by itself cause register spills; any call the
 compiler cannot inline does, because the loop's live values must survive it.
-The remedies are cadence and gating: check once per row, block, or tile;
-skip no-op pulses with `pulse.live()`, an `Option<&dyn Pulse>` whose
-calls are branches when nobody listens; and batch reports from
-many workers. Measured on one machine, a checkpoint into a live tree costs 1.6
-to 3.1 ns more than into `NoPulse`, which is about 1 to 2% of a 256 KiB
-codec loop checked once per 4 KiB; see
-[the overhead results](../benchmarks/how-far-overhead.md).
+Reaching a live tree costs about 56 instructions per checkpoint, and about 16
+cycles in the lightly loaded 2026-10-01 run: two indirect calls and one locked
+add on the phase's counter, which is the floor for a count that workers
+share. A checkpoint therefore stays under 1% only if about 1,600 cycles of
+work separate two of them. `Stages` hands each
+stage its own pulse rather than the `Child` that forwards to it, so a stage's
+calls go through one vtable, not two.
+
+`Paced` removes that constraint. It counts down in a local and reaches the
+pulse once per chosen number of units, so a step is a subtraction and a
+branch: about 2 instructions and under a cycle. The reach is a cold,
+non-generic function that takes the pulse and the units by value, so no
+`Paced` escapes into it and the caller's loop keeps the countdown in a
+register; pacing adds nothing to the caller's compile beyond the inlined
+test. Cancellation latency is bounded by the interval, which the library
+chooses because only it knows what a unit costs. `pulse.live()` remains for
+code that cannot be paced: an `Option<&dyn Pulse>` whose calls are branches
+when nobody listens.
+
+Nobody listening is the common case, and it costs nothing. A vtable has no
+slot a caller can read without a call, so the only test cheaper than a call
+is identity: `NoPulse` is one static, a byte wide so that it has an address of
+its own, and `step`, `live()` and `Paced` compare the pulse's address with
+it. In a loop the comparison does not change, so the compiler moves it out
+and the unobserved copy of the loop is the bare loop; where it cannot, the
+test is two comparisons and no call. A zero-sized value may sit at the same
+address, at the end of another allocation, so the test also compares the
+size the vtable records, which for a sized receiver is a constant and folds
+away. No inherent method on `dyn Pulse` can take over `check()` or
+`advance()`: the trait object already offers its trait methods under those
+names, and the call becomes ambiguous (E0034). So a bare `check()` through
+`&dyn Pulse` still makes one call. `NoPulse` derives nothing
+that could make a copy, so every `&NoPulse` is the static, and children of
+`NoPulse` hold no box: their pulse is the static too.
+
+Plans have a fixed cost per operation. A three-stage `Stages` plan costs about
+870 instructions with `NoPulse`, one allocation for the children, and about
+7,000 with a fresh live tree, mostly allocating its named nodes. Finishing a
+phase whose children have all finished stores the outcome and count in atomics
+and allocates nothing; only a phase dropped while a child still runs takes a
+snapshot, so its view does not follow the orphaned child. See the perf counts
+([2026-10-03](../benchmarks/how-far-checkpoint-nopulse-2026-10-03.md),
+[2026-10-01](../benchmarks/how-far-checkpoint-cost-2026-10-01.md)) and the
+earlier [wall-time results](../benchmarks/how-far-overhead.md).
 
 ## Compile-time cost
 
@@ -197,11 +235,14 @@ a few lines. With `diagnostics`, these cut its release build by half. The
 JSON writers stay generic: only callers that export JSON instantiate them.
 
 The derives are deliberate. `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`, and
-`Default` together are about a quarter of `how-far`'s own check time, and the
+`Default` together were about a quarter of `how-far`'s own check time, and the
 least useful of them (equality on `NoPulse`, `NoReport`, and
-`ProgressWithStop`, and `Hash` anywhere) are about 6%. They stay: a type that
-embeds `NoReport` or an `Outcome` can derive those traits only if `how-far`
-implements them, and no other crate can add them later.
+`ProgressWithStop`, and `Hash` anywhere) about 6%, measured while `NoPulse`
+still derived them all. They stay: a type that embeds `NoReport` or an
+`Outcome` can derive those traits only if `how-far` implements them, and no
+other crate can add them later. `NoPulse` now derives none of them, on
+purpose: nothing outside `how-far` can copy or build one, so every `&NoPulse`
+is the one static that checkpoints recognize.
 
 ## API evolution
 

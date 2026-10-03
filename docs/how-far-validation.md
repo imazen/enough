@@ -9,6 +9,7 @@ What is tested, where, and what the tests do not cover. See
 | --- | --- |
 | Counting through every sink shape; original call sites survive forwarding | `crates/how-far/tests/interface.rs` |
 | The `Pulse` contract on `NoPulse`: nested plans, validation, handles, `split_array`, outcomes from results | `crates/how-far/tests/pulse.rs` |
+| `Paced`: never reaching a no-op pulse, exact counts per interval, stops seen at the next reach, pending units counted after an early return, saturation, call sites | `crates/how-far/tests/paced.rs` |
 | A hand-written `Pulse` shared by scoped threads; `'static` threads through handles | `crates/how-far/tests/pulse_threads.rs` |
 | `Stages` libraries calling each other: success, nested stop, failure versus cancellation, stage finish errors, abandonment | `crates/how-far/tests/composition.rs`, `crates/how-far-along/tests/pulse.rs` |
 | Sizes of everything a caller holds or passes, asserted at compile time | `crates/how-far/tests/footprint.rs`, `crates/how-far-along/tests/footprint.rs` |
@@ -17,7 +18,7 @@ What is tested, where, and what the tests do not cover. See
 | Rayon: a stage shared by 1–8 workers, nested parallelism, recursive `join`, `scope`, `'static` `spawn`, the global pool | `tests/test-how-far-app/tests/rayon_pools.rs` |
 | `'static` ownership: codec contexts that own their stop, `Arc` and `Box` pulses, Tokio `spawn_blocking` with async cancellation, async tasks reporting | `tests/test-how-far-app/tests/statics.rs` |
 | Diagnostics across crates, including checks inside a codec context credited to the right stage | `tests/test-how-far-app/tests/diagnose.rs` |
-| Application-planned trees: serial → 30% parallel → serial, repeated joins, Rayon and manual threads sharing a counter, totals and revisions, overrun and overflow, frozen and abandoned records | `crates/how-far-along/tests/phases.rs` |
+| Application-planned trees: serial → 30% parallel → serial, repeated joins, Rayon and manual threads sharing a counter, totals and revisions, overrun and overflow, every outcome, frozen and abandoned records, a report racing with the finish | `crates/how-far-along/tests/phases.rs`, `crates/how-far-along/src/tree.rs` |
 | A codec-style pipeline with two parallel waves, a terminal renderer, and a Tokio request whose client disconnects | `crates/how-far-along/tests/hosts.rs` |
 | Pollers: thread-affine callbacks, lazy shared snapshots, busy and recursive dispatch, panics, posted delivery, workers stopped by a callback | `crates/how-far-along/tests/polling.rs` |
 | Profiling: per-task gaps, call-site counts, overlap and stragglers, cancellation latency, bounded retention, clock faults, report timing on and off, workers sharing a span | `crates/how-far-along/tests/profiling.rs` |
@@ -25,7 +26,7 @@ What is tested, where, and what the tests do not cover. See
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |
-| `how-far` on Rust 1.85 and `how-far-along` on 1.88; `no_std` builds for Cortex-M and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
+| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
 
 No test suite proves every consumer's behavior. There is no built-in ETA
 model or executor; exported observations support them without claiming that
@@ -105,11 +106,12 @@ again for the generic `how-far` code compiled into the library itself.
 `dev/bench-how-far-build.py` measures both and runs in CI. It fails if
 `how-far` gains a feature, a build script, or a dependency other than
 `enough`, or if one `Stages::run_*` call site adds more than 120 lines of
-`how-far`'s unoptimized LLVM IR to the caller's crate (81 with rustc
-1.98.1, 91 with 1.88). It also fails if `how-far-along` itself compiles to
-more than 18,000 lines of unoptimized IR with default features (15,530 with
-1.98.1, 16,722 with 1.88; 19,048 before the reductions below) or 55,000 with
-`diagnostics` (43,748 and 45,976; 85,667 before).
+`how-far`'s unoptimized LLVM IR to the caller's crate (64 with rustc
+1.99.0 on 2026-10-03, 81 with 1.98.1, 91 with 1.88). It also fails if
+`how-far-along` itself compiles to more than 18,000 lines of unoptimized IR
+with default features (15,773 with 1.99.0, 15,530 with 1.98.1, 16,722 with
+1.88; 19,048 before the reductions below) or 55,000 with `diagnostics`
+(43,691, 43,748 and 45,976; 85,667 before).
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
@@ -164,4 +166,25 @@ Reproduce with `python3 dev/bench-how-far-build.py --runs 5`.
   pulse path, mostly a second copy of its row loop made by a helper generic
   over its report sink.
 
-Runtime cost is in [the overhead results](../benchmarks/how-far-overhead.md).
+## Runtime cost
+
+`dev/how-far-checkpoint-cost` counts, with perf, what each checkpoint style
+and a three-stage plan cost around the same `#[inline(never)]` defilter;
+`python3 dev/how-far-checkpoint-cost/measure.py` reruns it. Instruction counts
+do not depend on machine load, and cycles depend on it far less than wall time
+does. [The 2026-10-01 counts](../benchmarks/how-far-checkpoint-cost-2026-10-01.md)
+put a paced step at about 5 instructions and 1 cycle, a plain `step` into a
+live tree at about 58 and 16, a step through a stage at about 47
+instructions, and a live tree's three-stage plan at about 6,800 instructions
+per operation. `measure.py matrix` crosses report sinks (none, a tree
+counter, a report callback) with stop policies (`Unstoppable`, an `AtomicBool`,
+a stop callback); [its 2026-10-03 counts](../benchmarks/how-far-checkpoint-matrix-2026-10-03.md)
+put a `step` checkpoint at 14 to 65 instructions depending on what the pulse
+does, and a `Paced` step at about 5 whatever it does. Since `NoPulse` became
+one static that checkpoints recognize by its address,
+[the `&NoPulse` counts](../benchmarks/how-far-checkpoint-nopulse-2026-10-03.md)
+leave no checkpoint code in a loop stepping into `&NoPulse` with `step`,
+`live()` or `Paced` (`step` was 14 instructions), and put a paced step into a
+live pulse at about 2 and a plain `step` into a live tree at about 56.
+Wall-time results from zenbench are in
+[the overhead results](../benchmarks/how-far-overhead.md).

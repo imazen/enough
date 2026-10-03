@@ -20,7 +20,7 @@ npm test
 
 Set `HOW_FAR_BINDGEN` if the matching CLI is installed outside `PATH`. Only
 this threaded Wasm application needs nightly and `build-std`; the libraries
-build on stable Rust (`how-far` and `enough` on 1.85, `how-far-along` on 1.88).
+build on stable Rust (`enough` on 1.85, `how-far` on 1.86, `how-far-along` on 1.88).
 
 The HTTP server supplies COOP/COEP headers. Tests run in Chromium and Playwright
 WebKit and verify:
