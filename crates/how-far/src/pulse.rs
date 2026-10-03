@@ -255,7 +255,7 @@ pub trait ChildPulse: Pulse {
 /// its work has joined. A tracker records `Outcome::Abandoned` for a child that
 /// is dropped unfinished, including on unwinding. It is two words wide.
 pub struct Child<'a> {
-    /// `None` for a child of [`NoPulse`](struct@NoPulse), which needs no allocation.
+    /// `None` for a child of [`NoPulse`], which needs no allocation.
     pulse: Option<Box<dyn ChildPulse + 'a>>,
 }
 
@@ -281,7 +281,7 @@ impl<'a> Child<'a> {
     }
 
     /// The child's own pulse, without the forwarding a `Child` adds when it is
-    /// itself used as a `&dyn Pulse`: the static [`NoPulse`](static@NoPulse) for its children.
+    /// itself used as a `&dyn Pulse`: the static [`NoPulse`] for its children.
     #[inline]
     pub(crate) fn pulse(&self) -> &(dyn Pulse + 'a) {
         match &self.pulse {
@@ -346,35 +346,37 @@ impl Pulse for Child<'_> {
 /// and `Report`, so `check`, `advance` and `step` work on it directly.
 pub type PulseHandle = ProgressWithStop<Option<Arc<dyn Stop>>, Option<Arc<dyn Report>>>;
 
-/// Never stops and discards reports, including in every nested phase.
-///
-/// There is exactly one, a static: pass `&NoPulse`.
-/// [`step`](crate::ProgressExt::step), [`live`](crate::ProgressExt::live) and
-/// [`Paced`](crate::Paced) recognize it by its address, so a loop that steps on
-/// every iteration runs with no checkpoint code when nobody listens: the one
-/// comparison moves out of the loop. Where it cannot, it is a comparison and a
-/// branch. A bare `check()` or `advance()` through a `&dyn Pulse` still makes
-/// one call, to a function that returns at once.
-///
-/// Its children and stages are free the same way and need no allocation. It
-/// still validates plans, so a library's planning mistakes surface even when
-/// nobody observes it.
-pub struct NoPulse {
+/// The type of [`NoPulse`]. It has exactly one value, that static: nothing
+/// outside this crate can build, copy or move one.
+pub struct Inert {
     /// One byte, so that the static has an address of its own.
     _unique: u8,
 }
 
-/// The one [`NoPulse`](struct@NoPulse).
+/// Never stops and discards reports, including in every nested phase.
+///
+/// Pass `&NoPulse`. [`step`](crate::ProgressExt::step),
+/// [`live`](crate::ProgressExt::live) and [`Paced`](crate::Paced) recognize it
+/// by its address, so a loop that steps on every iteration runs with no
+/// checkpoint code when nobody listens: the one comparison moves out of the
+/// loop. Where it cannot, it is a comparison and a branch. A bare `check()` or
+/// `advance()` through a `&dyn Pulse` still makes one call, to a function that
+/// returns at once. A pulse that wraps it, such as `&&NoPulse` or a
+/// `Box<&NoPulse>`, works but is not recognized, and pays for both calls.
+///
+/// Its children and stages are free the same way and need no allocation. It
+/// still validates plans, so a library's planning mistakes surface even when
+/// nobody observes it.
 #[allow(non_upper_case_globals)]
-pub static NoPulse: NoPulse = NoPulse { _unique: 0 };
+pub static NoPulse: Inert = Inert { _unique: 0 };
 
-impl fmt::Debug for NoPulse {
+impl fmt::Debug for Inert {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("NoPulse")
     }
 }
 
-impl Stop for NoPulse {
+impl Stop for Inert {
     #[inline(always)]
     fn check(&self) -> Result<(), StopReason> {
         Ok(())
@@ -385,7 +387,7 @@ impl Stop for NoPulse {
     }
 }
 
-impl Report for NoPulse {
+impl Report for Inert {
     #[inline(always)]
     fn advance(&self, _: u64) {}
     #[inline(always)]
@@ -394,7 +396,7 @@ impl Report for NoPulse {
     }
 }
 
-impl Pulse for NoPulse {
+impl Pulse for Inert {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         validate(parts)?;
         let mut children = Vec::with_capacity(parts.len());

@@ -10,7 +10,7 @@ use core::fmt;
 /// does not reach it is a subtraction and a branch. Choose `every` so that the
 /// work between checkpoints takes at least a microsecond, and no longer than
 /// the cancellation latency you need. A pulse that can neither stop nor
-/// report, such as [`NoPulse`](struct@crate::NoPulse), is never reached, and in a
+/// report, such as [`NoPulse`](crate::NoPulse), is never reached, and in a
 /// loop its steps compile to nothing.
 ///
 /// Make one per worker, from the `&dyn Pulse` the work was given:

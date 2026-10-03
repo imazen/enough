@@ -153,7 +153,7 @@ sizes are asserted at compile time on 32- and 64-bit targets:
 | `Paced` | 2 words + 16 bytes |
 | `Result<(), StopReason>`, `Outcome` | 1 byte |
 | `PulseHandle` | 4 words |
-| `NoPulse`, one static | 1 byte |
+| `NoPulse`, one static of type `Inert` | 1 byte |
 | `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
 
 When nobody listens, steps cost nothing. There is exactly one `NoPulse`, a

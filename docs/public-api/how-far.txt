@@ -79,7 +79,7 @@ pub struct Child<'a>
 pub fn Child<'_>::paced(&self, u64) -> Paced<'_>
 pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
-pub struct NoPulse
+pub struct Inert
 pub struct NoReport
 pub struct Paced<'a>
 pub fn Paced<'a>::check(&self) -> core::result::Result<(), enough::reason::StopReason>
@@ -106,7 +106,7 @@ pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pu
 pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
 pub fn Stages<'a>::run_stoppable<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
-pub static NoPulse: NoPulse
+pub static NoPulse: Inert
 pub trait ChildPulse: Pulse
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]
@@ -127,7 +127,7 @@ pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dy
 &mut T: Report
 Child<'_>: Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
-NoPulse: Debug, Pulse, Report, enough::Stop
+Inert: Debug, Pulse, Report, enough::Stop
 NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
 Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
 Paced<'_>: Debug, Drop

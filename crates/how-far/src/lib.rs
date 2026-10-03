@@ -2,7 +2,7 @@
 //!
 //! A library accepts `&dyn Pulse`. Through it the library checks for
 //! cancellation, reports completed work, and declares weighted phases. The
-//! caller decides what happens to those reports: nothing ([`NoPulse`](struct@NoPulse)), a live
+//! caller decides what happens to those reports: nothing ([`NoPulse`]), a live
 //! tree with snapshots and callbacks (the `how-far-along` crate), or its own
 //! [`Pulse`] implementation.
 //!
@@ -62,7 +62,8 @@ mod stages;
 pub use ext::ProgressExt;
 pub use paced::Paced;
 pub use pulse::{
-    Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, PulseHandle, Total,
+    Child, ChildPulse, Execution, Inert, NoPulse, Outcome, PhaseSpec, PlanError, Pulse,
+    PulseHandle, Total,
 };
 pub use report::{NoReport, ProgressWithStop, Report};
 pub use stages::{RunError, Stages};

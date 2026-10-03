@@ -1,6 +1,8 @@
 //! Checkpoint helpers for every value that checks and counts.
 
-use crate::{Child, Execution, NoPulse, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason};
+use crate::{
+    Child, Execution, Inert, NoPulse, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason,
+};
 
 /// Checkpoints for anything that both checks cancellation and counts work,
 /// including `&dyn Pulse`, [`Child`], and
@@ -11,7 +13,7 @@ pub trait ProgressExt: Stop + Report {
     /// Work finished before a stop request is still counted. Check once
     /// before a loop and `step` after each finished unit or batch; `check()`
     /// alone is the stop-only checkpoint. With
-    /// [`NoPulse`](struct@crate::NoPulse), `step` makes no call: the pulse is
+    /// [`NoPulse`](crate::NoPulse), `step` makes no call: the pulse is
     /// recognized by its address, a comparison a loop moves out of its body.
     #[inline]
     #[track_caller]
@@ -26,7 +28,7 @@ pub trait ProgressExt: Stop + Report {
     /// The live pulse: this value, or `None` when it can neither stop nor
     /// report.
     ///
-    /// [`step`](Self::step) already skips [`NoPulse`](struct@crate::NoPulse)
+    /// [`step`](Self::step) already skips [`NoPulse`](crate::NoPulse)
     /// without a call. `live` extends that to any pulse whose `may_stop` and
     /// `may_report` both return `false`, for the price of asking it once. Call
     /// it once before a hot loop. `Option<&P>` implements `Stop` and `Report`,
@@ -96,14 +98,14 @@ pub trait ProgressExt: Stop + Report {
 
 impl<T: Stop + Report + ?Sized> ProgressExt for T {}
 
-/// Whether `value` is the one [`NoPulse`](static@NoPulse), whatever reference
+/// Whether `value` is the one [`NoPulse`], whatever reference
 /// it arrived as. The size rules out a zero-sized value at the same address,
 /// such as one ending another allocation. For a sized type the size is a
 /// constant, so the test compiles away unless the type is one byte.
 #[inline]
 fn is_no_pulse<T: ?Sized>(value: &T) -> bool {
     core::ptr::addr_eq(value, &NoPulse)
-        && core::mem::size_of_val(value) == core::mem::size_of::<NoPulse>()
+        && core::mem::size_of_val(value) == core::mem::size_of::<Inert>()
 }
 
 /// Kept out of `split_array`, which is instantiated for every pulse type and
