@@ -2,9 +2,10 @@
 //!
 //! A library accepts `&dyn Pulse`. Through it the library checks for
 //! cancellation, reports completed work, and declares weighted phases. The
-//! caller decides what happens to those reports: nothing ([`NoPulse`]), a live
-//! tree with snapshots and callbacks (the `how-far-along` crate), or its own
-//! [`Pulse`] implementation.
+//! caller decides what happens to those reports: nothing ([`NoPulse`]), one
+//! callback that can also stop the work ([`FnPulse`]), a live tree with
+//! snapshots and callbacks (the `how-far-along` crate), or its own [`Pulse`]
+//! implementation.
 //!
 //! ```
 //! use how_far::{PhaseSpec, ProgressExt, Pulse, RunError, Stages, StopReason, Total};

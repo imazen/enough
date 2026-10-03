@@ -153,6 +153,7 @@ sizes are asserted at compile time on 32- and 64-bit targets:
 | `Paced` | 2 words + 16 bytes |
 | `Result<(), StopReason>`, `Outcome` | 1 byte |
 | `PulseHandle` | 4 words |
+| `FnPulse` | 1 word |
 | `NoPulse`, one static of type `Inert` | 1 byte |
 | `NoReport`, `ProgressWithStop<Unstoppable, NoReport>` | 0 bytes |
 
@@ -186,7 +187,10 @@ into a live tree costs about 56 instructions with `step` and about 2 with
 and 0.13%. With `&NoPulse`, `step`, `live()` and `Paced` add no instructions.
 A three-stage `Stages` plan adds about 870 instructions per operation with
 `NoPulse` and about 7,000 with a live tree, so a live tree costs under 1% of
-operations longer than about 70 µs. The perf counts
+operations longer than about 70 µs. An `FnPulse` reaches its callback in
+about 90 instructions per report plus what the callback does, and plans for
+about 3,800 per three-stage operation
+([measured](https://github.com/imazen/enough/blob/main/benchmarks/how-far-fnpulse-2026-10-03.md)). The perf counts
 ([2026-10-03](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-nopulse-2026-10-03.md),
 [2026-10-01](https://github.com/imazen/enough/blob/main/benchmarks/how-far-checkpoint-cost-2026-10-01.md))
 and earlier [wall-time results](https://github.com/imazen/enough/blob/main/benchmarks/how-far-overhead.md)
@@ -195,16 +199,67 @@ are committed.
 At compile time, `how-far` has no build script, proc macros, or features, and
 depends only on `enough`. Code that takes `&dyn Pulse` compiles once, whatever
 pulse its callers pass, and each `Stages::run_*` call adds only a few lines to
-the caller's crate; CI fails if that grows. See the
+the caller's crate; CI fails if that grows. `FnPulse` is about 40% of
+`how-far`'s own release build, compiled once per build. See the
 [build cost](https://github.com/imazen/enough/blob/main/docs/how-far-validation.md#build-cost).
+
+## One callback for progress and cancellation
+
+An application that wants a progress bar and a way to stop passes an
+`FnPulse`. Its callback runs after each report and when a phase finishes. It
+sees the whole job's fraction, weighted by every plan the libraries made, and
+the phase that reported. Return an error to stop the work: from then on every
+check returns it, so the library stops at its next checkpoint.
+
+```rust
+use how_far::{FnPulse, Pulse, StopReason};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+# fn thumbnail(_: &[Vec<u8>], _: &dyn Pulse) -> Result<(), StopReason> { Ok(()) }
+let interrupted = Arc::new(AtomicBool::new(false)); // set from a Ctrl-C handler
+let flag = Arc::clone(&interrupted);
+let pulse = FnPulse::new(move |progress| {
+    eprint!("\r{:3.0}% {}", progress.fraction * 100.0, progress.phase);
+    if flag.load(Ordering::Relaxed) {
+        Err(StopReason::Cancelled)
+    } else {
+        Ok(())
+    }
+});
+thumbnail(&[vec![8; 16]], &pulse)?;
+# Ok::<(), StopReason>(())
+```
+
+- The callback may run on several threads at once. It must be `'static`,
+  because handles given to spawned threads reach it too.
+- After it returns an error it is not called again; the first error wins.
+- A phase with an `Exact` or `Estimated` total moves the fraction as it
+  counts; one with an `Unknown` total moves it when it finishes.
+- It runs as often as the library reports. A library that steps on every row
+  calls it on every row, so keep it cheap or throttle inside it.
 
 ## No-op and count-only use
 
 `&NoPulse` never stops, discards reports, and still validates plans, so
-planning mistakes surface even when nobody watches. Algorithms that only
-count can accept `impl Report` instead; `NoReport` discards counts, and
-references, `Box`, `Arc`, and `Option` forward them. `ProgressWithStop`
-pairs any stop policy with any sink.
+planning mistakes surface even when nobody watches. References, `Box` and
+`Arc` of a pulse are pulses too, so `Box::new(&NoPulse)` is an owned no-op;
+only `&NoPulse` itself is recognized and skipped. Algorithms that only count
+can accept `impl Report` instead; `NoReport` discards counts, and references,
+`Box`, `Arc`, and `Option` forward them. `ProgressWithStop` pairs any stop
+policy with any sink.
+
+## Implementing `Pulse`
+
+Most applications need no implementation: `&NoPulse` ignores everything,
+`FnPulse` turns one callback into a pulse, and `how-far-along` tracks a live
+tree. A tracker of your own implements `Stop`, `Report`, `Pulse` and, for its
+children, `ChildPulse`; the
+[`Pulse` documentation](https://docs.rs/how-far/latest/how_far/trait.Pulse.html#implementing)
+lists the rules no type enforces. Start `split` with
+`PhaseSpec::validate_split`, which rejects the same plans every pulse
+rejects, and hand out `Child::inert()` for a part nobody needs to watch or
+stop.
 
 ## Tracking and testing
 
