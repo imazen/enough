@@ -175,29 +175,37 @@ impl<'a> PhaseSpec<'a> {
         self.execution = execution;
         self
     }
-}
 
-/// Check a split's parts the way every `Pulse` does. Plain loops keep this
-/// crate's compiled code small.
-pub(crate) fn validate(parts: &[PhaseSpec<'_>]) -> Result<(), PlanError> {
-    if parts.is_empty() {
-        return Err(PlanError::EmptyOrZeroWeight);
-    }
-    let mut sum = 0_u64;
-    for part in parts {
-        if part.weight == 0 {
+    /// Check a split's parts the way every [`Pulse::split`] must, and return
+    /// the sum of their weights.
+    ///
+    /// Fails with [`PlanError::EmptyOrZeroWeight`] for no parts or a zero
+    /// weight, and [`PlanError::Overflow`] if the weights' sum overflows. Call
+    /// it first in a `split` implementation, so every pulse rejects the same
+    /// plans with the same errors.
+    pub fn validate_split(parts: &[PhaseSpec<'_>]) -> Result<u64, PlanError> {
+        // Plain loops keep this crate's compiled code small.
+        if parts.is_empty() {
             return Err(PlanError::EmptyOrZeroWeight);
         }
-        sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
+        let mut sum = 0_u64;
+        for part in parts {
+            if part.weight == 0 {
+                return Err(PlanError::EmptyOrZeroWeight);
+            }
+            sum = sum.checked_add(part.weight).ok_or(PlanError::Overflow)?;
+        }
+        Ok(sum)
     }
-    Ok(())
 }
 
 /// Cancellation, completed work, and nested phase planning, in one value.
 ///
 /// A library accepts `&dyn Pulse` and uses it three ways:
 ///
-/// - `check()` asks whether to stop. It is the cheapest call; use it freely.
+/// - `check()` asks whether to stop. It is the cheapest call, unless the
+///   caller made it run code of its own, as an [`FnPulse`](crate::FnPulse)
+///   callback does; check once per row, block or tile, not per byte.
 /// - `advance(n)` counts finished units; [`ProgressExt::step`](crate::ProgressExt::step)
 ///   counts and then checks.
 /// - [`split`](Self::split) declares weighted children. The library owns the
@@ -209,6 +217,29 @@ pub(crate) fn validate(parts: &[PhaseSpec<'_>]) -> Result<(), PlanError> {
 ///
 /// Wrappers that add measurement or forwarding implement this trait, so it is
 /// open. Methods added in later compatible releases will have default bodies.
+///
+/// # Implementing
+///
+/// Before writing one, check whether [`FnPulse`](crate::FnPulse) does the job:
+/// it turns one callback into a pulse that plans, shares progress out by
+/// weight, and stops the work when the callback says so. An implementation
+/// must keep these rules, which no type enforces:
+///
+/// - `check` and `advance` may run on many threads at once, and `advance` must
+///   not block. `may_stop` and `may_report` return `false` only when that can
+///   never change.
+/// - `split` starts with [`PhaseSpec::validate_split`]. It fails with
+///   [`PlanError::AlreadyInUse`] if this phase already counted work or split,
+///   and otherwise returns one [`Child::new`] per part, in order, each
+///   checking and counting like any pulse. Children from [`Child::inert`]
+///   cannot be stopped or observed, so they suit only parts nobody watches.
+/// - `handle` returns an owned handle that checks the same stop and counts
+///   into the same phase, or [`PulseHandle::default()`], documented as such.
+/// - [`ChildPulse::finish`] fails with [`PlanError::UnfinishedChildren`] while
+///   one of the child's own children is unfinished, and with
+///   [`PlanError::UnsuccessfulChildren`] for `Succeeded` or `Skipped` while
+///   one of them did not succeed. A child dropped unfinished is
+///   `Outcome::Abandoned`.
 pub trait Pulse: Stop + Report {
     /// Split this phase into weighted children, in declared order.
     ///
@@ -237,6 +268,70 @@ pub trait Pulse: Stop + Report {
     fn handle(&self) -> PulseHandle;
 }
 
+// A reference, box or `Arc` of a pulse is a pulse, as for `Stop` and `Report`,
+// so generic and owned code can hold any pulse. Checkpoints recognize only
+// `&NoPulse` itself, so `&&NoPulse` works but pays for its calls.
+
+impl<P: Pulse + ?Sized> Pulse for &P {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for &mut P {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for Box<P> {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
+impl<P: Pulse + ?Sized> Pulse for Arc<P> {
+    #[inline]
+    fn split(
+        &self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+    ) -> Result<Vec<Child<'_>>, PlanError> {
+        (**self).split(execution, parts)
+    }
+    #[inline]
+    fn handle(&self) -> PulseHandle {
+        (**self).handle()
+    }
+}
+
 /// What a pulse's children add: publishing a terminal outcome.
 ///
 /// Implement this for the type your [`Pulse::split`] returns, and wrap each
@@ -255,7 +350,7 @@ pub trait ChildPulse: Pulse {
 /// its work has joined. A tracker records `Outcome::Abandoned` for a child that
 /// is dropped unfinished, including on unwinding. It is two words wide.
 pub struct Child<'a> {
-    /// `None` for a child of [`NoPulse`](struct@NoPulse), which needs no allocation.
+    /// `None` for a child of [`NoPulse`], which needs no allocation.
     pulse: Option<Box<dyn ChildPulse + 'a>>,
 }
 
@@ -265,6 +360,14 @@ impl<'a> Child<'a> {
         Self {
             pulse: Some(Box::new(pulse)),
         }
+    }
+
+    /// A child like those [`NoPulse`] hands out: it never stops, discards
+    /// reports, and finishing it does nothing. Its work cannot be stopped
+    /// through it and nobody sees its progress, so return it from
+    /// [`Pulse::split`] only for parts that nobody needs to observe or stop.
+    pub const fn inert() -> Self {
+        Self { pulse: None }
     }
 
     /// Publish this child's outcome. Its parent can finish only after every
@@ -281,7 +384,7 @@ impl<'a> Child<'a> {
     }
 
     /// The child's own pulse, without the forwarding a `Child` adds when it is
-    /// itself used as a `&dyn Pulse`: the static [`NoPulse`](static@NoPulse) for its children.
+    /// itself used as a `&dyn Pulse`: the static [`NoPulse`] for its children.
     #[inline]
     pub(crate) fn pulse(&self) -> &(dyn Pulse + 'a) {
         match &self.pulse {
@@ -346,35 +449,37 @@ impl Pulse for Child<'_> {
 /// and `Report`, so `check`, `advance` and `step` work on it directly.
 pub type PulseHandle = ProgressWithStop<Option<Arc<dyn Stop>>, Option<Arc<dyn Report>>>;
 
-/// Never stops and discards reports, including in every nested phase.
-///
-/// There is exactly one, a static: pass `&NoPulse`.
-/// [`step`](crate::ProgressExt::step), [`live`](crate::ProgressExt::live) and
-/// [`Paced`](crate::Paced) recognize it by its address, so a loop that steps on
-/// every iteration runs with no checkpoint code when nobody listens: the one
-/// comparison moves out of the loop. Where it cannot, it is a comparison and a
-/// branch. A bare `check()` or `advance()` through a `&dyn Pulse` still makes
-/// one call, to a function that returns at once.
-///
-/// Its children and stages are free the same way and need no allocation. It
-/// still validates plans, so a library's planning mistakes surface even when
-/// nobody observes it.
-pub struct NoPulse {
+/// The type of [`NoPulse`]. It has exactly one value, that static: nothing
+/// outside this crate can build, copy or move one.
+pub struct Inert {
     /// One byte, so that the static has an address of its own.
     _unique: u8,
 }
 
-/// The one [`NoPulse`](struct@NoPulse).
+/// Never stops and discards reports, including in every nested phase.
+///
+/// Pass `&NoPulse`. [`step`](crate::ProgressExt::step),
+/// [`live`](crate::ProgressExt::live) and [`Paced`](crate::Paced) recognize it
+/// by its address, so a loop that steps on every iteration runs with no
+/// checkpoint code when nobody listens: the one comparison moves out of the
+/// loop. Where it cannot, it is a comparison and a branch. A bare `check()` or
+/// `advance()` through a `&dyn Pulse` still makes one call, to a function that
+/// returns at once. A pulse that wraps it, such as `&&NoPulse` or a
+/// `Box<&NoPulse>`, works but is not recognized, and pays for both calls.
+///
+/// Its children and stages are free the same way and need no allocation. It
+/// still validates plans, so a library's planning mistakes surface even when
+/// nobody observes it.
 #[allow(non_upper_case_globals)]
-pub static NoPulse: NoPulse = NoPulse { _unique: 0 };
+pub static NoPulse: Inert = Inert { _unique: 0 };
 
-impl fmt::Debug for NoPulse {
+impl fmt::Debug for Inert {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("NoPulse")
     }
 }
 
-impl Stop for NoPulse {
+impl Stop for Inert {
     #[inline(always)]
     fn check(&self) -> Result<(), StopReason> {
         Ok(())
@@ -385,7 +490,7 @@ impl Stop for NoPulse {
     }
 }
 
-impl Report for NoPulse {
+impl Report for Inert {
     #[inline(always)]
     fn advance(&self, _: u64) {}
     #[inline(always)]
@@ -394,12 +499,12 @@ impl Report for NoPulse {
     }
 }
 
-impl Pulse for NoPulse {
+impl Pulse for Inert {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        validate(parts)?;
+        PhaseSpec::validate_split(parts)?;
         let mut children = Vec::with_capacity(parts.len());
         for _ in parts {
-            children.push(Child { pulse: None });
+            children.push(Child::inert());
         }
         Ok(children)
     }

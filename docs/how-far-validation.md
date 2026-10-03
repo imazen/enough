@@ -8,7 +8,9 @@ What is tested, where, and what the tests do not cover. See
 | Scenario | Where |
 | --- | --- |
 | Counting through every sink shape; original call sites survive forwarding | `crates/how-far/tests/interface.rs` |
-| The `Pulse` contract on `NoPulse`: nested plans, validation, handles, `split_array`, outcomes from results | `crates/how-far/tests/pulse.rs` |
+| The `Pulse` contract on `NoPulse`: nested plans, validation, handles, `split_array`, outcomes from results; `PhaseSpec::validate_split` and `Child::inert` for implementors | `crates/how-far/tests/pulse.rs` |
+| `FnPulse`: weighted and nested fractions, each kind of total, failed phases, stopping at the next check and at the next paced reach, the first reason kept, the planning rules, four threads reporting into one phase, handles on spawned threads | `crates/how-far/tests/fn_pulse.rs` |
+| References, boxes and `Arc`s of a pulse: generic code taking `&NoPulse` by value, an owned `Box<dyn Pulse>` defaulting to it, stops, reports, splits and handles forwarded | `crates/how-far/tests/forwarding.rs` |
 | `Paced`: never reaching a no-op pulse, exact counts per interval, stops seen at the next reach, pending units counted after an early return, saturation, call sites | `crates/how-far/tests/paced.rs` |
 | A hand-written `Pulse` shared by scoped threads; `'static` threads through handles | `crates/how-far/tests/pulse_threads.rs` |
 | `Stages` libraries calling each other: success, nested stop, failure versus cancellation, stage finish errors, abandonment | `crates/how-far/tests/composition.rs`, `crates/how-far-along/tests/pulse.rs` |
@@ -26,7 +28,7 @@ What is tested, where, and what the tests do not cover. See
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |
-| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
+| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M (without `FnPulse`, which needs 64-bit atomics) and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
 
 No test suite proves every consumer's behavior. There is no built-in ETA
 model or executor; exported observations support them without claiming that
@@ -109,9 +111,10 @@ again for the generic `how-far` code compiled into the library itself.
 `how-far`'s unoptimized LLVM IR to the caller's crate (64 with rustc
 1.99.0 on 2026-10-03, 81 with 1.98.1, 91 with 1.88). It also fails if
 `how-far-along` itself compiles to more than 18,000 lines of unoptimized IR
-with default features (15,773 with 1.99.0, 15,530 with 1.98.1, 16,722 with
-1.88; 19,048 before the reductions below) or 55,000 with `diagnostics`
-(43,691, 43,748 and 45,976; 85,667 before).
+with default features (14,923 with 1.99.0 once it shared how-far's split
+check, 15,773 before that, 15,530 with 1.98.1, 16,722 with 1.88; 19,048
+before the reductions below) or 55,000 with `diagnostics` (42,841, 43,691,
+43,748 and 45,976; 85,667 before).
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
@@ -186,5 +189,8 @@ one static that checkpoints recognize by its address,
 leave no checkpoint code in a loop stepping into `&NoPulse` with `step`,
 `live()` or `Paced` (`step` was 14 instructions), and put a paced step into a
 live pulse at about 2 and a plain `step` into a live tree at about 56.
-Wall-time results from zenbench are in
+[The `FnPulse` counts](../benchmarks/how-far-fnpulse-2026-10-03.md) put a
+report into one callback at about 90 instructions, a three-stage plan at
+about 3,800 per operation, and its share of `how-far`'s own build at 43% to
+check and 74% in release. Wall-time results from zenbench are in
 [the overhead results](../benchmarks/how-far-overhead.md).

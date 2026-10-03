@@ -8,7 +8,8 @@ they are built the way they are. The crate READMEs show how to use them;
 
 **`how-far`** is the interface a library depends on. It defines `Pulse`
 (cancellation, counting, and phase planning in one object-safe trait),
-`Report`, `Stages`, and the no-op `NoPulse`. It is `no_std + alloc`, has no
+`Report`, `Stages`, the no-op `NoPulse`, and `FnPulse`, a pulse made from one
+callback. It is `no_std + alloc`, has no
 feature flags, depends only on `enough`, and needs Rust 1.86 for trait
 upcasting, which lets a `&dyn Pulse` be passed as a `&dyn Stop` and lets
 `Stages` hand each stage its own pulse. Adding it to a library adds one small crate to the build.
@@ -59,6 +60,52 @@ out never weakens the ownership rules.
 
 `PulseTree` owns its stop policy, so trees are `'static` too: an application
 can move one into a worker thread and keep only the observer.
+
+## One callback
+
+Most applications want a progress bar and a way to stop, not a tree.
+`FnPulse` gives them one function, `Fn(&Progress) -> Result<(), StopReason>`.
+
+- **When it runs.** With `None` on every check, and with `Some(progress)`
+  after every report and when a phase finishes, on the thread that called.
+  An error it returns stops the work where the library checks: the check
+  returns it, and every later check, in every phase and every handle,
+  returns it with one atomic load, without calling again. Calling on checks
+  makes a phase that only checks stoppable, at the price of one indirect
+  call per check: 26 to 34 instructions with a callback that does nothing,
+  against 18 for a live tree's flag, and `step`, which reports and then
+  checks, calls it twice.
+- **The fraction.** Each phase owns a share of the job, in 2^48 fixed point.
+  A split divides its phase's share by weight, and the last child takes what
+  rounding leaves, so shares add up exactly. A leaf with an `Exact` or
+  `Estimated` total adds its share in proportion as it counts, up to the
+  whole share; one with an `Unknown` total adds its share when it finishes.
+  Finishing `Succeeded` or `Skipped` adds whatever a leaf has not yet
+  counted; a failed, cancelled or abandoned phase adds nothing more, so the
+  fraction stays where the work stopped. One atomic sum holds the job's
+  progress, so nested libraries' plans roll up with no tree, no snapshot and
+  no lock.
+- **Why `'static`.** `Pulse::handle` must give spawned threads a handle that
+  reports and stops like the phase, so the callback lives behind an `Arc`
+  that handles share. A borrowed closure would leave handles unable to reach
+  it.
+- **The rules.** It validates splits, splits a phase once and before it
+  counts, refuses to finish a parent before its children or to let it
+  succeed after one failed, and records a dropped child as abandoned: the
+  rules the `Pulse` documentation lists for implementors, kept in about 300
+  lines that also serve as an example of keeping them.
+- **What it costs.** A report reaches the callback in about 90 instructions
+  plus what the callback does, against about 56 for a live tree's counter,
+  and a paced step stays at 2. A three-stage plan costs about 3,800
+  instructions, half a fresh tree's.
+- **Where it lives.** In `how-far`, because it is the smallest complete
+  observer, and an application that wants only a callback should not have
+  to compile a tree. It is non-generic apart from its constructor, so
+  nothing is compiled per call site, but `how-far`'s own build grows by 43%
+  to check and 74% in release: about 70 and 300 million rustc instructions,
+  paid once per build. Its counters are 64-bit atomics, so targets without
+  them, such as `thumbv7em`, build `how-far` without it. See
+  [the measurements](../benchmarks/how-far-fnpulse-2026-10-03.md).
 
 ## Counting, totals, and outcomes
 
@@ -173,9 +220,14 @@ size the vtable records, which for a sized receiver is a constant and folds
 away. No inherent method on `dyn Pulse` can take over `check()` or
 `advance()`: the trait object already offers its trait methods under those
 names, and the call becomes ambiguous (E0034). So a bare `check()` through
-`&dyn Pulse` still makes one call. `NoPulse` derives nothing
-that could make a copy, so every `&NoPulse` is the static, and children of
-`NoPulse` hold no box: their pulse is the static too.
+`&dyn Pulse` still makes one call. Its type, `Inert`, derives nothing that
+could make a copy, so every `&NoPulse` is the static, and children of
+`NoPulse` hold no box: their pulse is the static too. The type has its own
+name so that `[`NoPulse`]` in any crate's documentation links to the static
+alone; when both were called `NoPulse`, rustdoc rejected the link as
+ambiguous. References, boxes and `Arc`s of a pulse are pulses, so generic
+code that takes a pulse by value, or a field that owns one, can hold
+`&NoPulse`; such a wrapper is not the static, and pays for both calls.
 
 Plans have a fixed cost per operation. A three-stage `Stages` plan costs about
 870 instructions with `NoPulse`, one allocation for the children, and about
@@ -240,16 +292,17 @@ least useful of them (equality on `NoPulse`, `NoReport`, and
 `ProgressWithStop`, and `Hash` anywhere) about 6%, measured while `NoPulse`
 still derived them all. They stay: a type that embeds `NoReport` or an
 `Outcome` can derive those traits only if `how-far` implements them, and no
-other crate can add them later. `NoPulse` now derives none of them, on
-purpose: nothing outside `how-far` can copy or build one, so every `&NoPulse`
-is the one static that checkpoints recognize.
+other crate can add them later. `NoPulse`'s type, `Inert`, now derives none
+of them, on purpose: nothing outside `how-far` can copy or build one, so
+every `&NoPulse` is the one static that checkpoints recognize.
 
 ## API evolution
 
 These rules keep both crates additive after their first release:
 
 - **Data types** (`Snapshot`, `Trace`, `SpanRecord`, `Stats`, `Options`,
-  `Finding`, `PhaseSpec`, ...) are `#[non_exhaustive]` with public fields.
+  `Finding`, `PhaseSpec`, `Progress`, ...) are `#[non_exhaustive]` with
+  public fields.
   Fields may be added; none is renamed, retyped, or removed within a
   compatible release. Build `PhaseSpec` with `new` and `Options` from
   `Default`. Public fields hold plain values; when a representation may need

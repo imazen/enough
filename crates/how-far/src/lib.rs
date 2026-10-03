@@ -2,9 +2,10 @@
 //!
 //! A library accepts `&dyn Pulse`. Through it the library checks for
 //! cancellation, reports completed work, and declares weighted phases. The
-//! caller decides what happens to those reports: nothing ([`NoPulse`](struct@NoPulse)), a live
-//! tree with snapshots and callbacks (the `how-far-along` crate), or its own
-//! [`Pulse`] implementation.
+//! caller decides what happens to those reports: nothing ([`NoPulse`]), one
+//! callback that can also stop the work ([`FnPulse`]), a live tree with
+//! snapshots and callbacks (the `how-far-along` crate), or its own [`Pulse`]
+//! implementation.
 //!
 //! ```
 //! use how_far::{PhaseSpec, ProgressExt, Pulse, RunError, Stages, StopReason, Total};
@@ -54,15 +55,21 @@ extern crate alloc;
 pub use enough::{Stop, StopReason, Unstoppable};
 
 mod ext;
+// Its counters are 64-bit atomics, which some embedded targets lack.
+#[cfg(target_has_atomic = "64")]
+mod fn_pulse;
 mod paced;
 mod pulse;
 mod report;
 mod stages;
 
 pub use ext::ProgressExt;
+#[cfg(target_has_atomic = "64")]
+pub use fn_pulse::{FnPulse, Progress};
 pub use paced::Paced;
 pub use pulse::{
-    Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, PulseHandle, Total,
+    Child, ChildPulse, Execution, Inert, NoPulse, Outcome, PhaseSpec, PlanError, Pulse,
+    PulseHandle, Total,
 };
 pub use report::{NoReport, ProgressWithStop, Report};
 pub use stages::{RunError, Stages};

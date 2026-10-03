@@ -1,7 +1,7 @@
 # how-far checkpoint cost
 
-Counts, with `perf`, what each checkpoint style (`step`, `live()`, `Paced`)
-and a three-stage `Stages` plan cost around one `#[inline(never)]` PNG Sub
+Counts, with `perf`, what each checkpoint style (`step`, `live()`, `Paced`,
+and in the matrix a bare `check()`) and a three-stage `Stages` plan cost around one `#[inline(never)]` PNG Sub
 defilter, against the same loop with no checkpoints. Instruction counts do not
 depend on machine load; cycles depend on it far less than wall time does.
 

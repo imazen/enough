@@ -59,6 +59,35 @@ fn no_pulse_still_validates_plans() {
 }
 
 #[test]
+fn implementations_validate_splits_with_the_shared_check() {
+    let parts = [
+        PhaseSpec::new("a", 1, Total::Unknown),
+        PhaseSpec::new("b", 3, Total::Unknown),
+    ];
+    assert_eq!(PhaseSpec::validate_split(&parts), Ok(4));
+    assert_eq!(
+        PhaseSpec::validate_split(&[]),
+        Err(PlanError::EmptyOrZeroWeight)
+    );
+    assert_eq!(
+        PhaseSpec::validate_split(&[
+            PhaseSpec::new("a", u64::MAX, Total::Unknown),
+            PhaseSpec::new("b", 1, Total::Unknown),
+        ]),
+        Err(PlanError::Overflow)
+    );
+}
+
+#[test]
+fn an_inert_child_neither_stops_nor_reports() {
+    let child = how_far::Child::inert();
+    assert!(!child.may_stop() && !child.may_report());
+    assert!(child.live().is_none());
+    child.step(3).unwrap();
+    child.finish(Outcome::Failed).unwrap();
+}
+
+#[test]
 fn a_pulse_reference_serves_existing_stop_and_report_seams() {
     fn old_stop_site(stop: &dyn Stop) -> Result<(), StopReason> {
         stop.check()

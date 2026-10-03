@@ -14,8 +14,8 @@ Two tables:
 `measure.py matrix [CHUNKS]` instead crosses report sinks (none, a tree
 counter, a boxed callback) with stop policies (`Unstoppable`, an `AtomicBool`
 `Stopper`, an `FnStop` calling a boxed callback) behind one `&dyn Pulse`
-shell, for `step`, `live()` and `Paced`, plus a `PulseTree` with each stop
-and `&NoPulse` itself. Callbacks are cold functions that do nothing, so the
+shell, for `step`, `live()`, `Paced` and a bare `check()` per chunk, plus a
+`PulseTree` with each stop, `&NoPulse` itself, and `FnPulse`. Callbacks are cold functions that do nothing, so the
 grids show what reaching them costs, not what they do.
 
 Every variant calls the same `#[inline(never)]` defilter, so all run the same
@@ -36,7 +36,7 @@ BIN = HERE / "target" / "release" / "how-far-checkpoint-cost"
 LOW, HIGH, RUNS = 200, 1000, 5
 CHECKPOINTS = ["none", "step-nopulse", "live-nopulse", "paced-nopulse",
                "step-tree", "live-tree", "paced-tree"]
-OPERATIONS = ["op-none", "op-nopulse", "op-tree", "opstep-nopulse", "opstep-tree"]
+OPERATIONS = ["op-none", "op-nopulse", "op-tree", "op-fn", "opstep-nopulse", "opstep-tree", "opstep-fn"]
 
 
 def counts(variant, chunk, iterations, size):
@@ -62,7 +62,7 @@ def sample(variants, chunk, size):
     return samples
 
 
-STYLES = ["step", "live", "paced"]
+STYLES = ["step", "live", "paced", "check"]
 REPORTS = [("none", "no report"), ("count", "tree counter"), ("call", "report callback")]
 STOPS = [("none", "`Unstoppable`"), ("flag", "`AtomicBool`"), ("call", "stop callback")]
 
@@ -71,6 +71,7 @@ def matrix(chunks):
     variants = ["none"] + [f"m-{style}-{r}-{s}" for style in STYLES for r, _ in REPORTS for s, _ in STOPS]
     variants += [f"t-{style}-{s}" for style in STYLES for s, _ in STOPS]
     variants += [f"n-{style}" for style in STYLES]
+    variants += [f"{kind}-{style}" for kind in ("f", "fs") for style in STYLES]
     for chunk in chunks:
         samples = sample(variants, chunk, 256 * 1024)
         checkpoints = 256 * 1024 // chunk
@@ -94,6 +95,11 @@ def matrix(chunks):
                        f"{(med[f'n-{style}', 'cycles'] - base_c) / checkpoints:.2f} cycles per checkpoint "
                        f"({100 * (med[f'n-{style}', 'instructions'] / base_i - 1):+.2f}% instructions).")
             print(f"\n{nopulse}")
+            for kind, label in (("f", "`FnPulse`, no plan"), ("fs", "`FnPulse` stage, exact total")):
+                print(f"\n{label} (one cold callback): "
+                      f"{(med[f'{kind}-{style}', 'instructions'] - base_i) / checkpoints:.2f} instructions, "
+                      f"{(med[f'{kind}-{style}', 'cycles'] - base_c) / checkpoints:.2f} cycles per checkpoint "
+                      f"({100 * (med[f'{kind}-{style}', 'instructions'] / base_i - 1):+.2f}% instructions).")
             print(f"\n`{style}`, overhead against no checkpoints, instructions / cycles:\n")
             print("| | " + " | ".join(label for _, label in STOPS) + " |")
             print("| --- | " + " | ".join("---:" for _ in STOPS) + " |")

@@ -25,6 +25,17 @@
   compiles to the bare loop; a `step` into it was 14 instructions (e14e223).
   With Rust 1.86 trait upcasting, `Stages` hands each stage its own pulse,
   and a `&dyn Pulse` passes as a `&dyn Stop` or `&dyn Report` (c398ed3).
+- `how-far`: `FnPulse` turns one callback into a pulse. The callback gets
+  `None` on every check and the job's fraction, weighted by every library's
+  plan, after every report and finish; returning an error stops the work at
+  the check. A report costs about 90 instructions and a check 26 to 34, and
+  it adds about 40% to `how-far`'s own release build (026ce0b, 083360e,
+  fe9316a, 2d50a38). For implementors, `PhaseSpec::validate_split` performs the
+  split check every pulse shares, `Child::inert` makes a child nobody
+  watches, and the `Pulse` docs list the rules no type enforces (e818bd4).
+  References, boxes and `Arc`s of a pulse are pulses, so generic and owned
+  code can hold `&NoPulse` (47c318f). `NoPulse`'s type is `Inert`, so
+  documentation links to `NoPulse` resolve to the static (137c48f).
 - `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
   trees read from any thread, application-planned `Phase` trees with
   `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span

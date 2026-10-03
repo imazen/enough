@@ -6,8 +6,8 @@
 use almost_enough::{FnStop, Stopper};
 use how_far::prelude::*;
 use how_far::{
-    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, PulseHandle, RunError,
-    Stages, StopReason, Unstoppable,
+    Child, Execution, FnPulse, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, Progress,
+    PulseHandle, RunError, Stages, StopReason, Unstoppable,
 };
 use how_far_along::{Phase, PulseTree, Total};
 use std::hint::black_box;
@@ -39,6 +39,16 @@ fn step(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReaso
     for part in buf.chunks_mut(chunk) {
         sub_defilter(part);
         pulse.step(part.len() as u64)?;
+    }
+    Ok(())
+}
+
+/// Checks for cancellation on every chunk and never reports.
+#[inline(never)]
+fn check(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
+    for part in buf.chunks_mut(chunk) {
+        sub_defilter(part);
+        pulse.check()?;
     }
     Ok(())
 }
@@ -212,6 +222,15 @@ fn matrix_pulse(report: &str, stop: &str) -> Box<dyn Pulse> {
     }
 }
 
+/// An `FnPulse` callback as an application installs one, cold and doing
+/// nothing, so the numbers are the cost of reaching it.
+#[cold]
+#[inline(never)]
+fn fn_callback(progress: Option<&Progress<'_>>) -> Result<(), StopReason> {
+    black_box(progress);
+    Ok(())
+}
+
 fn tree_pulse(stop: &str) -> Box<dyn Pulse> {
     let phase = Phase::new("bench", Total::Unknown);
     match stop {
@@ -222,33 +241,68 @@ fn tree_pulse(stop: &str) -> Box<dyn Pulse> {
     }
 }
 
+fn run_style(
+    style: &str,
+    buf: &mut [u8],
+    chunk: usize,
+    pulse: &dyn Pulse,
+) -> Result<(), StopReason> {
+    match style {
+        "step" => step(black_box(buf), black_box(chunk), black_box(pulse)),
+        "live" => live(black_box(buf), black_box(chunk), black_box(pulse)),
+        "paced" => paced(black_box(buf), black_box(chunk), black_box(pulse)),
+        "check" => check(black_box(buf), black_box(chunk), black_box(pulse)),
+        _ => panic!("unknown style {style}"),
+    }
+}
+
 /// `m-STYLE-REPORT-STOP` (the matrix shell), `t-STYLE-STOP` (a `PulseTree`),
-/// or `n-STYLE` (`&NoPulse`, which `step` recognizes by address).
+/// `n-STYLE` (`&NoPulse`, which `step` recognizes by address), `f-STYLE` (an
+/// `FnPulse` with no plan), or `fs-STYLE` (the stage of an `FnPulse` plan with
+/// an exact total, as `Stages` hands it out, so each report also moves the
+/// fraction).
 fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
     let parts: Vec<&str> = variant.split('-').collect();
     let (style, pulse): (&str, &dyn Pulse) = match parts.as_slice() {
         ["m", style, report, stop] => (*style, Box::leak(matrix_pulse(report, stop))),
         ["t", style, stop] => (*style, Box::leak(tree_pulse(stop))),
         ["n", style] => (*style, &NoPulse),
+        ["f", style] => (*style, Box::leak(Box::new(FnPulse::new(fn_callback)))),
+        ["fs", style] => {
+            let pulse = FnPulse::new(fn_callback);
+            let total = buf.len() as u64 * iters;
+            let mut stages =
+                Stages::new(&pulse, &[PhaseSpec::new("buffers", 1, Total::Exact(total))]).unwrap();
+            stages
+                .run_stoppable(|stage| {
+                    for _ in 0..iters {
+                        run_style(style, buf, chunk, stage)?;
+                    }
+                    Ok::<(), StopReason>(())
+                })
+                .unwrap();
+            stages.finish().unwrap();
+            return true;
+        }
         _ => return false,
     };
     for _ in 0..iters {
-        let result = match style {
-            "step" => step(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
-            "live" => live(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
-            "paced" => paced(black_box(&mut *buf), black_box(chunk), black_box(pulse)),
-            _ => panic!("unknown style {style}"),
-        };
-        black_box(result).unwrap();
+        black_box(run_style(style, buf, chunk, pulse)).unwrap();
     }
     true
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (variant, chunk, iters) = (args[1].as_str(), args[2].parse().unwrap(), args[3].parse::<u64>().unwrap());
+    let (variant, chunk, iters) = (
+        args[1].as_str(),
+        args[2].parse().unwrap(),
+        args[3].parse::<u64>().unwrap(),
+    );
     let size = std::env::var("BUF").map_or(BUF, |b| b.parse().unwrap());
-    let mut buf: Vec<u8> = (0..size).map(|i| (i.wrapping_mul(0x9E37_79B9) >> 24) as u8).collect();
+    let mut buf: Vec<u8> = (0..size)
+        .map(|i| (i.wrapping_mul(0x9E37_79B9) >> 24) as u8)
+        .collect();
     if run_matrix(variant, &mut buf, chunk, iters) {
         black_box(&buf);
         return;
@@ -266,15 +320,25 @@ fn main() {
                 operation_none(black_box(&mut buf), black_box(chunk));
                 Ok(())
             }
-            "op" | "opstep" if target == "nopulse" => {
-                operation(black_box(&mut buf), black_box(chunk), &NoPulse, kind == "op")
+            "op" | "opstep" if target == "nopulse" => operation(
+                black_box(&mut buf),
+                black_box(chunk),
+                &NoPulse,
+                kind == "op",
+            )
+            .map_err(|_| StopReason::Cancelled),
+            "op" | "opstep" if target == "fn" => {
+                // An application watches each operation with its own callback.
+                let pulse = FnPulse::new(fn_callback);
+                operation(black_box(&mut buf), black_box(chunk), &pulse, kind == "op")
                     .map_err(|_| StopReason::Cancelled)
             }
             "op" | "opstep" => {
                 // An application tracks each operation with its own tree.
                 let tree = PulseTree::new(Phase::new("job", Total::Unknown), Stopper::new());
                 let result = operation(black_box(&mut buf), black_box(chunk), &tree, kind == "op");
-                tree.finish(Outcome::from_result(&result, |_| true)).unwrap();
+                tree.finish(Outcome::from_result(&result, |_| true))
+                    .unwrap();
                 result.map_err(|_| StopReason::Cancelled)
             }
             _ => panic!("unknown variant {variant}"),

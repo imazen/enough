@@ -32,7 +32,7 @@ pub mod how_far_along
 pub use Child
 pub use ChildPulse
 pub use Execution
-pub use NoPulse
+pub use Inert
 pub use NoPulse
 pub use NoReport
 pub use Outcome

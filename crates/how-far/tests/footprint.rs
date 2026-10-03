@@ -7,7 +7,7 @@
 //! grows them should fail here first.
 
 use how_far::{
-    Child, Execution, NoPulse, NoReport, Outcome, Paced, PhaseSpec, PlanError, ProgressWithStop,
+    Child, Execution, Inert, NoReport, Outcome, Paced, PhaseSpec, PlanError, ProgressWithStop,
     Pulse, PulseHandle, Report, RunError, Stages, Stop, StopReason, Total, Unstoppable,
 };
 use std::mem::size_of;
@@ -30,8 +30,11 @@ const _: () = {
     assert!(size_of::<Outcome>() == 1);
     assert!(size_of::<PulseHandle>() == 4 * WORD);
     // One byte, so the one static `NoPulse` has an address of its own.
-    assert!(size_of::<NoPulse>() == 1);
+    assert!(size_of::<Inert>() == 1);
     assert!(size_of::<NoReport>() == 0);
+    // One `Arc`: the callback and every phase live behind it.
+    #[cfg(target_has_atomic = "64")]
+    assert!(size_of::<how_far::FnPulse>() == WORD);
     assert!(size_of::<ProgressWithStop<Unstoppable, NoReport>>() == 0);
 };
 
