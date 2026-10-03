@@ -92,7 +92,7 @@ Most applications want a progress bar and a way to stop, not a tree.
 - **The rules.** It validates splits, splits a phase once and before it
   counts, refuses to finish a parent before its children or to let it
   succeed after one failed, and records a dropped child as abandoned: the
-  rules the `Pulse` documentation lists for implementors, kept in about 290
+  rules the `Pulse` documentation lists for implementors, kept in about 300
   lines that also serve as an example of keeping them.
 - **What it costs.** A report reaches the callback in about 90 instructions
   plus what the callback does, against about 56 for a live tree's counter,
