@@ -1,0 +1,624 @@
+{
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "method": "fresh target per sample; CARGO_INCREMENTAL=0; offline; warm filesystem/package caches; perf includes cargo and dependency compiler processes",
+  "crates_source_sha256": "87a8cdd52048914233e154dfcebc10a6b2a0887ae4568fe08e73a3f20b2f5363",
+  "baseline_crates_source_sha256": "77e8e2c6f6acc7a4017712264ff46fec8e02a3620d10e92e9216e5feffb5bd2f",
+  "cases": {
+    "baseline-core": {
+      "check": {
+        "seconds": 0.1870302171446383,
+        "instructions": 399674022,
+        "samples": [
+          {
+            "seconds": 0.19890103302896023,
+            "instructions": 415326504
+          },
+          {
+            "seconds": 0.18619957589544356,
+            "instructions": 399674022
+          },
+          {
+            "seconds": 0.1870302171446383,
+            "instructions": 399664381
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.21823003701865673,
+        "instructions": 685485695,
+        "samples": [
+          {
+            "seconds": 0.22188313188962638,
+            "instructions": 685507905
+          },
+          {
+            "seconds": 0.21823003701865673,
+            "instructions": 685355055
+          },
+          {
+            "seconds": 0.2182000270113349,
+            "instructions": 685485695
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.26300141611136496,
+        "instructions": 907769981,
+        "samples": [
+          {
+            "seconds": 0.26274586794897914,
+            "instructions": 907477034
+          },
+          {
+            "seconds": 0.267795060062781,
+            "instructions": 907789675
+          },
+          {
+            "seconds": 0.26300141611136496,
+            "instructions": 907769981
+          }
+        ]
+      }
+    },
+    "core": {
+      "check": {
+        "seconds": 0.18191489716991782,
+        "instructions": 391121870,
+        "samples": [
+          {
+            "seconds": 0.2007060160394758,
+            "instructions": 406788120
+          },
+          {
+            "seconds": 0.18191489716991782,
+            "instructions": 391105628
+          },
+          {
+            "seconds": 0.1765261290129274,
+            "instructions": 391121870
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.2306179280858487,
+        "instructions": 759509209,
+        "samples": [
+          {
+            "seconds": 0.22890152409672737,
+            "instructions": 759509209
+          },
+          {
+            "seconds": 0.24055943195708096,
+            "instructions": 760335540
+          },
+          {
+            "seconds": 0.2306179280858487,
+            "instructions": 759351530
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.31786876707337797,
+        "instructions": 1208776893,
+        "samples": [
+          {
+            "seconds": 0.3209816680755466,
+            "instructions": 1208803524
+          },
+          {
+            "seconds": 0.31786876707337797,
+            "instructions": 1208688530
+          },
+          {
+            "seconds": 0.31758301006630063,
+            "instructions": 1208776893
+          }
+        ]
+      }
+    },
+    "core-checked": {
+      "check": {
+        "seconds": 0.1936653140000999,
+        "instructions": 431155161,
+        "samples": [
+          {
+            "seconds": 0.2058189269155264,
+            "instructions": 446800141
+          },
+          {
+            "seconds": 0.1920481799170375,
+            "instructions": 431155161
+          },
+          {
+            "seconds": 0.1936653140000999,
+            "instructions": 431150731
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.24459948297590017,
+        "instructions": 821406096,
+        "samples": [
+          {
+            "seconds": 0.24459948297590017,
+            "instructions": 822074023
+          },
+          {
+            "seconds": 0.24348509404808283,
+            "instructions": 821223019
+          },
+          {
+            "seconds": 0.24654827383346856,
+            "instructions": 821406096
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.3335771351121366,
+        "instructions": 1309753821,
+        "samples": [
+          {
+            "seconds": 0.3339741718955338,
+            "instructions": 1310174519
+          },
+          {
+            "seconds": 0.3311388890724629,
+            "instructions": 1309753821
+          },
+          {
+            "seconds": 0.3335771351121366,
+            "instructions": 1309466469
+          }
+        ]
+      }
+    },
+    "core-adapters": {
+      "check": {
+        "seconds": 0.18900161888450384,
+        "instructions": 431688449,
+        "samples": [
+          {
+            "seconds": 0.2013388299383223,
+            "instructions": 447352382
+          },
+          {
+            "seconds": 0.18841801397502422,
+            "instructions": 431688449
+          },
+          {
+            "seconds": 0.18900161888450384,
+            "instructions": 431682666
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.23845063196495175,
+        "instructions": 915674721,
+        "samples": [
+          {
+            "seconds": 0.24345038505271077,
+            "instructions": 915466662
+          },
+          {
+            "seconds": 0.23845063196495175,
+            "instructions": 915674721
+          },
+          {
+            "seconds": 0.2380301160737872,
+            "instructions": 916891804
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.31850644992664456,
+        "instructions": 1642315992,
+        "samples": [
+          {
+            "seconds": 0.3174875411204994,
+            "instructions": 1643141966
+          },
+          {
+            "seconds": 0.31850644992664456,
+            "instructions": 1642315992
+          },
+          {
+            "seconds": 0.323713889811188,
+            "instructions": 1640908320
+          }
+        ]
+      }
+    },
+    "tree-minimal": {
+      "check": {
+        "seconds": 0.2605051889549941,
+        "instructions": 723721302,
+        "samples": [
+          {
+            "seconds": 0.2732594369444996,
+            "instructions": 739807725
+          },
+          {
+            "seconds": 0.2605051889549941,
+            "instructions": 723715171
+          },
+          {
+            "seconds": 0.2592063320335001,
+            "instructions": 723721302
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.3330380010884255,
+        "instructions": 1672412953,
+        "samples": [
+          {
+            "seconds": 0.33273076405748725,
+            "instructions": 1672253470
+          },
+          {
+            "seconds": 0.3330380010884255,
+            "instructions": 1672412953
+          },
+          {
+            "seconds": 0.3341563600115478,
+            "instructions": 1672741635
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.46149203297682106,
+        "instructions": 3208162998,
+        "samples": [
+          {
+            "seconds": 0.46149203297682106,
+            "instructions": 3206340448
+          },
+          {
+            "seconds": 0.46971904393285513,
+            "instructions": 3208304083
+          },
+          {
+            "seconds": 0.45780509896576405,
+            "instructions": 3208162998
+          }
+        ]
+      }
+    },
+    "tree-default": {
+      "check": {
+        "seconds": 0.2755067548714578,
+        "instructions": 784703575,
+        "samples": [
+          {
+            "seconds": 0.2890577740035951,
+            "instructions": 800776997
+          },
+          {
+            "seconds": 0.2734747340437025,
+            "instructions": 784700660
+          },
+          {
+            "seconds": 0.2755067548714578,
+            "instructions": 784703575
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.3469775961712003,
+        "instructions": 1715156587,
+        "samples": [
+          {
+            "seconds": 0.3484121330548078,
+            "instructions": 1715055912
+          },
+          {
+            "seconds": 0.3404780589044094,
+            "instructions": 1715468559
+          },
+          {
+            "seconds": 0.3469775961712003,
+            "instructions": 1715156587
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.4662022371776402,
+        "instructions": 3604841056,
+        "samples": [
+          {
+            "seconds": 0.4670564190018922,
+            "instructions": 3604841056
+          },
+          {
+            "seconds": 0.46515286690555513,
+            "instructions": 3604847434
+          },
+          {
+            "seconds": 0.4662022371776402,
+            "instructions": 3604521661
+          }
+        ]
+      }
+    },
+    "callback": {
+      "check": {
+        "seconds": 0.28208202216774225,
+        "instructions": 766241126,
+        "samples": [
+          {
+            "seconds": 0.29025107296183705,
+            "instructions": 782303105
+          },
+          {
+            "seconds": 0.28208202216774225,
+            "instructions": 766241126
+          },
+          {
+            "seconds": 0.27470668219029903,
+            "instructions": 766233093
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.34872586908750236,
+        "instructions": 1721880133,
+        "samples": [
+          {
+            "seconds": 0.3512074761092663,
+            "instructions": 1722026837
+          },
+          {
+            "seconds": 0.34872586908750236,
+            "instructions": 1721880133
+          },
+          {
+            "seconds": 0.3425618589390069,
+            "instructions": 1721455019
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.4640797679312527,
+        "instructions": 3650640274,
+        "samples": [
+          {
+            "seconds": 0.4638978699222207,
+            "instructions": 3651198180
+          },
+          {
+            "seconds": 0.4699776810593903,
+            "instructions": 3650122117
+          },
+          {
+            "seconds": 0.4640797679312527,
+            "instructions": 3650640274
+          }
+        ]
+      }
+    },
+    "diagnostics": {
+      "check": {
+        "seconds": 0.3915072369854897,
+        "instructions": 1326240304,
+        "samples": [
+          {
+            "seconds": 0.4065271329600364,
+            "instructions": 1342292361
+          },
+          {
+            "seconds": 0.3880205908790231,
+            "instructions": 1326239270
+          },
+          {
+            "seconds": 0.3915072369854897,
+            "instructions": 1326240304
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 0.5158952779602259,
+        "instructions": 3287002445,
+        "samples": [
+          {
+            "seconds": 0.5117031391710043,
+            "instructions": 3286455622
+          },
+          {
+            "seconds": 0.5158952779602259,
+            "instructions": 3287002445
+          },
+          {
+            "seconds": 0.5231164889410138,
+            "instructions": 3287591598
+          }
+        ]
+      },
+      "release": {
+        "seconds": 0.7498702141456306,
+        "instructions": 7811097549,
+        "samples": [
+          {
+            "seconds": 0.7509851041249931,
+            "instructions": 7811097549
+          },
+          {
+            "seconds": 0.7491330809425563,
+            "instructions": 7812082020
+          },
+          {
+            "seconds": 0.7498702141456306,
+            "instructions": 7808372879
+          }
+        ]
+      }
+    },
+    "encoder-baseline": {
+      "check": {
+        "seconds": 5.590923715149984,
+        "instructions": 59222333978,
+        "samples": [
+          {
+            "seconds": 5.5598035647999495,
+            "instructions": 59222333978
+          },
+          {
+            "seconds": 5.645575968082994,
+            "instructions": 59221109223
+          },
+          {
+            "seconds": 5.590923715149984,
+            "instructions": 59223717062
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 6.648466074140742,
+        "instructions": 88935844674,
+        "samples": [
+          {
+            "seconds": 6.654044719878584,
+            "instructions": 88940142868
+          },
+          {
+            "seconds": 6.648466074140742,
+            "instructions": 88935844674
+          },
+          {
+            "seconds": 6.615044315811247,
+            "instructions": 88927575768
+          }
+        ]
+      },
+      "release": {
+        "seconds": 8.438928321003914,
+        "instructions": 207082243790,
+        "samples": [
+          {
+            "seconds": 8.438562334049493,
+            "instructions": 207082243790
+          },
+          {
+            "seconds": 8.438928321003914,
+            "instructions": 207084653295
+          },
+          {
+            "seconds": 8.467278918018565,
+            "instructions": 207080892194
+          }
+        ]
+      }
+    },
+    "encoder-feature-off": {
+      "check": {
+        "seconds": 5.607677052961662,
+        "instructions": 59232620022,
+        "samples": [
+          {
+            "seconds": 5.612896052887663,
+            "instructions": 59229374632
+          },
+          {
+            "seconds": 5.607677052961662,
+            "instructions": 59234774244
+          },
+          {
+            "seconds": 5.572077096207067,
+            "instructions": 59232620022
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 6.691769325872883,
+        "instructions": 88929051062,
+        "samples": [
+          {
+            "seconds": 6.691769325872883,
+            "instructions": 88928960510
+          },
+          {
+            "seconds": 6.67598855891265,
+            "instructions": 88932520422
+          },
+          {
+            "seconds": 6.729210265912116,
+            "instructions": 88929051062
+          }
+        ]
+      },
+      "release": {
+        "seconds": 8.453984406078234,
+        "instructions": 207261873093,
+        "samples": [
+          {
+            "seconds": 8.453984406078234,
+            "instructions": 207261873093
+          },
+          {
+            "seconds": 8.452416400890797,
+            "instructions": 207273546128
+          },
+          {
+            "seconds": 8.475934264017269,
+            "instructions": 207259959506
+          }
+        ]
+      }
+    },
+    "encoder-feature-on": {
+      "check": {
+        "seconds": 5.619598977966234,
+        "instructions": 59509241536,
+        "samples": [
+          {
+            "seconds": 5.603339645080268,
+            "instructions": 59508485704
+          },
+          {
+            "seconds": 5.64980205707252,
+            "instructions": 59509241536
+          },
+          {
+            "seconds": 5.619598977966234,
+            "instructions": 59515381304
+          }
+        ]
+      },
+      "debug": {
+        "seconds": 6.705613632919267,
+        "instructions": 89668626409,
+        "samples": [
+          {
+            "seconds": 6.705613632919267,
+            "instructions": 89667182101
+          },
+          {
+            "seconds": 6.60177768394351,
+            "instructions": 89668626409
+          },
+          {
+            "seconds": 6.710921632125974,
+            "instructions": 89669706703
+          }
+        ]
+      },
+      "release": {
+        "seconds": 8.480453331023455,
+        "instructions": 208535236153,
+        "samples": [
+          {
+            "seconds": 8.488046738086268,
+            "instructions": 208548506485
+          },
+          {
+            "seconds": 8.480453331023455,
+            "instructions": 208535236153
+          },
+          {
+            "seconds": 8.424269062001258,
+            "instructions": 208523889278
+          }
+        ]
+      }
+    }
+  }
+}

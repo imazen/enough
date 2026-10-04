@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 142 lines (supported surface) | how-far.features.txt 6 added (features: adapters) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 158 lines (supported surface) | how-far.features.txt 25 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        21
+#   pub types (struct/enum/trait/alias)        25
 #   pub consts/statics                          7
-#   free functions                             14
-#   inherent methods                           40
+#   free functions                             16
+#   inherent methods                           55
 #   struct fields                               8
-#   enum variants                              26
+#   enum variants                              23
 #   re-exports                                  4
-#   trait roster entries (type × trait)        80
+#   trait roster entries (type × trait)        77
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                          108
-#   prelude                          14
+#   (root)                          119
+#   prelude                          21
 
-## items (112 lines)
+## items (127 lines)
 
 pub mod how_far
 pub use Stop
@@ -34,15 +34,20 @@ pub use StopReason
 pub use Unstoppable
 pub mod prelude
 pub use prelude::Stop
+pub fn prelude::Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn prelude::Complete::complete_as(self, Outcome)
+pub fn prelude::Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
 pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub fn prelude::Pulse::handle(&self) -> PulseHandle
+pub fn prelude::Pulse::record_issue(&self, PlanError)
 pub fn prelude::Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
 pub fn prelude::Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
 pub fn prelude::Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
 pub fn prelude::Pulse::start(&self) -> core::result::Result<(), PlanError>
 pub fn &mut P::handle(&self) -> PulseHandle [also: (root)]
+pub fn &mut P::record_issue(&self, PlanError) [also: (root)]
 pub fn &mut P::set_total(&self, Total) -> core::result::Result<(), PlanError> [also: (root)]
 pub fn &mut P::share(&self) -> core::result::Result<SharedPulse, PlanError> [also: (root)]
 pub fn &mut P::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError> [also: (root)]
@@ -51,6 +56,7 @@ pub fn prelude::Report::advance(&self, u64)
 pub fn prelude::Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64) [also: (root)]
 pub fn &mut T::may_report(&self) -> bool [also: (root)]
+pub fn prelude::ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
 #[non_exhaustive] pub enum Execution
 pub Execution::ForkJoin
 pub Execution::Sequence
@@ -76,20 +82,18 @@ pub PlanError::NotALeaf
 pub PlanError::NotShareable
 pub PlanError::Overflow
 pub PlanError::UnfinishedChildren
-pub PlanError::UnsuccessfulChildren
 pub PlanError::Unsupported
-#[non_exhaustive] pub enum RunError<E>
-pub RunError::Plan(PlanError)
-pub RunError::Work(E)
 #[non_exhaustive] pub enum Total
 pub Total::Estimated(u64)
 pub Total::Exact(u64)
 pub Total::Unknown
 pub struct Child<'a>
 pub fn Child<'_>::paced(&self, u64) -> Paced<'_>
+pub fn Child<'a>::complete_inferred(self, Outcome)
 pub fn Child<'a>::finish(self, Outcome) -> core::result::Result<(), PlanError>
 pub const fn Child<'a>::inert() -> Self
 pub fn Child<'a>::new(impl ChildPulse + 'a) -> Self
+pub fn Child<'a>::plan(&self, Execution, &[PhaseSpec<'_>]) -> alloc::vec::Vec<Child<'_>>
 pub struct Inert
 pub struct NoReport
 pub struct Paced<'a>
@@ -108,6 +112,11 @@ pub const fn PhaseSpec<'a>::execution(self, Execution) -> Self
 pub const fn PhaseSpec<'a>::new(&'a str, u64, Total) -> Self
 pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
 pub fn PhaseSpec<'a>::validate_split(&[PhaseSpec<'_>]) -> core::result::Result<u64, PlanError>
+pub struct Phases<'a>
+pub fn Phases<'a>::new(&'a dyn Pulse, Execution, &[PhaseSpec<'_>]) -> Self
+pub fn Phases<'a>::run<T, E>(&mut self, usize, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'e> &'e E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Phases<'a>::run_classified<T, E>(&mut self, usize, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E>
+pub fn Phases<'a>::skip(&mut self, usize)
 pub struct ProgressWithStop<S, R>
 pub ProgressWithStop::report: R
 pub ProgressWithStop::stop: S
@@ -116,22 +125,26 @@ pub struct SharedPulse(_)
 pub fn SharedPulse::as_pulse(&self) -> &dyn Pulse
 pub fn SharedPulse::new(impl Pulse + 'static) -> Self
 pub struct Stages<'a>
-pub fn Stages<'a>::finish(self) -> core::result::Result<(), PlanError>
-pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
-pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
-pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
-pub fn Stages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
-pub fn Stages<'a>::run_stoppable<T>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, enough::reason::StopReason>) -> core::result::Result<T, RunError<enough::reason::StopReason>>
-pub fn Stages<'a>::skip(&mut self) -> core::result::Result<(), PlanError>
+pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> Self
+pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'e> &'e E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E>
+pub fn Stages<'a>::skip(&mut self)
 pub static NoPulse: Inert
 pub trait ChildPulse: Pulse
+pub fn ChildPulse::complete_as(alloc::boxed::Box<Self>, Outcome)
+pub fn ChildPulse::complete_inferred(alloc::boxed::Box<Self>, Outcome)
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
+pub trait Complete: core::marker::Sized [also: prelude]
+pub fn Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Complete::complete_as(self, Outcome)
+pub fn Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]
 pub fn ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub trait Pulse: enough::Stop + Report [also: prelude]
 pub fn Pulse::handle(&self) -> PulseHandle
+pub fn Pulse::record_issue(&self, PlanError)
 pub fn Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
 pub fn Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
 pub fn Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
@@ -139,26 +152,28 @@ pub fn Pulse::start(&self) -> core::result::Result<(), PlanError>
 pub trait Report: core::marker::Send + core::marker::Sync [also: prelude]
 pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
+pub trait ResultExt<T, E>: core::marker::Sized [also: prelude]
+pub fn ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
 pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
-## trait impls (23 types)
+## trait impls (24 types)
 
 &P: Pulse
 &T: Report
 &mut P: Pulse
 &mut T: Report
-Child<'_>: Debug, Pulse, Report, enough::Stop
+Child<'_>: Complete, Debug, Pulse, Report, enough::Stop
 Execution: Clone, Copy, Debug, Default, Eq, PartialEq
 Inert: Debug, Pulse, Report, enough::Stop
 NoReport: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report
 Outcome: Clone, Copy, Debug, Eq, Hash, PartialEq
 Paced<'_>: Debug, Drop
 PhaseSpec<'a>: Clone, Copy, Debug, Eq, PartialEq
+Phases<'_>: Complete
 PlanError: Clone, Copy, Debug, Display, Eq, Error, Hash, PartialEq
 ProgressWithStop<S, R>: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Report, enough::Stop
-RunError<E>: Debug, Display, Eq, Error, From<PlanError>, PartialEq
 SharedPulse: Clone, Debug, Default, Pulse, Report, enough::Stop
-Stages<'_>: Debug
+Stages<'_>: Complete
 T: ProgressExt
 Total: Clone, Copy, Debug, Eq, PartialEq
 alloc::boxed::Box<P>: Pulse
@@ -166,13 +181,14 @@ alloc::boxed::Box<T>: Report
 alloc::sync::Arc<P>: Pulse
 alloc::sync::Arc<T>: Report
 core::option::Option<T>: Report
+core::result::Result<T, E>: ResultExt<T, E>
 
 ## auto traits
 
 7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 Child<'a>: !RefUnwindSafe !UnwindSafe
 Paced<'a>: !RefUnwindSafe !UnwindSafe
+Phases<'a>: !RefUnwindSafe !UnwindSafe
 ProgressWithStop<S, R>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
-RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
 SharedPulse: !RefUnwindSafe !UnwindSafe
 Stages<'a>: !RefUnwindSafe !UnwindSafe

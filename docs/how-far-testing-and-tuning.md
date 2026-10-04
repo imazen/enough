@@ -7,7 +7,8 @@ Keep the production dependency small and put the tracker in dev-dependencies:
 how-far = "0.1"
 
 [dev-dependencies]
-how-far-along = { version = "0.1", features = ["diagnostics"] }
+how-far-along = "0.1"
+how-far-really = "0.1"
 ```
 
 ## Test what the library reports
@@ -36,7 +37,7 @@ Worth a test each:
 
 - **Cancellation at an exact point.** Give the tree a stop policy that trips
   when a snapshot reaches a chosen count, and assert that the active stage
-  is `Cancelled`, later stages are `Skipped`, and completed work up to the
+  is `Cancelled`, later stages are `NotRun`, and completed work up to the
   stop is still counted.
 - **Failure versus cancellation.** Feed corrupt input and assert `Failed`,
   not `Cancelled`. `Stages::run_classified` needs a correct `is_stop`.
@@ -58,8 +59,8 @@ tree, pass the wrapper, and finish the wrapper:
 
 ```rust
 use how_far_along::{Outcome, Phase, PulseTree, Total, Unstoppable};
-use how_far_along::diagnostics::{DiagnosticPulse, Options};
-use how_far_along::profile::{Profiler, StdClock};
+use how_far_really::diagnostics::{DiagnosticPulse, Options};
+use how_far_really::profile::{Profiler, StdClock};
 
 let profiler = Profiler::new(StdClock::new(), 512);
 let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
@@ -95,13 +96,14 @@ measured.
 
 Codecs often keep their stop policy in a context object: an encoder built
 with `with_stop(impl Stop + 'static)` checks deep inside each frame. A
-borrowed pulse cannot go there, but `stage.handle()` can, and under
+borrowed pulse cannot go there, but `stage.share()?` can, and under
 `DiagnosticPulse` that handle is instrumented. Checks the encoder makes
-through it count toward the stage that handed it out:
+through it count toward the stage that handed it out. Borrowed stop adapters
+cannot become owned views; use scoped workers or an owned stop source:
 
 ```rust,ignore
 stages.run_classified(Error::is_stop, |stage| {
-    let mut encoder = Encoder::new(config).with_stop(stage.handle().stop);
+    let mut encoder = Encoder::new(config).with_stop(stage.share()?);
     for frame in frames {
         encoder.encode(frame)?;
         stage.step(1)?;
@@ -173,6 +175,8 @@ how smooth a display looks depends on how often the application polls.
 ## Run the examples
 
 ```sh
-cargo test -p how-far-along --features diagnostics --test diagnostics
-cargo run -p how-far-along --example diagnostics --features diagnostics
+cargo test -p how-far-really --test diagnostics
+cargo test -p how-far-example-app
+cargo run -p how-far-really --example diagnostics
+cargo run -p how-far-example-app
 ```

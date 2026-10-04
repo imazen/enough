@@ -1,12 +1,15 @@
 //! Parallel library work with Rayon: a stage shared by every worker, a
 //! fork-join of tiles with their own children, and `'static` tasks that hold
-//! owned handles.
+//! owned handles. This example explicitly uses the optional `checked` runner
+//! to demonstrate fallible administration. For ordinary Result adoption, see
+//! `examples/how-far-pipeline` in the workspace.
 //!
 //! Run with `cargo run -p how-far-along --example rayon`.
 
+use how_far::{RunError, TryStages};
 use how_far_along::{
-    Execution, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, RunError, Stages,
-    StopReason, Total, Unstoppable,
+    Execution, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, StopReason, Total,
+    Unstoppable,
 };
 use rayon::prelude::*;
 use std::{num::NonZeroUsize, sync::mpsc};
@@ -19,7 +22,7 @@ fn work(seed: u64) -> u64 {
 
 fn encode(blocks: u64, pulse: &dyn Pulse) -> Result<u64, RunError<StopReason>> {
     let threads = NonZeroUsize::new(rayon::current_num_threads()).unwrap_or(NonZeroUsize::MIN);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("search", 6, Total::Exact(blocks))

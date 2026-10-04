@@ -1,13 +1,13 @@
-#![cfg(feature = "diagnostics")]
 //! Checkpoint advice from deterministic, clock-driven traces.
 
-use how_far_along::diagnostics::{DiagnosticPulse, Kind, Options};
+use how_far::{NoReport, ProgressWithStop, RunError, TryStages};
 use how_far_along::poll::LocalPoller;
-use how_far_along::profile::{Clock, Profiler, SpanKind, Trace};
 use how_far_along::{
-    Execution, NoReport, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Pulse,
-    PulseTree, Report, RunError, Stages, Stop, StopReason, Total, Unstoppable,
+    Execution, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, Report, Stop, StopReason,
+    Total, Unstoppable,
 };
+use how_far_really::diagnostics::{DiagnosticPulse, Kind, Options};
+use how_far_really::profile::{Clock, Profiler, SpanKind, Trace};
 use std::{
     num::NonZeroUsize,
     sync::{
@@ -211,7 +211,7 @@ fn callback_cadence_is_measured_separately_from_callback_duration() {
 #[test]
 fn a_library_is_measured_without_changing_its_signature() {
     fn library(pulse: &dyn Pulse, clock: &ManualClock) -> Result<(), RunError<StopReason>> {
-        let mut stages = Stages::new(
+        let mut stages = TryStages::new(
             pulse,
             &[
                 PhaseSpec::new("prepare", 50, Total::Exact(1)),
@@ -370,7 +370,7 @@ fn staged(stages: &[(&'static str, u64, u64)]) -> Trace {
         .iter()
         .map(|(name, weight, _)| PhaseSpec::new(name, *weight, Total::Exact(1)))
         .collect();
-    let mut run = Stages::new(&measured, &specs).unwrap();
+    let mut run = TryStages::new(&measured, &specs).unwrap();
     for (_, _, end) in stages {
         run.run_stoppable(|stage| {
             clock.set(*end);
@@ -405,7 +405,7 @@ fn a_succeeded_stage_without_any_checkpoint_still_has_a_span() {
     let profiler = Profiler::new(clock.clone(), 4);
     let measured = DiagnosticPulse::new(tree(), &profiler);
     let mut stages =
-        Stages::new(&measured, &[PhaseSpec::new("opaque", 1, Total::Exact(1))]).unwrap();
+        TryStages::new(&measured, &[PhaseSpec::new("opaque", 1, Total::Exact(1))]).unwrap();
     stages
         .run_stoppable(|_| {
             clock.set(25);
@@ -599,7 +599,7 @@ fn checks_inside_a_codec_that_owns_its_stop_count_toward_the_stage() {
     let profiler = Profiler::new(clock.clone(), 8);
     let measured = DiagnosticPulse::new(tree(), &profiler);
     let observer = measured.observer();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &measured,
         &[PhaseSpec::new("frames", 1, Total::Exact(2)).units("frames")],
     )
@@ -649,7 +649,7 @@ fn a_diagnostic_pulse_keeps_checkpoints_visible_over_a_never_stopping_tree() {
 fn a_stop_adapter_keeps_the_library_call_site() {
     // An adapter around an instrumented value needs no #[track_caller] of its
     // own, because `Stop::check` is declared with it.
-    struct Adapter(how_far_along::profile::Instrumented<Unstoppable>);
+    struct Adapter(how_far_really::profile::Instrumented<Unstoppable>);
     impl Stop for Adapter {
         fn check(&self) -> Result<(), StopReason> {
             self.0.check()

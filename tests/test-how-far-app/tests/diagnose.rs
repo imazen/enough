@@ -1,9 +1,9 @@
 //! Diagnostics across crate boundaries: a test measures libraries it does not
 //! own, including checks made inside a codec context that owns its stop.
 
-use how_far_along::diagnostics::{DiagnosticPulse, Kind, Options};
-use how_far_along::profile::{Profiler, SpanKind, StdClock};
 use how_far_along::{NodeId, Outcome, Unstoppable};
+use how_far_really::diagnostics::{DiagnosticPulse, Kind, Options};
+use how_far_really::profile::{Profiler, SpanKind, StdClock};
 use test_how_far_app::{find, images, tree};
 use test_how_far_pipeline::{PipelineError, process_each};
 

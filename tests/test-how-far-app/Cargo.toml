@@ -7,8 +7,10 @@ publish = false
 description = "Applications driving how-far libraries across crates, threads, pools and runtimes"
 
 [dependencies]
+how-far = { workspace = true, features = ["checked"] }
+how-far-really = { path = "../../crates/how-far-really" }
 almost-enough = { workspace = true }
-how-far-along = { path = "../../crates/how-far-along", features = ["diagnostics"] }
+how-far-along = { path = "../../crates/how-far-along", features = ["std", "json"] }
 rayon = "1.12.0"
 test-how-far-codec = { path = "../test-how-far-codec" }
 test-how-far-pipeline = { path = "../test-how-far-pipeline" }

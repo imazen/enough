@@ -12,6 +12,8 @@ categories = ["concurrency", "no-std"]
 [features]
 # Only convenience implementations; Pulse and its behavior never vary.
 adapters = []
+# Explicitly fallible legacy plan runner; normal Results need no wrapper.
+checked = []
 
 [dependencies]
 # `alloc` gives `Arc<dyn Stop>` its `Stop` impl, which `PulseHandle` relies on.

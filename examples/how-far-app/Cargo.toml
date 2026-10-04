@@ -1,0 +1,13 @@
+[package]
+name = "how-far-example-app"
+version = "0.0.0"
+edition.workspace = true
+rust-version = "1.88"
+publish = false
+[dependencies]
+how-far.workspace = true
+how-far-example-codec = { path = "../how-far-codec" }
+how-far-example-pipeline = { path = "../how-far-pipeline" }
+how-far-along = { workspace = true, features = ["std", "json"] }
+how-far-really.workspace = true
+almost-enough.workspace = true

@@ -9,8 +9,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+how-far = { path = "../../crates/how-far" }
+how-far-really = { path = "../../crates/how-far-really" }
 almost-enough = { path = "../../crates/almost-enough" }
-how-far-along = { path = "../../crates/how-far-along", features = ["profile"] }
+how-far-along = { path = "../../crates/how-far-along", features = ["std", "json"] }
 rayon = "1.10"
 # Match zenpipe/demo's binding and worker adapter versions. Test-only dependencies.
 wasm-bindgen = "=0.2.123"

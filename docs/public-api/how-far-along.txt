@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 129 lines (supported surface) | how-far-along.features.txt 166 added (features: adapters,callback,diagnostics,json,profile,std) | how-far-along.internal.txt 16 lines (16 hidden + 0 excluded-feature)
+# files: how-far-along.txt 128 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,36 +14,34 @@
 #   pub types (struct/enum/trait/alias)        15
 #   pub consts/statics                          3
 #   inherent methods                           45
-#   struct fields                              16
+#   struct fields                              17
 #   enum variants                               3
-#   re-exports                                 22
-#   trait roster entries (type × trait)        45
+#   re-exports                                 20
+#   trait roster entries (type × trait)        48
 #   auto-trait-complete types                   8
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                           82
+#   (root)                           81
 #   ext                               6
 #   poll                             19
 
-## items (107 lines)
+## items (106 lines)
 
 pub mod how_far_along
 pub use Child
-pub use ChildPulse
+pub use Complete
 pub use Execution
-pub use Inert
 pub use NoPulse
-pub use NoReport
 pub use Outcome
+pub use Paced
 pub use PhaseSpec
+pub use Phases
 pub use PlanError
 pub use ProgressExt
-pub use ProgressWithStop
 pub use Pulse
-pub use PulseHandle
 pub use Report
-pub use RunError
+pub use ResultExt
 pub use SharedPulse
 pub use Stages
 pub use Stop
@@ -80,7 +78,7 @@ pub fn poll::SharedPollerBuilder::subscribe(&mut self, impl core::ops::function:
 pub struct poll::SubscriptionId(_)
 #[non_exhaustive] pub enum Status
 pub Status::Finished(how_far::pulse::Outcome)
-pub Status::Pending
+pub Status::NotStarted
 pub Status::Running
 pub struct NodeId(_)
 pub const NodeId::ROOT: Self
@@ -115,6 +113,7 @@ pub struct Reporter
 #[non_exhaustive] pub struct Snapshot
 pub Snapshot::children: alloc::vec::Vec<Snapshot>
 pub Snapshot::completed: u64
+pub Snapshot::completion_inferred: bool
 pub Snapshot::execution: how_far::pulse::Execution
 pub Snapshot::id: NodeId
 pub Snapshot::initial_total: how_far::pulse::Total
@@ -140,11 +139,11 @@ pub Summary::unresolved_fraction: f64
 
 NodeId: Clone, Copy, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd
 Observer: Clone, Debug
-Phase: Drop
-PulseTree: Debug, enough::Stop, how_far::pulse::Pulse, how_far::report::Report
+Phase: Drop, how_far::completion::Complete
+PulseTree: Debug, enough::Stop, how_far::completion::Complete, how_far::pulse::Pulse, how_far::report::Report
 Reporter: Clone, Debug, how_far::report::Report
 Snapshot: Clone, Debug, PartialEq
-Status: Clone, Copy, Debug, Eq, PartialEq
+Status: Clone, Copy, Debug, Default, Eq, PartialEq
 Summary: Clone, Copy, Debug, PartialEq
 T: ext::ReportExt
 ext::Batch<R>: Debug, Drop

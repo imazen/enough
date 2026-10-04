@@ -34,11 +34,12 @@ impl fmt::Display for NodeId {
 }
 
 /// Lifecycle state, independent of the counted fraction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Status {
     /// Work has not started.
-    Pending,
+    #[default]
+    NotStarted,
     /// Started explicitly or by the first nonzero report.
     Running,
     /// A frozen terminal observation.
@@ -128,6 +129,7 @@ struct Node {
     // written before the state becomes terminal.
     state: AtomicU8,
     outcome: AtomicU8,
+    inferred: AtomicBool,
     completed: Counter,
     /// The count at the outcome; a report racing with the finish is not shown.
     final_count: Counter,
@@ -151,6 +153,7 @@ impl Node {
             branch: AtomicBool::new(false),
             state: AtomicU8::new(0),
             outcome: AtomicU8::new(UNKNOWN),
+            inferred: AtomicBool::new(false),
             completed: Counter::new(),
             final_count: Counter::new(),
             meta: MetadataCell::new(Metadata {
@@ -180,7 +183,7 @@ impl Node {
             return Some(frozen.clone());
         }
         let (status, counter) = match state {
-            0 => (Status::Pending, &self.completed),
+            0 => (Status::NotStarted, &self.completed),
             1 => (Status::Running, &self.completed),
             // Without a frozen snapshot, a terminal outcome is always encoded.
             _ => (
@@ -203,13 +206,14 @@ impl Node {
             status,
             completed: counter.get(),
             overflowed: counter.overflowed(),
+            completion_inferred: self.inferred.load(Ordering::Relaxed),
             children: Vec::new(),
         };
         let children = meta.children.clone();
         result.children = Vec::with_capacity(children.len());
         for child in &children {
             let child = child.snapshot_with(nonblocking)?;
-            if result.status == Status::Pending && child.status != Status::Pending {
+            if result.status == Status::NotStarted && child.status != Status::NotStarted {
                 // A pending branch whose child has started is running.
                 result.status = Status::Running;
             }
@@ -234,7 +238,7 @@ impl Node {
             });
         }
         let (status, counter) = match state {
-            0 => (Status::Pending, &self.completed),
+            0 => (Status::NotStarted, &self.completed),
             1 => (Status::Running, &self.completed),
             _ => (
                 Status::Finished(
@@ -259,7 +263,7 @@ impl Node {
         let mut unresolved = 0.0;
         for child in &meta.children {
             let observed = child.summary(nonblocking)?;
-            if result.status == Status::Pending && observed.status != Status::Pending {
+            if result.status == Status::NotStarted && observed.status != Status::NotStarted {
                 result.status = Status::Running;
             }
             let weight = child.weight as f64 / sum;
@@ -447,32 +451,47 @@ impl Phase {
         self.node.branch.store(true, Ordering::Release);
         Ok(children)
     }
-    /// Record success, after every worker has joined and every child has
-    /// succeeded or been skipped.
+    /// Record success after every worker joins and every child finishes.
+    /// Failed child attempts may be retained under a recovered successful parent.
     pub fn finish(&mut self) -> Result<(), PlanError> {
         self.finish_with(Outcome::Succeeded)
     }
     /// Record a terminal outcome. The subtree's snapshot stops changing.
     ///
-    /// Every child must have finished first, and `Succeeded` or `Skipped` also
-    /// requires every child to have succeeded or been skipped. A failed call
+    /// Every child must have finished first. Their outcomes need not match the
+    /// parent's: the library decides whether recovery succeeded. A failed call
     /// changes nothing, so the owner can fix the cause and finish again.
     /// `Cancelled` records how the work ended; it does not request a stop.
     pub fn finish_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
-        let mut unsuccessful = false;
         for child in &self.node.meta.get().children {
-            match child.outcome() {
-                None => return Err(PlanError::UnfinishedChildren),
-                Some(Outcome::Succeeded | Outcome::Skipped) => {}
-                Some(_) => unsuccessful = true,
+            if child.outcome().is_none() {
+                return Err(PlanError::UnfinishedChildren);
             }
-        }
-        if unsuccessful && matches!(outcome, Outcome::Succeeded | Outcome::Skipped) {
-            return Err(PlanError::UnsuccessfulChildren);
         }
         self.seal(outcome);
         Ok(())
+    }
+
+    pub(crate) fn complete_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
+        self.ensure_live()?;
+        self.seal(outcome);
+        Ok(())
+    }
+
+    pub(crate) fn complete_inferred(&mut self, outcome: Outcome) -> Result<(), PlanError> {
+        self.ensure_live()?;
+        self.node.inferred.store(true, Ordering::Relaxed);
+        let outcome = if self
+            .node
+            .summary(false)
+            .is_some_and(|s| s.status == Status::Running)
+        {
+            Outcome::Abandoned
+        } else {
+            outcome
+        };
+        self.complete_with(outcome)
     }
     /// Make `outcome` terminal. When every child has finished, the subtree can
     /// no longer change, so atomics suffice and nothing is allocated. A phase
@@ -489,6 +508,7 @@ impl Phase {
         }
         if code == UNKNOWN || running_child {
             let mut snapshot = self.node.snapshot();
+            resolve_children(&mut snapshot, outcome);
             snapshot.status = Status::Finished(outcome);
             let mut meta = (*self.node.meta.get()).clone();
             meta.frozen = Some(snapshot);
@@ -519,6 +539,31 @@ impl Drop for Phase {
         if self.node.state.load(Ordering::Acquire) != 2 {
             self.seal(Outcome::Abandoned);
         }
+    }
+}
+
+impl how_far::Complete for Phase {
+    fn complete_as(mut self, outcome: Outcome) {
+        let _ = self.complete_with(outcome);
+    }
+}
+
+// Freeze the parent's observation only. Retained child owners can still close
+// normally, but cannot rewrite what a completed parent observed at its boundary.
+fn resolve_children(snapshot: &mut Snapshot, parent: Outcome) {
+    for child in &mut snapshot.children {
+        let outcome = match child.status {
+            Status::Finished(_) => continue,
+            Status::NotStarted => match parent {
+                Outcome::Succeeded | Outcome::Skipped => Outcome::Skipped,
+                Outcome::Abandoned => Outcome::Abandoned,
+                _ => Outcome::NotRun,
+            },
+            Status::Running => Outcome::Abandoned,
+        };
+        resolve_children(child, outcome);
+        child.status = Status::Finished(outcome);
+        child.completion_inferred = true;
     }
 }
 /// A cloneable, thread-safe counter for one phase, from [`Phase::reporter`].
@@ -658,6 +703,9 @@ pub struct Snapshot {
     pub completed: u64,
     /// The true count exceeded the counter, so no fraction is valid.
     pub overflowed: bool,
+    /// Completion inferred from the parent's boundary, rather than reported by
+    /// this owner. Diagnostics use this as evidence, not proof of a library bug.
+    pub completion_inferred: bool,
     /// Children, in declared order.
     pub children: Vec<Snapshot>,
 }
@@ -670,12 +718,12 @@ impl Snapshot {
     /// do not know.
     #[cfg(feature = "json")]
     pub fn write_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
-        out.write_str("{\"schema_version\":1,\"root\":")?;
+        out.write_str("{\"schema_version\":2,\"root\":")?;
         self.write_node_json(out)?;
         out.write_char('}')
     }
     #[cfg(feature = "json")]
-    pub(crate) fn write_node_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
+    fn write_node_json(&self, out: &mut impl fmt::Write) -> fmt::Result {
         use crate::json::{outcome_name, quote};
         write!(out, "{{\"id\":{},\"parent\":", self.id)?;
         match self.parent {
@@ -712,7 +760,7 @@ impl Snapshot {
             None => out.write_str("null")?,
         }
         let (status, outcome) = match self.status {
-            Status::Pending => ("Pending", None),
+            Status::NotStarted => ("NotStarted", None),
             Status::Running => ("Running", None),
             Status::Finished(outcome) => ("Finished", Some(outcome)),
         };
@@ -721,6 +769,7 @@ impl Snapshot {
             Some(outcome) => write!(out, "\"{}\"", outcome_name(outcome))?,
             None => out.write_str("null")?,
         }
+        write!(out, ",\"completion_inferred\":{}", self.completion_inferred)?;
         write!(
             out,
             ",\"completed\":\"{}\",\"overflowed\":{},\"overrun\":{},\"fraction\":",

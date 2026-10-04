@@ -2,7 +2,21 @@
 
 ## Unreleased how-far redesign
 
-- Restrict Stages::run_stoppable to StopReason; use run_classified for mixed
+- Keep ordinary `Result<T, E>` throughout `Stages`, `Phases`, and consuming
+  `Complete` / `ResultExt::finish_phase` handoffs. Borrow error classification;
+  retain explicit classifiers for foreign wrappers. Move the older `TryStages`
+  and `RunError` behind the additive `checked` feature.
+- Rename Pending to NotStarted. Resolve untouched phases as Skipped on success
+  or NotRun on error; preserve failed attempts under recovered successful parents.
+  Record completion provenance and diagnose missing handoffs without changing results.
+- Extract std-only profiling and diagnostics to `how-far-really`. Curate tracker
+  re-exports and add cross-crate examples of correct use and buggy omissions.
+  Tracking and trace JSON move to schema 2.
+- Add borrowed stop composition and explicit checkpoint-policy replacement to
+  `WithStop`, retaining the policy across children, scoped and owned workers.
+  Borrowed-to-owned capability conversion explicitly fails.
+
+- Restrict TryStages::run_stoppable to StopReason; use run_classified for mixed
   failures. Replace the runner's lifecycle booleans with one private state enum.
   Mark owners, stage runners and pacing guards must_use, with explicit Drop
   guidance and compile-fail coverage for completion ownership.

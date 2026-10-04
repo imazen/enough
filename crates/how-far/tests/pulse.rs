@@ -1,8 +1,9 @@
+#![cfg(feature = "checked")]
 //! The `Pulse` contract with the no-op implementation.
 
 use how_far::{
-    Execution, NoPulse, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report, RunError,
-    Stages, Stop, StopReason, Total,
+    Execution, NoPulse, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report, RunError, Stop,
+    StopReason, Total, TryStages,
 };
 use std::num::NonZeroUsize;
 
@@ -110,7 +111,7 @@ fn a_pulse_reference_serves_existing_stop_and_report_seams() {
 #[test]
 fn stages_run_each_declared_stage_once() {
     let pulse: &dyn Pulse = &NoPulse;
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("decode", 2, Total::Exact(3)),
@@ -127,14 +128,14 @@ fn stages_run_each_declared_stage_once() {
     stages.run(|stage| stage.step(1)).unwrap();
     stages.finish().unwrap();
 
-    let mut short = Stages::new(pulse, &[PhaseSpec::new("only", 1, Total::Unknown)]).unwrap();
+    let mut short = TryStages::new(pulse, &[PhaseSpec::new("only", 1, Total::Unknown)]).unwrap();
     assert!(matches!(short.run(|_| Ok::<(), ()>(())), Ok(())));
     assert!(matches!(
         short.run(|_| Ok::<(), ()>(())),
         Err(RunError::Plan(PlanError::NoMoreStages))
     ));
 
-    let unrun = Stages::new(pulse, &[PhaseSpec::new("never", 1, Total::Unknown)]).unwrap();
+    let unrun = TryStages::new(pulse, &[PhaseSpec::new("never", 1, Total::Unknown)]).unwrap();
     assert_eq!(unrun.finish(), Err(PlanError::UnfinishedChildren));
 }
 

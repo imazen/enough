@@ -1,13 +1,14 @@
-//! Libraries built on `Stages` calling each other, checked with a recording
+#![cfg(feature = "checked")]
+//! Libraries built on `TryStages` calling each other, checked with a recording
 //! `Pulse` written against the public trait alone.
 //!
-//! Regression: `Stages` once finished the pulse it was given, so a library
+//! Regression: `TryStages` once finished the pulse it was given, so a library
 //! running inside another library's stage finished that stage first and the
 //! outer finish failed (`Plan(Finished)`), replacing the real result.
 
 use how_far::{
     Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, PulseHandle,
-    Report, RunError, Stages, Stop, StopReason, Total,
+    Report, RunError, Stop, StopReason, Total, TryStages,
 };
 use std::{
     collections::BTreeMap,
@@ -119,9 +120,9 @@ fn outcome(log: &Log, path: &str) -> Option<Outcome> {
     *log.outcomes.lock().unwrap().get(path).expect(path)
 }
 
-/// Library B: a well-behaved `Stages` user.
+/// Library B: a well-behaved `TryStages` user.
 fn resize(pulse: &dyn Pulse, stop_after: Option<u64>) -> Result<(), RunError<StopReason>> {
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("horizontal", 1, Total::Exact(4)),
@@ -175,7 +176,7 @@ impl From<RunError<StopReason>> for CodecError {
 
 /// Library C: decodes, then calls library B inside its own stage.
 fn thumbnail(pulse: &dyn Pulse, corrupt: bool, stop_after: Option<u64>) -> Result<(), CodecError> {
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("decode", 1, Total::Exact(1)),
@@ -265,7 +266,7 @@ fn run_nested_classifies_inline_children_and_flattens_errors() {
     for (corrupt, expected) in [(false, Outcome::Cancelled), (true, Outcome::Failed)] {
         let (log, stop) = recorder();
         let root = Recorder::root(&log, &stop);
-        let mut stages = Stages::new(
+        let mut stages = TryStages::new(
             &root,
             &[
                 PhaseSpec::new("tiles", 1, Total::Unknown),
@@ -303,7 +304,7 @@ fn run_nested_classifies_inline_children_and_flattens_errors() {
 fn a_stage_that_cannot_finish_reports_a_plan_error_and_skips_the_rest() {
     let (log, stop) = recorder();
     let root = Recorder::root(&log, &stop);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &root,
         &[
             PhaseSpec::new("forgetful", 1, Total::Unknown),
@@ -330,7 +331,7 @@ fn a_panicking_stage_is_abandoned_with_every_later_stage() {
     let (log, stop) = recorder();
     let root = Recorder::root(&log, &stop);
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut stages = Stages::new(
+        let mut stages = TryStages::new(
             &root,
             &[
                 PhaseSpec::new("decode", 1, Total::Exact(1)),
@@ -349,7 +350,7 @@ fn a_panicking_stage_is_abandoned_with_every_later_stage() {
 fn after_a_caught_panic_the_plan_is_over() {
     let (log, stop) = recorder();
     let root = Recorder::root(&log, &stop);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &root,
         &[
             PhaseSpec::new("first", 1, Total::Exact(1)),

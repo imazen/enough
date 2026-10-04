@@ -1,3 +1,4 @@
+use how_far::{RunError, TryStages};
 use how_far_along::{prelude::*, *};
 #[cfg(feature = "callback")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,7 +8,7 @@ fn tree(total: Total) -> PulseTree {
     PulseTree::new(Phase::new("job", total), Unstoppable)
 }
 fn leaf(p: &dyn Pulse, n: u64) -> Result<(), RunError<StopReason>> {
-    let mut stages = Stages::new(p, &[PhaseSpec::new("leaf", 1, Total::Exact(n))])?;
+    let mut stages = TryStages::new(p, &[PhaseSpec::new("leaf", 1, Total::Exact(n))])?;
     stages.run_stoppable(|s| {
         s.check()?;
         let mut paced = s.paced(17);
@@ -95,7 +96,7 @@ fn abandoned_and_finished_owners_freeze_even_with_shared_handles() {
 #[test]
 fn unrun_work_never_earns_progress() {
     let tree = tree(Total::Unknown);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("validate", 1, Total::Exact(1)),
@@ -262,31 +263,6 @@ fn added_stop_policies_survive_splitting_and_owned_nesting() {
     assert_eq!(shared.check(), Err(StopReason::Cancelled));
     child.finish(Outcome::Cancelled).unwrap();
 }
-#[cfg(feature = "diagnostics")]
-#[test]
-fn diagnostic_shared_handles_preserve_nested_spans_and_do_not_own_completion() {
-    use how_far_along::{
-        diagnostics::DiagnosticPulse,
-        profile::{Profiler, StdClock},
-    };
-    let profiler = Profiler::new(StdClock::new(), 32);
-    let measured = DiagnosticPulse::new(tree(Total::Unknown), &profiler);
-    let observer = measured.observer();
-    let shared = measured.share().unwrap();
-    let worker = shared.clone();
-    std::thread::spawn(move || leaf(&worker, 33).unwrap())
-        .join()
-        .unwrap();
-    measured.finish(Outcome::Succeeded).unwrap();
-    let before = profiler.snapshot();
-    shared.advance(100);
-    shared.check().unwrap();
-    let after = profiler.snapshot();
-    assert_eq!(after.spans.len(), before.spans.len());
-    assert_eq!(after.active_spans, 0);
-    assert!(after.spans.iter().any(|s| s.task == "leaf"));
-    assert_eq!(observer.snapshot().children[0].completed, 33);
-}
 #[cfg(feature = "callback")]
 #[test]
 fn concurrent_callbacks_latch_one_reason_and_return_it_to_every_worker() {
@@ -317,7 +293,7 @@ fn concurrent_callbacks_latch_one_reason_and_return_it_to_every_worker() {
 #[test]
 fn intentionally_skipped_work_is_distinct_from_work_prevented_by_failure() {
     let tree = tree(Total::Unknown);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("optional", 1, Total::Unknown),

@@ -1,9 +1,7 @@
-#![cfg(feature = "profile")]
 use almost_enough::Stopper;
-use how_far_along::profile::{Clock, Profiler, SpanKind};
-use how_far_along::{
-    NoReport, NodeId, Outcome, ProgressExt, ProgressWithStop, Report, Stop, StopReason, Unstoppable,
-};
+use how_far::{NoReport, ProgressWithStop};
+use how_far_along::{NodeId, Outcome, ProgressExt, Report, Stop, StopReason, Unstoppable};
+use how_far_really::profile::{Clock, Profiler, SpanKind};
 use std::{
     sync::{
         Arc,
@@ -257,7 +255,7 @@ fn bounded_retention_and_abandonment_are_visible_and_json_escapes_labels() {
     assert_eq!(trace.spans[0].outcome, Outcome::Abandoned);
     let mut json = String::new();
     trace.write_json(&mut json).unwrap();
-    assert!(json.contains("\"schema_version\":1"));
+    assert!(json.contains("\"schema_version\":2"));
     assert!(json.contains("replacement\\t\\\\\\u0001😀"));
     assert!(json.contains("\"task\":\"name\\\"\\n\""));
     assert!(!json.contains('\n'));
@@ -331,8 +329,8 @@ fn timeout_reason_and_attached_plan_survive_export() {
     assert!(json.contains("\"stop_reason\":\"TimedOut\""));
     assert!(json.contains("\"initial_total\":{\"kind\":\"Estimated\",\"count\":\"3\"}"));
     assert!(json.contains("\"total_revisions\":[{\"kind\":\"Exact\",\"count\":\"4\"}]"));
-    // The trace embeds the tree's root node, not a second versioned document.
-    assert_eq!(json.matches("schema_version").count(), 1);
+    // The trace composes the tracker's public versioned JSON without private access.
+    assert_eq!(json.matches("schema_version").count(), 2);
 }
 
 #[test]
@@ -370,7 +368,7 @@ fn reporting_reads_the_clock_only_when_report_timing_is_on() {
 fn workers_sharing_a_span_never_look_like_a_backwards_clock() {
     // Each worker reads the clock before taking the span's lock, so readings
     // reach the span out of order. That is concurrency, not a clock fault.
-    let profiler = Profiler::new(how_far_along::profile::StdClock::new(), 1);
+    let profiler = Profiler::new(how_far_really::profile::StdClock::new(), 1);
     profiler.set_report_timing(true);
     let span = profiler.span(None, "shared", SpanKind::Work);
     let work = span.instrument(ProgressWithStop::new(Unstoppable, NoReport));

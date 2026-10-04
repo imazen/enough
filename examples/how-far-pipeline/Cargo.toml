@@ -1,0 +1,9 @@
+[package]
+name = "how-far-example-pipeline"
+version = "0.0.0"
+edition.workspace = true
+rust-version = "1.88"
+publish = false
+[dependencies]
+how-far = { workspace = true, features = ["adapters"] }
+how-far-example-codec = { path = "../how-far-codec" }

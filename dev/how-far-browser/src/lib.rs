@@ -1,10 +1,10 @@
 //! Test-only browser host using the same worker/Rayon binding pattern as zenpipe.
 use almost_enough::Stopper;
-use how_far_along::profile::{Clock, Profiler, SpanKind};
 use how_far_along::{
     Execution, Observer, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, Report, Stop,
     Total,
 };
+use how_far_really::profile::{Clock, Profiler, SpanKind};
 use rayon::prelude::*;
 use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};

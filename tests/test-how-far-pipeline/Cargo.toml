@@ -7,6 +7,6 @@ publish = false
 description = "A pretend library that calls the pretend codec inside its own how-far stages"
 
 [dependencies]
-how-far = { workspace = true }
+how-far = { workspace = true, features = ["checked"] }
 rayon = "1.12.0"
 test-how-far-codec = { path = "../test-how-far-codec" }

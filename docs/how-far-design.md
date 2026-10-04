@@ -10,18 +10,23 @@ Libraries depend on `how-far` and accept `&dyn Pulse`. `check` may invoke a
 checkpoint callback; `advance` only records completed units; `step` does both in
 that order. Expensive codec loops stay non-generic over their pulse.
 
-`split` hands out child owners. A child finishes exactly once, consuming its
-handle. Libraries never finish their borrowed input. `Stages` starts a stage on
-entry, classifies its result, and preserves the original work error if cleanup
-also fails. Remaining stages become `NotRun`, earning zero weight. Explicit
-`Stages::skip` is for unnecessary work and discharges its weight.
+`split` hands out child owners. Completion consumes an owner; libraries never
+finish their borrowed input. `Stages::run` returns the library's normal Result,
+as does `Phases::run` for independently selected attempts. `complete(result)` or
+`result.finish_phase(owner)` explicitly communicates the enclosing result.
+Untouched phases become Skipped on success and NotRun on error. Started phases
+without a handoff become Abandoned. A recovered parent can succeed while
+retaining failed child attempts. See [API boundaries and states](how-far-api.md).
 
-`run_stoppable` accepts only `StopReason`, so ordinary work errors cannot
-accidentally become cancellation. Mixed-error operations use `run_classified`.
-The runner has one private Ready/Running/Stopped state rather than independent
-booleans. Owners and reporting guards are `must_use`: accidental discarded
-construction warns, but retaining a guard does not prove it is eventually
-finished. Compile-fail examples check completion ownership and the error boundary.
+Borrowed error classification recognizes StopReason without converting the
+library error. Explicit classifiers accommodate foreign wrappers. Rejected
+observations diagnose protocol misuse and use cancellation-preserving untracked
+children. `TryStages` is the opt-in `checked` layer for callers who want plan
+errors in their return type. The normal API never introduces them.
+
+Owners and guards are `must_use`: discarding construction warns, but holding a
+guard cannot prove it is eventually completed. Consumption prevents duplicate
+completion; a private runner enum prevents contradictory lifecycle flags.
 
 `share()` returns a cloneable owned pulse with the same planning, cancellation,
 start and total-revision capabilities. It never transfers completion rights.
@@ -105,13 +110,15 @@ reason to use SeqCst, and Relaxed is not a substitute for batching.
 ## Compile-time seams
 
 The core depends only on enough. Its optional `adapters` feature adds WithStop,
-including cancellation-only construction. An erased implementation avoids
+including cancellation-only construction, borrowed extra policies and explicit
+replacement (which bypasses inner callbacks too). `checked` adds the strict
+legacy runner; neither feature changes protocol behavior. An erased implementation avoids
 monomorphizing adapter machinery per wrapped type. Traits, method semantics and
 layout do not vary by feature.
 
 Tracker defaults are `std` and `json`. `callback` adds synchronous checkpoint
-callbacks; `adapters` forwards the core convenience feature. `profile` requires
-std and JSON; `diagnostics` adds analysis. With default features disabled the
+callbacks; `adapters` forwards the core convenience feature. Profiling and diagnostics are a separate `how-far-really` crate requiring
+std and tracker JSON. With default features disabled the
 tracker uses alloc, native atomics and the host critical-section implementation,
 without JSON formatting, callbacks, profiling, clocks or a runtime.
 

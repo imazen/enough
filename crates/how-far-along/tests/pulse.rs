@@ -1,8 +1,9 @@
 //! Libraries using `&dyn Pulse`, recorded by a real `PulseTree`.
 
+use how_far::{RunError, TryStages};
 use how_far_along::{
-    Execution, Outcome, Phase, PhaseSpec, PlanError, ProgressExt, Pulse, PulseTree, Report,
-    RunError, Stages, Status, Stop, StopReason, Total, Unstoppable,
+    Execution, Outcome, Phase, PhaseSpec, PlanError, ProgressExt, Pulse, PulseTree, Report, Status,
+    Stop, StopReason, Total, Unstoppable,
 };
 use std::{num::NonZeroUsize, sync::Barrier};
 
@@ -119,7 +120,7 @@ fn scoped_workers_share_one_stage_in_a_serial_parallel_serial_plan() {
         assert_eq!(live.children[1].total, Total::Exact(11));
         assert_eq!(live.children[1].execution, pool(4));
         assert!(live.children[1].children.is_empty());
-        assert_eq!(live.children[2].status, Status::Pending);
+        assert_eq!(live.children[2].status, Status::NotStarted);
     });
     assert_eq!(observer.snapshot().children[1].completed, 11);
     middle.finish(Outcome::Succeeded).unwrap();
@@ -137,7 +138,7 @@ fn rayon_chunks_share_one_stage_without_a_child_per_worker() {
 
     let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
     let observer = tree.observer();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("prepare", 35, Total::Exact(1)),
@@ -196,14 +197,11 @@ fn the_first_report_ends_planning_and_a_dropped_child_is_abandoned() {
         observer.snapshot().children[0].status,
         Status::Finished(Outcome::Abandoned)
     );
-    assert_eq!(
-        tree.finish(Outcome::Succeeded),
-        Err(PlanError::UnsuccessfulChildren)
-    );
-    // A failed finish leaves no outcome to report, so the root is abandoned.
+    tree.finish(Outcome::Succeeded).unwrap();
+    // A parent result is authoritative; abandoned descendants remain visible.
     assert_eq!(
         observer.snapshot().status,
-        Status::Finished(Outcome::Abandoned)
+        Status::Finished(Outcome::Succeeded)
     );
 }
 
@@ -221,7 +219,7 @@ fn stages_finish_each_stage_and_classify_stops_apart_from_failures() {
     for (stoppable, outcome) in [(true, Outcome::Cancelled), (false, Outcome::Failed)] {
         let tree = tree();
         let observer = tree.observer();
-        let mut stages = Stages::new(&tree, &specs).unwrap();
+        let mut stages = TryStages::new(&tree, &specs).unwrap();
         stages.run(|stage| stage.step(1)).unwrap();
         let result = if stoppable {
             stages.run_stoppable(|stage| {
@@ -271,7 +269,7 @@ fn a_classified_stage_keeps_codec_failure_apart_from_cancellation() {
     ] {
         let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
         let observer = tree.observer();
-        let mut stages = Stages::new(
+        let mut stages = TryStages::new(
             &tree,
             &[
                 PhaseSpec::new("frames", 9, Total::Exact(2)),
@@ -304,26 +302,23 @@ fn a_classified_stage_keeps_codec_failure_apart_from_cancellation() {
 }
 
 #[test]
-fn unrun_stages_cannot_let_the_root_succeed() {
+fn abandoned_stages_remain_visible_under_authoritative_root_success() {
     let tree = tree();
     let observer = tree.observer();
-    let stages = Stages::new(&tree, &[PhaseSpec::new("pending", 1, Total::Exact(1))]).unwrap();
+    let stages = TryStages::new(&tree, &[PhaseSpec::new("pending", 1, Total::Exact(1))]).unwrap();
     assert_eq!(stages.finish(), Err(PlanError::UnfinishedChildren));
     assert_eq!(
         observer.snapshot().children[0].status,
         Status::Finished(Outcome::Abandoned)
     );
-    assert_eq!(
-        tree.finish(Outcome::Succeeded),
-        Err(PlanError::UnsuccessfulChildren)
-    );
+    tree.finish(Outcome::Succeeded).unwrap();
 }
 
 #[test]
 fn run_nested_wraps_an_inline_parallel_stage() {
     let tree = tree();
     let observer = tree.observer();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("before", 35, Total::Exact(1)),
@@ -370,7 +365,7 @@ fn run_nested_wraps_an_inline_parallel_stage() {
 fn a_nested_plan_error_fails_the_stage_and_skips_the_rest() {
     let tree = tree();
     let observer = tree.observer();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("invalid branch", 1, Total::Unknown),
@@ -399,7 +394,7 @@ fn a_nested_plan_error_fails_the_stage_and_skips_the_rest() {
 
 /// Library B: two passes over rows, with its own stages.
 fn resize(pulse: &dyn Pulse, rows: u64) -> Result<(), RunError<StopReason>> {
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("horizontal", 1, Total::Exact(rows)),
@@ -421,7 +416,7 @@ fn resize(pulse: &dyn Pulse, rows: u64) -> Result<(), RunError<StopReason>> {
 
 /// Library A: decodes, then calls library B inside one of its own stages.
 fn thumbnail(pulse: &dyn Pulse) -> Result<(), RunError<StopReason>> {
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("decode", 1, Total::Exact(1)),
@@ -455,7 +450,7 @@ fn cancelling_a_nested_library_records_every_level_and_keeps_the_error() {
     let stop = almost_enough::Stopper::new();
     let tree = PulseTree::new(Phase::new("job", Total::Unknown), stop.clone());
     let observer = tree.observer();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         &tree,
         &[
             PhaseSpec::new("decode", 1, Total::Exact(1)),

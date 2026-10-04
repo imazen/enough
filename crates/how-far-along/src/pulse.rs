@@ -99,6 +99,11 @@ impl TreePulse {
     }
 }
 impl State {
+    fn complete(&self, outcome: Outcome) -> Result<(), PlanError> {
+        self.with_owner(|phase| phase.complete_with(outcome))??;
+        self.activity.store(FINISHED, Ordering::Release);
+        Ok(())
+    }
     fn start(&self) -> Result<(), PlanError> {
         self.with_owner(Phase::start)?
     }
@@ -222,8 +227,22 @@ impl Drop for TreePulse {
     }
 }
 impl ChildPulse for TreePulse {
+    fn complete_inferred(self: Box<Self>, outcome: Outcome) {
+        let _ = self
+            .state
+            .with_owner(|phase| phase.complete_inferred(outcome));
+    }
+    fn complete_as(self: Box<Self>, outcome: Outcome) {
+        let _ = self.state.complete(outcome);
+    }
     fn finish(self: Box<Self>, outcome: Outcome) -> Result<(), PlanError> {
         self.state.finish(outcome)
+    }
+}
+
+impl how_far::Complete for PulseTree {
+    fn complete_as(self, outcome: Outcome) {
+        let _ = self.node.state.complete(outcome);
     }
 }
 macro_rules! pulse_view {

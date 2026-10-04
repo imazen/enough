@@ -2,8 +2,6 @@
 //! `Debug`, so the format cannot change by accident.
 
 use crate::Outcome;
-#[cfg(feature = "profile")]
-use crate::StopReason;
 use core::fmt;
 
 pub(crate) fn quote(out: &mut impl fmt::Write, value: &str) -> fmt::Result {
@@ -30,15 +28,6 @@ pub(crate) fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Failed => "Failed",
         Outcome::Abandoned => "Abandoned",
         Outcome::NotRun => "NotRun",
-        _ => "Other",
-    }
-}
-
-#[cfg(feature = "profile")]
-pub(crate) fn stop_reason_name(reason: StopReason) -> &'static str {
-    match reason {
-        StopReason::Cancelled => "Cancelled",
-        StopReason::TimedOut => "TimedOut",
         _ => "Other",
     }
 }

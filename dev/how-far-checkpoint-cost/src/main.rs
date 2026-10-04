@@ -7,7 +7,7 @@ use almost_enough::{FnStop, Stopper};
 use how_far::prelude::*;
 use how_far::{
     Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, PulseHandle, RunError,
-    Stages, StopReason, Unstoppable,
+    StopReason, TryStages, Unstoppable,
 };
 use how_far_along::{Checkpoint, FnPulse, Phase, PulseTree, Total};
 use std::hint::black_box;
@@ -85,7 +85,7 @@ fn operation(
     paced: bool,
 ) -> Result<(), RunError<StopReason>> {
     let third = buf.len() / 3;
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("decode", 1, how_far::Total::Exact(third as u64)),
@@ -260,7 +260,7 @@ fn run_style(
 /// `m-STYLE-REPORT-STOP` (the matrix shell), `t-STYLE-STOP` (a `PulseTree`),
 /// `n-STYLE` (`&NoPulse`, which `step` recognizes by address), `f-STYLE` (an
 /// `FnPulse` with no plan), or `fs-STYLE` (the stage of an `FnPulse` plan with
-/// an exact total, as `Stages` hands it out, so each report also moves the
+/// an exact total, as `TryStages` hands it out, so each report also moves the
 /// fraction).
 fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
     let parts: Vec<&str> = variant.split('-').collect();
@@ -276,7 +276,8 @@ fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
             let pulse = FnPulse::new("bench", fn_callback);
             let total = buf.len() as u64 * iters;
             let mut stages =
-                Stages::new(&pulse, &[PhaseSpec::new("buffers", 1, Total::Exact(total))]).unwrap();
+                TryStages::new(&pulse, &[PhaseSpec::new("buffers", 1, Total::Exact(total))])
+                    .unwrap();
             stages
                 .run_stoppable(|stage| {
                     for _ in 0..iters {

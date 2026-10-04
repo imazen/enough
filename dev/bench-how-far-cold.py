@@ -13,11 +13,12 @@ a=p.parse_args();root=pathlib.Path(__file__).resolve().parent.parent
 cases={
  'baseline-core':(a.baseline,'how-far',False,[]),
  'core':(root,'how-far',False,[]),
+ 'core-checked':(root,'how-far',False,['checked']),
  'core-adapters':(root,'how-far',False,['adapters']),
  'tree-minimal':(root,'how-far-along',False,[]),
  'tree-default':(root,'how-far-along',True,[]),
  'callback':(root,'how-far-along',False,['std','callback']),
- 'diagnostics':(root,'how-far-along',False,['diagnostics']),
+ 'diagnostics':(root,'how-far-really',True,[]),
 }
 def fingerprint(repo):
  digest=hashlib.sha256()

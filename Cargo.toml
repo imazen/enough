@@ -1,12 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
+    "examples/how-far-codec",
+    "examples/how-far-pipeline",
+    "examples/how-far-app",
     "crates/enough",
     "crates/almost-enough",
     "crates/enough-tokio",
     "crates/enough-ffi",
     "crates/how-far",
     "crates/how-far-along",
+    "crates/how-far-really",
     "tests/test-basic",
     "tests/test-atomic",
     "tests/test-timeout",
@@ -44,3 +48,5 @@ enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }
 how-far = { version = "0.1.0", path = "crates/how-far" }
 how-far-along = { path = "crates/how-far-along", default-features = false }
+
+how-far-really = { path = "crates/how-far-really" }

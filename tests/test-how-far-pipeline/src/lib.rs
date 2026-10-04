@@ -4,8 +4,8 @@
 #![forbid(unsafe_code)]
 
 use how_far::{
-    Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, RunError, Stages, StopReason,
-    Total,
+    Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, RunError, StopReason, Total,
+    TryStages,
 };
 use rayon::prelude::*;
 use test_how_far_codec::{CodecError, Image};
@@ -74,7 +74,7 @@ impl From<RunError<StopReason>> for PipelineError {
 /// own stages inside it.
 pub fn process(images: &[Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>, PipelineError> {
     let pixels: u64 = images.iter().map(|image| image.pixels.len() as u64).sum();
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("validate", 1, Total::Exact(images.len() as u64)).units("images"),
@@ -137,7 +137,7 @@ pub fn process_each(images: &[Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>,
         .zip(images)
         .map(|(name, image)| PhaseSpec::new(name, image.pixels.len().max(1) as u64, Total::Unknown))
         .collect();
-    let mut stages = Stages::new(pulse, &parts)?;
+    let mut stages = TryStages::new(pulse, &parts)?;
     let mut encoded = Vec::new();
     for (index, image) in images.iter().enumerate() {
         encoded.push(stages.run_classified(PipelineError::is_stop, |stage| {

@@ -14,6 +14,7 @@ fn public_api_surface_docs_are_current() {
             "enough-ffi",
             "how-far",
             "how-far-along",
+            "how-far-really",
         ])
         .run();
 }

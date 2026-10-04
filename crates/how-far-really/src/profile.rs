@@ -23,7 +23,7 @@
 //! its meaning changes.
 
 use crate::json::{outcome_name, quote, stop_reason_name};
-use crate::{NodeId, Outcome, Report, Stop, StopReason, sync::Mutex};
+use crate::sync::Mutex;
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{
     fmt,
@@ -31,6 +31,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
+use how_far::{Outcome, Report, Stop, StopReason};
+use how_far_along::NodeId;
 
 /// A monotonic clock with one shared epoch. Only instrumented calls read it.
 ///
@@ -47,23 +49,19 @@ impl<C: Clock + ?Sized> Clock for Arc<C> {
 }
 
 /// The host's monotonic clock, with its epoch at construction.
-#[cfg(feature = "std")]
 #[derive(Clone, Copy, Debug)]
 pub struct StdClock(std::time::Instant);
-#[cfg(feature = "std")]
 impl StdClock {
     /// Start an epoch now.
     pub fn new() -> Self {
         Self(std::time::Instant::now())
     }
 }
-#[cfg(feature = "std")]
 impl Default for StdClock {
     fn default() -> Self {
         Self::new()
     }
 }
-#[cfg(feature = "std")]
 impl Clock for StdClock {
     fn now(&self) -> Duration {
         self.0.elapsed()
@@ -266,6 +264,8 @@ impl SpanRecord {
 }
 
 struct TraceState {
+    incidents: Vec<crate::diagnostics::Incident>,
+    dropped_incidents: u64,
     metadata: Vec<(String, String)>,
     spans: Vec<SpanRecord>,
     dropped: u64,
@@ -299,6 +299,15 @@ impl fmt::Debug for Profiler {
 }
 
 impl Profiler {
+    pub(crate) fn incident(&self, incident: crate::diagnostics::Incident) {
+        let mut state = self.inner.state.lock();
+        if state.incidents.len() < self.inner.capacity {
+            state.incidents.push(incident);
+        } else {
+            state.dropped_incidents = state.dropped_incidents.saturating_add(1);
+        }
+    }
+
     /// Keep up to `capacity` finished spans. Later spans are dropped and
     /// counted, so every export shows incomplete coverage.
     pub fn new(clock: impl Clock + 'static, capacity: usize) -> Self {
@@ -310,6 +319,8 @@ impl Profiler {
                 next_id: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 state: Mutex::new(TraceState {
+                    incidents: Vec::new(),
+                    dropped_incidents: 0,
                     metadata: Vec::new(),
                     spans: Vec::new(),
                     dropped: 0,
@@ -348,7 +359,7 @@ impl Profiler {
     ///
     /// ```
     /// use how_far_along::{Outcome, Unstoppable};
-    /// use how_far_along::profile::{Profiler, SpanKind, StdClock};
+    /// use how_far_really::profile::{Profiler, SpanKind, StdClock};
     ///
     /// let profiler = Profiler::new(StdClock::new(), 16);
     /// let span = profiler.span(None, "decode", SpanKind::Work);
@@ -376,14 +387,12 @@ impl Profiler {
     }
 
     /// The clock's current reading.
-    #[cfg(feature = "diagnostics")]
     pub(crate) fn now(&self) -> Duration {
         self.inner.clock.now()
     }
 
     /// A span whose start is known to precede its first checkpoint, such as a
     /// sequential stage entered when the previous one finished.
-    #[cfg(feature = "diagnostics")]
     pub(crate) fn span_from(
         &self,
         node: Option<NodeId>,
@@ -470,7 +479,9 @@ impl Profiler {
 
     fn snapshot_from(&self, state: &TraceState) -> Trace {
         Trace {
-            schema_version: 1,
+            schema_version: 2,
+            incidents: state.incidents.clone(),
+            dropped_incidents: state.dropped_incidents,
             progress: None,
             metadata: state.metadata.clone(),
             spans: state.spans.clone(),
@@ -775,7 +786,6 @@ impl<T: fmt::Debug> fmt::Debug for Instrumented<T> {
 }
 
 impl<T> Instrumented<T> {
-    #[cfg(feature = "diagnostics")]
     pub(crate) fn new(value: T, span: Arc<SpanInner>) -> Self {
         Self { value, span }
     }
@@ -897,10 +907,15 @@ impl<T: Report> Report for Instrumented<T> {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Trace {
+    /// Bounded reporting-protocol incidents, independent from work outcomes.
+    pub incidents: Vec<crate::diagnostics::Incident>,
+    /// Incidents omitted because their separate retention budget was exhausted.
+    pub dropped_incidents: u64,
+
     /// Version of the JSON format.
     pub schema_version: u32,
     /// The progress tree, attached with [`with_progress`](Self::with_progress).
-    pub progress: Option<crate::Snapshot>,
+    pub progress: Option<how_far_along::Snapshot>,
     /// Key/value pairs from [`Profiler::metadata`].
     pub metadata: Vec<(String, String)>,
     /// Retained finished spans, in the order they finished.
@@ -938,7 +953,7 @@ pub struct Overlap {
 impl Trace {
     /// Attach the progress tree, usually a final snapshot taken after every
     /// worker joined.
-    pub fn with_progress(mut self, progress: crate::Snapshot) -> Self {
+    pub fn with_progress(mut self, progress: how_far_along::Snapshot) -> Self {
         self.progress = Some(progress);
         self
     }
@@ -1063,9 +1078,37 @@ impl Trace {
         }
         out.write_str("},\"progress\":")?;
         match &self.progress {
-            Some(progress) => progress.write_node_json(out)?,
+            Some(progress) => progress.write_json(out)?,
             None => out.write_str("null")?,
         }
+        write!(
+            out,
+            ",\"dropped_incidents\":{},\"incidents\":[",
+            self.dropped_incidents
+        )?;
+        for (i, incident) in self.incidents.iter().enumerate() {
+            if i != 0 {
+                out.write_char(',')?;
+            }
+            write!(out, "{{\"node\":{},\"problem\":", incident.node)?;
+            // Stable wire names; Debug text remains human-readable evidence only.
+            let name = match incident.problem {
+                crate::diagnostics::Problem::Plan(_) => "Plan",
+                crate::diagnostics::Problem::ReportAfterCompletion => "ReportAfterCompletion",
+                crate::diagnostics::Problem::ReportToBranch => "ReportToBranch",
+            };
+            quote(out, name)?;
+            out.write_str(",\"detail\":")?;
+            quote(out, &alloc::format!("{:?}", incident.problem))?;
+            out.write_str(",\"file\":")?;
+            quote(out, incident.site.file)?;
+            write!(
+                out,
+                ",\"line\":{},\"column\":{}}}",
+                incident.site.line, incident.site.column
+            )?;
+        }
+        out.write_char(']')?;
         out.write_str(",\"cancelled_at\":")?;
         optional_time(out, self.cancelled_at)?;
         out.write_str(",\"observed_at\":")?;

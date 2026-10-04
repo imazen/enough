@@ -2,9 +2,10 @@
 //! contexts, and async runtimes.
 
 use almost_enough::Stopper;
+use how_far::{PulseHandle, TryStages};
 use how_far_along::{
-    Child, Observer, Outcome, Phase, ProgressExt, Pulse, PulseHandle, PulseTree, Reporter,
-    Snapshot, Stages, Status, Stop, StopReason, Unstoppable,
+    Child, Observer, Outcome, Phase, ProgressExt, Pulse, PulseTree, Reporter, Snapshot, Status,
+    Stop, StopReason, Unstoppable,
 };
 use std::sync::Arc;
 use test_how_far_app::{find, tree, tree_stopping_when};
@@ -24,7 +25,7 @@ fn handles_and_trees_are_owned_and_thread_safe() {
     owned::<Arc<dyn Pulse>>();
     owned::<Box<dyn Pulse>>();
     shared::<Child<'_>>();
-    shared::<Stages<'_>>();
+    shared::<TryStages<'_>>();
     shared::<&dyn Pulse>();
 }
 

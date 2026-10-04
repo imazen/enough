@@ -5,8 +5,8 @@ edition.workspace = true
 rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
-description = "Cooperative progress, cancellation, and opt-in execution profiling"
-keywords = ["progress", "cancellation", "no_std", "profiling"]
+description = "Tracking and observation for cooperative progress and cancellation"
+keywords = ["progress", "cancellation", "no_std"]
 categories = ["concurrency", "no-std"]
 
 [features]
@@ -16,8 +16,6 @@ std = ["enough/std"]
 callback = []
 adapters = ["how-far/adapters"]
 json = []
-profile = ["std", "json"]
-diagnostics = ["profile"]
 
 [dependencies]
 enough = { workspace = true, features = ["alloc"] }
@@ -25,6 +23,7 @@ how-far.workspace = true
 critical-section = "1.2"
 
 [dev-dependencies]
+how-far = { workspace = true, features = ["checked"] }
 critical-section = { version = "1.2", features = ["std"] }
 almost-enough.workspace = true
 rayon = "1.12.0"
@@ -34,14 +33,6 @@ zenbench = { workspace = true }
 [[example]]
 name = "phases"
 required-features = ["std"]
-
-[[example]]
-name = "profile"
-required-features = ["std", "profile"]
-
-[[example]]
-name = "diagnostics"
-required-features = ["diagnostics"]
 
 [[bench]]
 name = "overhead"

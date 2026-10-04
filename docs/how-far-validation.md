@@ -1,6 +1,7 @@
 # how-far validation
 
-The current redesign results are in [the validation report](../benchmarks/howfar-v2-validation.md).
+The current Result/diagnostics changes are in [the validation report](../benchmarks/howfar-results-validation.md).
+The earlier redesign is recorded [here](../benchmarks/howfar-v2-validation.md).
 The dated build/runtime tables below describe the earlier baseline.
 
 What is tested, where, and what the tests do not cover. See
@@ -24,10 +25,10 @@ What is tested, where, and what the tests do not cover. See
 | `'static` ownership: codec contexts that own their stop, `Arc` and `Box` pulses, Tokio `spawn_blocking` with async cancellation, async tasks reporting | `tests/test-how-far-app/tests/statics.rs` |
 | Diagnostics across crates, including checks inside a codec context credited to the right stage | `tests/test-how-far-app/tests/diagnose.rs` |
 | Application-planned trees: serial → 30% parallel → serial, repeated joins, Rayon and manual threads sharing a counter, totals and revisions, overrun and overflow, every outcome, frozen and abandoned records, a report racing with the finish | `crates/how-far-along/tests/phases.rs`, `crates/how-far-along/src/tree.rs` |
-| A codec-style pipeline with two parallel waves, a terminal renderer, and a Tokio request whose client disconnects | `crates/how-far-along/tests/hosts.rs` |
+| A codec-style pipeline with two parallel waves, a terminal renderer, and a Tokio request whose client disconnects | `crates/how-far-really/tests/hosts.rs` |
 | Pollers: thread-affine callbacks, lazy shared snapshots, busy and recursive dispatch, panics, posted delivery, workers stopped by a callback | `crates/how-far-along/tests/polling.rs` |
-| Profiling: per-task gaps, call-site counts, overlap and stragglers, cancellation latency, bounded retention, clock faults, report timing on and off, workers sharing a span | `crates/how-far-along/tests/profiling.rs` |
-| Diagnostics: report gaps versus stop gaps, covering spans, stage-weight candidates, negligible stages, callbacks | `crates/how-far-along/tests/diagnostics.rs` |
+| Profiling: per-task gaps, call-site counts, overlap and stragglers, cancellation latency, bounded retention, clock faults, report timing on and off, workers sharing a span | `crates/how-far-really/tests/profiling.rs` |
+| Diagnostics: report gaps versus stop gaps, covering spans, stage-weight candidates, negligible stages, callbacks | `crates/how-far-really/tests/diagnostics.rs` |
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |

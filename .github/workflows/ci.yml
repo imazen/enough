@@ -55,7 +55,8 @@ jobs:
       - name: Test at the 1.85 MSRV
         if: matrix.rust == '1.85'
         run: >-
-          cargo test --workspace --exclude how-far --exclude how-far-along
+          cargo test --workspace --exclude how-far --exclude how-far-along --exclude how-far-really
+          --exclude how-far-example-codec --exclude how-far-example-pipeline --exclude how-far-example-app
           --exclude test-how-far-codec --exclude test-how-far-pipeline --exclude test-how-far-app
 
       - name: Test how-far at its 1.86 MSRV
@@ -176,7 +177,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check feature powerset
-        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p how-far -p how-far-along
+        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p how-far -p how-far-along -p how-far-really
 
   # ==========================================================================
   # Semver — catch accidental breaking changes
@@ -244,7 +245,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           cargo test -p how-far-along --all-features
-          cargo run -p how-far-along --example diagnostics --features diagnostics
+          cargo test -p how-far-really
+          cargo run -p how-far-really --example diagnostics
+          cargo test -p how-far-example-app
           cargo test -p how-far-along --no-default-features
       - name: Verify interface boundary and report cold builds
         run: python3 dev/bench-how-far-build.py --runs 3

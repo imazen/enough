@@ -8,8 +8,8 @@
 #![forbid(unsafe_code)]
 
 use how_far::{
-    Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report, RunError, Stages, Stop,
-    StopReason, Total,
+    Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report, RunError, Stop,
+    StopReason, Total, TryStages,
 };
 use rayon::prelude::*;
 use std::{num::NonZeroUsize, sync::Arc};
@@ -113,7 +113,7 @@ impl From<RunError<CodecError>> for CodecError {
 pub fn encode(image: &Image, pulse: &dyn Pulse) -> Result<Vec<u8>, CodecError> {
     let tiles = image.tiles() as u64;
     let workers = NonZeroUsize::new(rayon::current_num_threads()).unwrap_or(NonZeroUsize::MIN);
-    let mut stages = Stages::new(
+    let mut stages = TryStages::new(
         pulse,
         &[
             PhaseSpec::new("analyze", 1, Total::Exact(image.height as u64)).units("rows"),

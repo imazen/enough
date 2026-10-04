@@ -9,5 +9,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+how-far = { path = "../../crates/how-far" }
 almost-enough = { path = "../../crates/almost-enough" }
 how-far-along = { path = "../../crates/how-far-along" }

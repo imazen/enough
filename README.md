@@ -5,6 +5,11 @@ method, one zero-cost no-op type. Long-running operations accept a `Stop` and
 check it periodically; callers that don't need cancellation pass `Unstoppable`,
 which optimizes away to nothing.
 
+Progress reporting is a separate layer: [`how-far`](crates/how-far/README.md)
+provides the small library protocol, [`how-far-along`](crates/how-far-along/README.md)
+tracks it, and [`how-far-really`](crates/how-far-really/README.md) diagnoses and tunes
+it. See the [cross-crate examples](examples/how-far-app/README.md).
+
 ## Quick start
 
 ```toml
@@ -137,8 +142,8 @@ no meaningful difference between `StopToken` and a fully-inlined generic
 `impl Stop` — the dispatch path is within noise, so pick whichever reads
 best.
 
-For measured checkpoint cadence in tests, add `how-far-along` with its
-`diagnostics` feature as a dev-dependency. Its profiler wraps any `enough::Stop`
+For measured checkpoint cadence in tests, add `how-far-really` as a
+dev-dependency. Its profiler wraps any `enough::Stop`
 and reports long gaps and overactive call sites; `enough` itself gains no
 feature or runtime cost. See the [testing and tuning guide](docs/how-far-testing-and-tuning.md).
 

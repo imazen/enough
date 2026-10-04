@@ -132,6 +132,12 @@ impl fmt::Debug for FnPulse {
             .finish()
     }
 }
+
+impl how_far::Complete for FnPulse {
+    fn complete_as(self, outcome: Outcome) {
+        self.tree.complete_as(outcome);
+    }
+}
 impl Stop for FnPulse {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {

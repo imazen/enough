@@ -65,6 +65,12 @@ impl StopReason {
     }
 }
 
+impl From<&StopReason> for StopReason {
+    fn from(reason: &StopReason) -> Self {
+        *reason
+    }
+}
+
 impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

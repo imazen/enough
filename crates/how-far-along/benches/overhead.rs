@@ -13,10 +13,10 @@
 //! Run with `cargo bench -p how-far-along --bench overhead`.
 
 use almost_enough::Stopper;
+use how_far::NoReport;
 use how_far_along::ext::ReportExt;
 use how_far_along::{
-    NoPulse, NoReport, Phase, ProgressExt, Pulse, PulseTree, Report, Stop, StopReason, Total,
-    Unstoppable,
+    NoPulse, Phase, ProgressExt, Pulse, PulseTree, Report, Stop, StopReason, Total, Unstoppable,
 };
 use std::num::NonZeroU64;
 

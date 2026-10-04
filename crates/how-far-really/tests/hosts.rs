@@ -1,13 +1,12 @@
-#![cfg(all(feature = "std", feature = "profile"))]
 //! Host-level contracts: real CPU pools, joins, a CLI renderer, and an async
 //! request owner.
 use almost_enough::Stopper;
+use how_far::ProgressWithStop;
 use how_far_along::poll::{LocalPoller, SharedPoller};
-use how_far_along::profile::{Profiler, SpanKind, StdClock};
 use how_far_along::{
-    Execution, Outcome, Phase, PhaseSpec, ProgressExt, ProgressWithStop, Report, Status, Stop,
-    Total,
+    Execution, Outcome, Phase, PhaseSpec, ProgressExt, Report, Status, Stop, Total,
 };
+use how_far_really::profile::{Profiler, SpanKind, StdClock};
 use rayon::prelude::*;
 use std::{cell::RefCell, fmt::Write, num::NonZeroUsize, rc::Rc, sync::Arc};
 

@@ -9,33 +9,22 @@
 
 ## summary
 #
-#   inherent methods                            7
-#   trait roster entries (type × trait)         9
+#   inherent methods                            3
+#   trait roster entries (type × trait)         4
 #
 # per-module pub lines:
 #   (root)                            2
-#   diagnostics                       1
 #   poll                              1
-#   profile                           3
 
-## items (7 lines)
+## items (3 lines)
 
 pub fn NodeId::assert_fields_are_eq(&self)
 pub fn Status::assert_fields_are_eq(&self)
-pub fn diagnostics::Kind::assert_fields_are_eq(&self)
 pub fn poll::SubscriptionId::assert_fields_are_eq(&self)
-pub fn profile::SourceSite::assert_fields_are_eq(&self)
-pub fn profile::SpanId::assert_fields_are_eq(&self)
-pub fn profile::SpanKind::assert_fields_are_eq(&self)
 
-## trait impls (9 types)
+## trait impls (4 types)
 
 NodeId: TrivialClone
 Status: TrivialClone
 Summary: TrivialClone
-diagnostics::Kind: TrivialClone
 poll::SubscriptionId: TrivialClone
-profile::SourceSite: TrivialClone
-profile::SpanId: TrivialClone
-profile::SpanKind: TrivialClone
-profile::StdClock: TrivialClone

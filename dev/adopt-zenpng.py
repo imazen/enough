@@ -67,7 +67,8 @@ chunk=chunk.replace(needle,'''    #[cfg(feature = "progress")]
         how_far::PhaseSpec::new("refine", 60, how_far::Total::Unknown),
         how_far::PhaseSpec::new("bruteforce", 20, how_far::Total::Unknown),
         how_far::PhaseSpec::new("recompress", 10, how_far::Total::Unknown),
-    ]).map_err(progress_plan_error)?;
+    ]);
+'''+'''    let result = (|| {
 '''+needle)
 # Wrap each existing phase call; keep the feature-off call unchanged.
 for number,name in [(1,'screen'),(2,'refine'),(3,'bruteforce'),(4,'recompress')]:
@@ -88,36 +89,23 @@ for number,name in [(1,'screen'),(2,'refine'),(3,'bruteforce'),(4,'recompress')]
                 let value = ORIGINAL?;
                 stage.check().map_err(|r| at!(PngError::Stopped(r)))?;
                 Ok(value)
-            }).map_err(progress_run_error)
+            })
         }
     }'''.replace('ORIGINAL',call)
     chunk=chunk[:pos]+replacement+chunk[i:]
-needle='    if params.screen_is_final || opts.deadline.should_stop() {'
-chunk=chunk.replace(needle,needle+'''
-        #[cfg(feature = "progress")]
-        {
-            for _ in 0..3 { stages.skip().map_err(progress_plan_error)?; }
-            stages.finish().map_err(progress_plan_error)?;
-        }
-''')
-chunk=chunk.replace('    // Same invariant as the early-return above:', '    #[cfg(feature = "progress")]\n    stages.finish().map_err(progress_plan_error)?;\n\n    // Same invariant as the early-return above:')
+# Capture success, early return and every ? before handing the result to the plan.
+closing = chunk.rfind('}')
+chunk = chunk[:closing] + '''    })();
+    #[cfg(feature = "progress")]
+    let result = how_far::Complete::complete_classified(stages, result,
+        |e: &whereat::At<PngError>| matches!(e.error(), PngError::Stopped(_)));
+    result
+}
+
+''' + chunk[closing+1:]
 s=s[:start]+chunk+s[end:]
 # Count verified strategy results at their existing success boundary (serial and parallel).
 s=s.replace('screen_results.push((compressed_len, filtered_data));','screen_results.push((compressed_len, filtered_data));\n        #[cfg(feature = "progress")]\n        if let Some(p) = opts.progress { p.advance(1); }').replace('screen_results.push((compressed_len, state.filtered.clone()));','screen_results.push((compressed_len, state.filtered.clone()));\n            #[cfg(feature = "progress")]\n            if let Some(p) = opts.progress { p.advance(1); }')
-s+='''
-#[cfg(feature = "progress")]
-fn progress_plan_error(error: how_far::PlanError) -> whereat::At<PngError> {
-    at!(PngError::Internal(zencodec::InternalKind::Bug, error.to_string()))
-}
-#[cfg(feature = "progress")]
-fn progress_run_error(error: how_far::RunError<whereat::At<PngError>>) -> whereat::At<PngError> {
-    match error {
-        how_far::RunError::Work(error) => error,
-        how_far::RunError::Plan(error) => progress_plan_error(error),
-        _ => at!(PngError::Internal(zencodec::InternalKind::Bug, "unknown progress error".into())),
-    }
-}
-'''
 path.write_text(s)
 print(f'Pinned encoder {revision}: {destination}')
 

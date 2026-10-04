@@ -116,10 +116,20 @@ name = "how-far-browser-probe"
 version = "0.0.0"
 dependencies = [
  "almost-enough",
+ "how-far",
  "how-far-along",
+ "how-far-really",
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-rayon",
+]
+
+[[package]]
+name = "how-far-really"
+version = "0.1.0"
+dependencies = [
+ "how-far",
+ "how-far-along",
 ]
 
 [[package]]

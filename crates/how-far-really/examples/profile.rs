@@ -1,9 +1,10 @@
 //! Four tasks sharing one counter, each measured in its own span.
 //!
-//! Run with `cargo run -p how-far-along --example profile --features profile`.
+//! Run with `cargo run -p how-far-really --example profile`.
 
-use how_far_along::profile::{Profiler, SpanKind, StdClock};
-use how_far_along::{Outcome, Phase, ProgressExt, ProgressWithStop, Stop, Total, Unstoppable};
+use how_far::ProgressWithStop;
+use how_far_along::{Outcome, Phase, ProgressExt, Stop, Total, Unstoppable};
+use how_far_really::profile::{Profiler, SpanKind, StdClock};
 
 fn main() {
     let profiler = Profiler::new(StdClock::new(), 64);

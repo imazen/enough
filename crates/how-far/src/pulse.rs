@@ -107,8 +107,6 @@ pub enum PlanError {
     Finished,
     /// Every child must finish before its parent.
     UnfinishedChildren,
-    /// A phase cannot succeed while one of its children did not.
-    UnsuccessfulChildren,
     /// Every declared stage has already run.
     NoMoreStages,
     /// Another thread is planning or finishing this phase.
@@ -126,7 +124,6 @@ impl fmt::Display for PlanError {
             Self::NotShareable => "this pulse cannot provide an owned handle",
             Self::Finished => "the phase already has an outcome",
             Self::UnfinishedChildren => "every child must finish before its parent",
-            Self::UnsuccessfulChildren => "a phase cannot succeed while a child did not",
             Self::NoMoreStages => "every declared stage has already run",
             Self::Busy => "another thread is planning or finishing this phase",
         })
@@ -239,11 +236,14 @@ impl<'a> PhaseSpec<'a> {
 /// - `handle` returns an owned handle that checks the same stop and counts
 ///   into the same phase, or [`PulseHandle::default()`], documented as such.
 /// - [`ChildPulse::finish`] fails with [`PlanError::UnfinishedChildren`] while
-///   one of the child's own children is unfinished, and with
-///   [`PlanError::UnsuccessfulChildren`] for `Succeeded` or `Skipped` while
-///   one of them did not succeed. A child dropped unfinished is
-///   `Outcome::Abandoned`.
+///   a descendant is unfinished. Completed failed attempts may belong to a
+///   successful parent. A dropped unfinished child records `Abandoned`.
 pub trait Pulse: Stop + Report {
+    /// Record a reporting-protocol problem for optional diagnostics. This never
+    /// changes cancellation or the operation's return value. Ordinary sinks may
+    /// ignore it; diagnostic wrappers retain bounded evidence.
+    #[track_caller]
+    fn record_issue(&self, _error: PlanError) {}
     /// Split this phase into weighted children, in declared order.
     ///
     /// Returns exactly one [`Child`] per part. The caller owns them: pass
@@ -295,6 +295,10 @@ pub trait Pulse: Stop + Report {
 // `&NoPulse` itself, so `&&NoPulse` works but pays for its calls.
 
 impl<P: Pulse + ?Sized> Pulse for &P {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        (**self).record_issue(error);
+    }
     #[inline]
     fn split(
         &self,
@@ -319,6 +323,10 @@ impl<P: Pulse + ?Sized> Pulse for &P {
 }
 
 impl<P: Pulse + ?Sized> Pulse for &mut P {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        (**self).record_issue(error);
+    }
     #[inline]
     fn split(
         &self,
@@ -343,6 +351,10 @@ impl<P: Pulse + ?Sized> Pulse for &mut P {
 }
 
 impl<P: Pulse + ?Sized> Pulse for Box<P> {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        (**self).record_issue(error);
+    }
     #[inline]
     fn split(
         &self,
@@ -367,6 +379,10 @@ impl<P: Pulse + ?Sized> Pulse for Box<P> {
 }
 
 impl<P: Pulse + ?Sized> Pulse for Arc<P> {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        (**self).record_issue(error);
+    }
     #[inline]
     fn split(
         &self,
@@ -397,6 +413,16 @@ impl<P: Pulse + ?Sized> Pulse for Arc<P> {
 /// [`Child::finish`], which consumes the handle so a child is finished at most
 /// once.
 pub trait ChildPulse: Pulse {
+    /// Resolve an untouched phase from its enclosing result. The default uses
+    /// ordinary completion; trackers can retain the inference as evidence.
+    fn complete_inferred(self: Box<Self>, outcome: Outcome) {
+        self.complete_as(outcome);
+    }
+    /// Complete best-effort observation. Trackers may infer untouched descendants
+    /// from this result; the default preserves older implementors' finish logic.
+    fn complete_as(self: Box<Self>, outcome: Outcome) {
+        let _ = self.finish(outcome);
+    }
     /// Publish this child's terminal outcome.
     fn finish(self: Box<Self>, outcome: Outcome) -> Result<(), PlanError>;
 }
@@ -422,6 +448,22 @@ pub struct Child<'a> {
 }
 
 impl<'a> Child<'a> {
+    /// Resolve an unused phase from its enclosing result, retaining inference evidence.
+    pub fn complete_inferred(self, outcome: Outcome) {
+        if let Some(pulse) = self.pulse {
+            pulse.complete_inferred(outcome);
+        }
+    }
+    /// A cancellation/checkpoint-preserving view without progress accounting.
+    pub(crate) fn untracked(parent: &'a dyn Pulse) -> Self {
+        Self::new(Untracked { inner: parent })
+    }
+
+    /// Plan nested observations without introducing a new work error.
+    #[track_caller]
+    pub fn plan(&self, execution: Execution, parts: &[PhaseSpec<'_>]) -> Vec<Child<'_>> {
+        self.pulse().plan(execution, parts)
+    }
     /// Wrap one child returned from a [`Pulse::split`] implementation.
     pub fn new(pulse: impl ChildPulse + 'a) -> Self {
         Self {
@@ -467,6 +509,79 @@ impl fmt::Debug for Child<'_> {
     }
 }
 
+impl crate::Complete for Child<'_> {
+    fn complete_as(self, outcome: Outcome) {
+        if let Some(pulse) = self.pulse {
+            pulse.complete_as(outcome);
+        }
+    }
+}
+
+impl dyn Pulse + '_ {
+    /// Best-effort planning. If the sink rejects the plan, returns one untracked
+    /// child per part, all retaining this pulse's stop/checkpoint policy.
+    #[track_caller]
+    pub fn plan(&self, execution: Execution, parts: &[PhaseSpec<'_>]) -> Vec<Child<'_>> {
+        match self.split(execution, parts) {
+            Ok(children) if children.len() == parts.len() => children,
+            Ok(_) => {
+                self.record_issue(PlanError::Unsupported);
+                parts.iter().map(|_| Child::untracked(self)).collect()
+            }
+            Err(error) => {
+                self.record_issue(error);
+                parts.iter().map(|_| Child::untracked(self)).collect()
+            }
+        }
+    }
+}
+
+struct Untracked<P> {
+    inner: P,
+}
+impl<P: Pulse> Stop for Untracked<P> {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        self.inner.check()
+    }
+    fn may_stop(&self) -> bool {
+        self.inner.may_stop()
+    }
+}
+impl<P: Pulse> Report for Untracked<P> {
+    fn advance(&self, _: u64) {}
+    fn may_report(&self) -> bool {
+        false
+    }
+}
+impl<P: Pulse> Pulse for Untracked<P> {
+    fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
+        PhaseSpec::validate_split(parts)?;
+        Ok(parts
+            .iter()
+            .map(|_| Child::untracked(&self.inner))
+            .collect())
+    }
+    fn handle(&self) -> PulseHandle {
+        let handle = self.inner.handle();
+        ProgressWithStop::new(handle.stop, None)
+    }
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Ok(SharedPulse::new(Untracked {
+            inner: self.inner.share()?,
+        }))
+    }
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.inner.record_issue(error);
+    }
+}
+impl<P: Pulse> ChildPulse for Untracked<P> {
+    fn finish(self: Box<Self>, _: Outcome) -> Result<(), PlanError> {
+        Ok(())
+    }
+}
+
 impl Stop for Child<'_> {
     #[inline]
     #[track_caller]
@@ -497,6 +612,10 @@ impl Report for Child<'_> {
 }
 
 impl Pulse for Child<'_> {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.pulse().record_issue(error);
+    }
     fn split(
         &self,
         execution: Execution,
@@ -679,6 +798,10 @@ impl Report for SharedPulse {
     }
 }
 impl Pulse for SharedPulse {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.as_pulse().record_issue(error);
+    }
     fn split(
         &self,
         execution: Execution,

@@ -1,8 +1,9 @@
 //! Executable raw-Wasm proof of synchronous polling through a JSPI suspension.
 //! Deliberately outside the workspace: normal library compilation builds no host glue.
 use almost_enough::Stopper;
+use how_far::ProgressWithStop;
 use how_far_along::poll::SharedPoller;
-use how_far_along::{Outcome, Phase, ProgressExt, ProgressWithStop, Stop, StopReason, Total};
+use how_far_along::{Outcome, Phase, ProgressExt, Stop, StopReason, Total};
 
 #[link(wasm_import_module = "host")]
 unsafe extern "C" {

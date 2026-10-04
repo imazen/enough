@@ -1,7 +1,6 @@
+use how_far::{NoReport, ProgressWithStop};
 use how_far_along::ext::ReportExt;
-use how_far_along::{
-    NoReport, ProgressExt, ProgressWithStop, Report, Stop, StopReason, Unstoppable,
-};
+use how_far_along::{ProgressExt, Report, Stop, StopReason, Unstoppable};
 use std::{num::NonZeroU64, sync::Mutex};
 
 #[derive(Default)]

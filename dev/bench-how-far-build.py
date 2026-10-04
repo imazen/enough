@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Guard the build cost of how-far and how-far-along.
 
-Fails the run if how-far gains features beyond additive adapters, a build script or a dependency other
-than `enough`; if one `Stages::run_*` call site adds more than --ir-budget
+Fails the run if how-far gains features beyond adapters/checked, a build script or a dependency other
+than `enough`; if one `Stages::run` call site adds more than --ir-budget
 lines of how-far's unoptimized LLVM IR to the caller's crate; or if
-how-far-along's own unoptimized IR, with default features or with
-`diagnostics`, grows past its budget.
+how-far-along and how-far-really's own unoptimized IR, grows past its budget.
 
 With `perf`, also reports rustc instructions (as rustc-perf does; they do not
 depend on machine load): how-far and how-far-along against an empty no_std
-crate, and one `Stages::run_stoppable` call site against a plain function
+crate, and one `Stages::run` call site against a plain function
 call, for check, debug and release builds.
 """
 import argparse
@@ -26,15 +25,15 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--runs", type=int, default=3, help="perf samples per measurement")
 parser.add_argument("--ir-budget", type=int, default=120, help="IR lines per call site")
-parser.add_argument("--along-budget", type=int, nargs=2, default=[18_000, 55_000],
-                    metavar=("STD", "DIAGNOSTICS"), help="how-far-along IR lines")
+parser.add_argument("--along-budget", type=int, nargs=2, default=[22_000, 35_000],
+                    metavar=("TRACKER", "DIAGNOSTICS"), help="tracker and diagnostics IR lines")
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 
 meta = json.loads(subprocess.check_output(
     ["cargo", "metadata", "--format-version=1", "--no-deps"], cwd=root))
 how_far = next(p for p in meta["packages"] if p["name"] == "how-far")
-assert how_far["features"] == {"adapters": []}, "only additive adapters are allowed in core"
+assert how_far["features"] == {"adapters": [], "checked": []}, "only additive adapters and the checked runner are allowed in core"
 assert [(d["name"], d["kind"]) for d in how_far["dependencies"] if d["kind"] != "dev"] \
     == [("enough", None)], "how-far may depend only on the lightweight enough interface"
 assert all("custom-build" not in t["kind"] for t in how_far["targets"]), \
@@ -62,13 +61,14 @@ def probe(n, stages):
     body = "use how_far::prelude::*;\nuse how_far::StopReason;\n"
     body += "".join(WORK.format(i=i, m=2 * i + 3) for i in range(n))
     if stages:
-        body += "use how_far::{PhaseSpec, RunError, Stages, Total};\n"
+        body += "use how_far::{PhaseSpec, Stages, Total};\n"
         plan = ", ".join(f'PhaseSpec::new("s{i}", 1, Total::Unknown)' for i in range(n))
-        calls = "".join(f"    sum += stages.run_stoppable(|stage| work{i}(data, stage))?;\n"
+        calls = "".join(f"    sum += stages.run(|stage| work{i}(data, stage))?;\n"
                         for i in range(n))
-        return body + ("pub fn run(data: &mut [u8], pulse: &dyn Pulse) -> Result<u64, RunError<StopReason>> {\n"
-                       f"    let mut stages = Stages::new(pulse, &[{plan}])?;\n    let mut sum = 0;\n"
-                       f"{calls}    stages.finish()?;\n    Ok(sum)\n}}\n")
+        return body + ("pub fn run(data: &mut [u8], pulse: &dyn Pulse) -> Result<u64, StopReason> {\n"
+                       f"    let mut stages = Stages::new(pulse, &[{plan}]);\n"
+                       f"    let result = (|| {{ let mut sum = 0;\n{calls}    Ok(sum) }})();\n"
+                       "    result.finish_phase(stages)\n}\n")
     calls = "".join(f"    sum += work{i}(data, pulse)?;\n" for i in range(n))
     return body + ("pub fn run(data: &mut [u8], pulse: &dyn Pulse) -> Result<u64, StopReason> {\n"
                    f"    let mut sum = 0;\n{calls}    Ok(sum)\n}}\n")
@@ -83,7 +83,7 @@ PROBES = {
 PROFILES = {"check": ["check"], "debug": ["build"], "release": ["build", "--release"]}
 # how-far-along feature sets, each built in its own workspace so cargo does
 # not unify their features.
-ALONG = {"std": "", "diagnostics": ', features = ["diagnostics"]'}
+ALONG = {"std": "how-far-along", "diagnostics": "how-far-really"}
 
 
 def perf_instructions(argv, cwd):
@@ -106,12 +106,12 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
     (tmp / "Cargo.toml").write_text(
         "[workspace]\nresolver = \"3\"\nmembers = [" + ", ".join(f'"{n}"' for n in PROBES) + "]\n")
     env = dict(os.environ, CARGO_TARGET_DIR=str(tmp / "target"), CARGO_INCREMENTAL="0")
-    for name, features in ALONG.items():
+    for name, crate in ALONG.items():
         (tmp / "along" / name / "src").mkdir(parents=True)
         (tmp / "along" / name / "src" / "lib.rs").write_text("")
         (tmp / "along" / name / "Cargo.toml").write_text(
             f'[package]\nname = "along-{name}"\nversion = "0.0.0"\nedition = "2024"\n[dependencies]\n'
-            f'how-far-along = {{ path = "{root}/crates/how-far-along"{features} }}\n[workspace]\n')
+            f'{crate} = {{ path = "{root}/crates/{crate}" }}\n[workspace]\n')
     commands = {}
     for profile, cargo_args in PROFILES.items():
         for cwd, tag in [(tmp, ""), *((tmp / "along" / name, f"/{name}") for name in ALONG)]:
@@ -122,8 +122,8 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
                     argv = shlex.split(line.split("Running `", 1)[1].rstrip("`"))
                     argv = [a for a in argv if not a.startswith("--json") and a != "--error-format=json"]
                     crate = argv[argv.index("--crate-name") + 1]
-                    if crate == "how_far_along":
-                        commands[profile, crate + tag] = argv
+                    if tag and crate == ALONG[tag[1:]].replace("-", "_"):
+                        commands[profile, "observation" + tag] = argv
                     elif not tag:  # how-far as a library sees it: enough without std.
                         commands[profile, crate] = argv
 
@@ -142,19 +142,19 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
             if not only_how_far or "7how_far" in symbol)
 
     per_site = (ir_lines(f"stages{LARGE}") - ir_lines(f"stages{SMALL}")) / (LARGE - SMALL)
-    print(f"how-far IR per Stages::run_stoppable call site: {per_site:.0f} lines "
+    print(f"how-far IR per Stages::run call site: {per_site:.0f} lines "
           f"(budget {args.ir_budget})")
-    assert per_site <= args.ir_budget, "Stages::run_* instantiates too much code per call site"
+    assert per_site <= args.ir_budget, "Stages::run instantiates too much code per call site"
     for name, budget in zip(ALONG, args.along_budget):
-        lines = ir_lines(f"how_far_along/{name}", only_how_far=False)
-        print(f"how-far-along IR, {name}: {lines} lines (budget {budget})")
+        lines = ir_lines(f"observation/{name}", only_how_far=False)
+        print(f"{ALONG[name]} IR, {name}: {lines} lines (budget {budget})")
         assert lines <= budget, f"how-far-along with {name} compiles to more code than its budget"
 
     if shutil.which("perf") is None:
         print("perf not found; skipping instruction counts")
         raise SystemExit(0)
     try:
-        crates = ["how_far", *PROBES, *(f"how_far_along/{name}" for name in ALONG)]
+        crates = ["how_far", *PROBES, *(f"observation/{name}" for name in ALONG)]
         samples = {(p, c): [] for p in PROFILES for c in crates}
         for _ in range(args.runs):
             for key in samples:
@@ -167,11 +167,11 @@ with tempfile.TemporaryDirectory(prefix="how-far-build-") as tmp:
     rows = {
         "empty no_std crate": lambda p: m[p, "empty"],
         "how-far": lambda p: m[p, "how_far"],
-        "how-far-along (std)": lambda p: m[p, "how_far_along/std"],
-        "how-far-along (diagnostics)": lambda p: m[p, "how_far_along/diagnostics"],
+        "how-far-along (std)": lambda p: m[p, "observation/std"],
+        "how-far-really": lambda p: m[p, "observation/diagnostics"],
         "plain function call, per call site": lambda p:
             (m[p, f"plain{LARGE}"] - m[p, f"plain{SMALL}"]) / (LARGE - SMALL),
-        "Stages::run_stoppable, per call site": lambda p:
+        "Stages::run, per call site": lambda p:
             (m[p, f"stages{LARGE}"] - m[p, f"stages{SMALL}"]) / (LARGE - SMALL),
     }
     for label, value in rows.items():

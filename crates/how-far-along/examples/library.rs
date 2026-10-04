@@ -8,9 +8,9 @@
 //! Run with `cargo run -p how-far-along --example library`.
 
 mod library {
-    use how_far::{PhaseSpec, ProgressExt, Pulse, RunError, Stages, StopReason, Total};
+    use how_far::{PhaseSpec, ProgressExt, Pulse, ResultExt, Stages, StopReason, Total};
 
-    pub fn convert(rows: u64, pulse: &dyn Pulse) -> Result<u64, RunError<StopReason>> {
+    pub fn convert(rows: u64, pulse: &dyn Pulse) -> Result<u64, StopReason> {
         let mut stages = Stages::new(
             pulse,
             &[
@@ -18,27 +18,29 @@ mod library {
                 PhaseSpec::new("resize", 5, Total::Exact(rows)).units("rows"),
                 PhaseSpec::new("encode", 3, Total::Exact(rows)).units("rows"),
             ],
-        )?;
-        let mut checksum = 0_u64;
-        for stage_cost in [2, 5, 3] {
-            stages.run_stoppable(|stage| {
-                stage.check()?;
-                for row in 0..rows {
-                    for i in 0..stage_cost * 20_000 {
-                        checksum = checksum.wrapping_mul(31).wrapping_add(row ^ i);
+        );
+        let result = (|| {
+            let mut checksum = 0_u64;
+            for stage_cost in [2, 5, 3] {
+                stages.run(|stage| {
+                    stage.check()?;
+                    for row in 0..rows {
+                        for i in 0..stage_cost * 20_000 {
+                            checksum = checksum.wrapping_mul(31).wrapping_add(row ^ i);
+                        }
+                        stage.step(1)?;
                     }
-                    stage.step(1)?;
-                }
-                Ok(())
-            })?;
-        }
-        stages.finish()?;
-        Ok(checksum)
+                    Ok(())
+                })?;
+            }
+            Ok(checksum)
+        })();
+        result.finish_phase(stages)
     }
 }
 
 use almost_enough::Stopper;
-use how_far_along::{Outcome, Phase, PulseTree, Snapshot, Total};
+use how_far_along::{Complete, Phase, PulseTree, Snapshot, Total};
 use std::{thread, time::Duration};
 
 fn bar(snapshot: &Snapshot) -> String {
@@ -71,9 +73,7 @@ fn main() {
             }
         });
         let result = library::convert(400, &tree);
-        let outcome = Outcome::from_result(&result, |_| true);
-        tree.finish(outcome).unwrap();
-        result
+        tree.complete(result)
     });
     eprintln!("\r{}", bar(&observer.snapshot()));
     println!("{result:?}");

@@ -1,11 +1,9 @@
 //! Callback dispatch over snapshots, on the owner thread and on workers.
 
 use almost_enough::Stopper;
+use how_far::{NoReport, ProgressWithStop};
 use how_far_along::poll::{LocalPoller, SharedPoller};
-use how_far_along::{
-    NoReport, Outcome, Phase, ProgressExt, ProgressWithStop, Report, Status, Stop, StopReason,
-    Total,
-};
+use how_far_along::{Outcome, Phase, ProgressExt, Report, Status, Stop, StopReason, Total};
 use std::{
     cell::RefCell,
     rc::Rc,

@@ -1,5 +1,4 @@
-//! Checkpoint advice for library tests. Requires the `diagnostics` feature,
-//! normally on a dev-dependency.
+//! Checkpoint advice for library tests, normally used as a dev-dependency.
 //!
 //! Wrap the [`PulseTree`] you pass to a library in a [`DiagnosticPulse`], run
 //! the library, then call [`Trace::diagnose`] on the profiler's trace. The
@@ -23,8 +22,6 @@
 //! parse them or assert on their text in downstream tests.
 
 use crate::{
-    Child, ChildPulse, Execution, NodeId, Observer, Outcome, PhaseSpec, PlanError,
-    ProgressWithStop, Pulse, PulseHandle, PulseTree, Report, Snapshot, Status, Stop, StopReason,
     profile::{
         Instrumented, Profiler, SiteStats, SourceSite, Span, SpanInner, SpanKind, SpanRecord,
         Trace, advanced, checked, sorted_indices,
@@ -37,6 +34,11 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
+use how_far::{
+    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressWithStop, Pulse,
+    PulseHandle, Report, Stop, StopReason,
+};
+use how_far_along::{NodeId, Observer, PulseTree, Snapshot, Status};
 
 /// Thresholds for [`Trace::diagnose`]. Start from `Default` and adjust fields.
 #[derive(Clone, Debug)]
@@ -89,6 +91,22 @@ impl Default for Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Kind {
+    /// A phase owner vanished without a result handoff.
+    AbandonedPhase,
+    /// An untouched phase was resolved from its enclosing result.
+    InferredCompletion,
+    /// A successful parent retained a failed attempt; recovery is visible.
+    RecoveredFailure,
+    /// Completed units disagree with an exact total.
+    CountMismatch,
+    /// A rejected plan or lifecycle operation was reported by a best-effort helper.
+    ProtocolMisuse,
+    /// A report arrived after completion or targeted a branch instead of a leaf.
+    InvalidReport,
+    /// A check returned cancellation, but the observed phase ended differently.
+    StopOutcomeMismatch,
+    /// The host recorded a cancellation request and return, but no check observed it.
+    UnobservedCancellation,
     /// A task went too long without checking for cancellation.
     StopGap,
     /// A task went too long without reporting.
@@ -105,6 +123,30 @@ pub enum Kind {
     StageWeights,
     /// Dropped spans, saturated counts, or clock trouble limit the advice.
     IncompleteEvidence,
+}
+
+/// A reporting problem detected without changing a library's return value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Problem {
+    /// Rejected administration or invalid phase selection.
+    Plan(PlanError),
+    /// A retained shared view reported after its owner completed.
+    ReportAfterCompletion,
+    /// Reports targeted a phase that delegates its units to children.
+    ReportToBranch,
+}
+
+/// Source-located evidence retained independently from phase outcomes.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Incident {
+    /// Phase associated with this incident.
+    pub node: NodeId,
+    /// What was observed.
+    pub problem: Problem,
+    /// The library's call site.
+    pub site: SourceSite,
 }
 
 /// One finding: what was measured, and what to consider doing about it.
@@ -150,8 +192,8 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 ///
 /// ```
 /// use how_far_along::{Outcome, Phase, PulseTree, Total, Unstoppable};
-/// use how_far_along::diagnostics::{DiagnosticPulse, Options};
-/// use how_far_along::profile::{Profiler, StdClock};
+/// use how_far_really::diagnostics::{DiagnosticPulse, Options};
+/// use how_far_really::profile::{Profiler, StdClock};
 ///
 /// let profiler = Profiler::new(StdClock::new(), 256);
 /// let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
@@ -262,6 +304,30 @@ struct Meter {
 }
 
 impl Meter {
+    #[track_caller]
+    fn issue(&self, problem: Problem) {
+        let at = core::panic::Location::caller();
+        self.profiler.incident(Incident {
+            node: self.node,
+            problem,
+            site: SourceSite {
+                file: at.file(),
+                line: at.line(),
+                column: at.column(),
+            },
+        });
+    }
+    #[track_caller]
+    fn reporting(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        if self.closed.load(Ordering::Acquire) || self.observer.is_finished() {
+            self.issue(Problem::ReportAfterCompletion);
+        } else if self.has_children.load(Ordering::Relaxed) {
+            self.issue(Problem::ReportToBranch);
+        }
+    }
     fn start_span(&self) -> Span {
         match &self.entered {
             Some(entered) => {
@@ -331,12 +397,16 @@ impl Meter {
         Ok(measured)
     }
 
-    fn handle(&self, inner: &dyn Pulse) -> PulseHandle {
+    fn handle(self: &Arc<Self>, inner: &dyn Pulse) -> PulseHandle {
         let handle = inner.handle();
         let span = self.span();
         ProgressWithStop::new(
             Some(Arc::new(Instrumented::new(handle.stop, Arc::clone(&span))) as Arc<dyn Stop>),
-            Some(Arc::new(Instrumented::new(handle.report, span)) as Arc<dyn Report>),
+            Some(Arc::new(DiagnosticReport {
+                inner: handle.report,
+                meter: self.clone(),
+                span,
+            }) as Arc<dyn Report>),
         )
     }
 
@@ -389,6 +459,7 @@ impl Stop for DiagnosticPulse {
 impl Report for DiagnosticPulse {
     #[track_caller]
     fn advance(&self, completed: u64) {
+        self.meter.reporting(completed);
         advanced(&self.meter.span(), &self.tree, completed);
     }
     fn may_report(&self) -> bool {
@@ -397,6 +468,10 @@ impl Report for DiagnosticPulse {
 }
 
 impl Pulse for DiagnosticPulse {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.meter.issue(Problem::Plan(error));
+    }
     fn split(
         &self,
         execution: Execution,
@@ -405,19 +480,19 @@ impl Pulse for DiagnosticPulse {
         self.meter.split(&self.tree, execution, parts)
     }
     fn handle(&self) -> PulseHandle {
-        self.meter.handle(&self.tree)
+        self.meter.0.handle(&self.tree)
     }
     fn start(&self) -> Result<(), PlanError> {
         self.tree.start()
     }
-    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
-        Ok(crate::SharedPulse::new(DiagnosticView {
+    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
+        Ok(how_far::SharedPulse::new(DiagnosticView {
             inner: self.tree.share()?,
             meter: Arc::clone(&self.meter.0),
             span: self.meter.span(),
         }))
     }
-    fn set_total(&self, total: crate::Total) -> Result<(), PlanError> {
+    fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
         self.tree.set_total(total)
     }
 }
@@ -441,6 +516,7 @@ impl Stop for DiagnosticChild<'_> {
 impl Report for DiagnosticChild<'_> {
     #[track_caller]
     fn advance(&self, completed: u64) {
+        self.meter.reporting(completed);
         advanced(&self.meter.span(), &self.inner, completed);
     }
     fn may_report(&self) -> bool {
@@ -449,6 +525,10 @@ impl Report for DiagnosticChild<'_> {
 }
 
 impl Pulse for DiagnosticChild<'_> {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.meter.issue(Problem::Plan(error));
+    }
     fn split(
         &self,
         execution: Execution,
@@ -457,24 +537,35 @@ impl Pulse for DiagnosticChild<'_> {
         self.meter.split(&self.inner, execution, parts)
     }
     fn handle(&self) -> PulseHandle {
-        self.meter.handle(&self.inner)
+        self.meter.0.handle(&self.inner)
     }
     fn start(&self) -> Result<(), PlanError> {
         self.inner.start()
     }
-    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
-        Ok(crate::SharedPulse::new(DiagnosticView {
+    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
+        Ok(how_far::SharedPulse::new(DiagnosticView {
             inner: self.inner.share()?,
             meter: Arc::clone(&self.meter.0),
             span: self.meter.span(),
         }))
     }
-    fn set_total(&self, total: crate::Total) -> Result<(), PlanError> {
+    fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
         self.inner.set_total(total)
     }
 }
 
 impl ChildPulse for DiagnosticChild<'_> {
+    fn complete_as(self: Box<Self>, outcome: Outcome) {
+        let Self { inner, meter } = *self;
+        how_far::Complete::complete_as(inner, outcome);
+        meter.close(outcome);
+    }
+    fn complete_inferred(self: Box<Self>, outcome: Outcome) {
+        let Self { inner, meter } = *self;
+        inner.complete_inferred(outcome);
+        meter.close(outcome);
+    }
+
     fn finish(self: Box<Self>, outcome: Outcome) -> Result<(), PlanError> {
         let Self { inner, meter } = *self;
         let result = inner.finish(outcome);
@@ -490,7 +581,7 @@ impl ChildPulse for DiagnosticChild<'_> {
 // A non-owning measurement view keeps the original span, including after close.
 // SpanInner ignores late measurements; dropping this view never ends the span.
 struct DiagnosticView {
-    inner: crate::SharedPulse,
+    inner: how_far::SharedPulse,
     meter: Arc<Meter>,
     span: Arc<SpanInner>,
 }
@@ -506,6 +597,7 @@ impl Stop for DiagnosticView {
 impl Report for DiagnosticView {
     #[track_caller]
     fn advance(&self, n: u64) {
+        self.meter.reporting(n);
         advanced(&self.span, &self.inner, n)
     }
     fn may_report(&self) -> bool {
@@ -513,28 +605,45 @@ impl Report for DiagnosticView {
     }
 }
 impl Pulse for DiagnosticView {
+    #[track_caller]
+    fn record_issue(&self, error: PlanError) {
+        self.meter.issue(Problem::Plan(error));
+    }
     fn split(&self, e: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         self.meter.split(&self.inner, e, parts)
     }
     fn handle(&self) -> PulseHandle {
-        let handle = self.inner.handle();
-        ProgressWithStop::new(
-            Some(Arc::new(Instrumented::new(handle.stop, self.span.clone())) as Arc<dyn Stop>),
-            Some(Arc::new(Instrumented::new(handle.report, self.span.clone())) as Arc<dyn Report>),
-        )
+        self.meter.handle(&self.inner)
     }
     fn start(&self) -> Result<(), PlanError> {
         self.inner.start()
     }
-    fn set_total(&self, t: crate::Total) -> Result<(), PlanError> {
+    fn set_total(&self, t: how_far::Total) -> Result<(), PlanError> {
         self.inner.set_total(t)
     }
-    fn share(&self) -> Result<crate::SharedPulse, PlanError> {
-        Ok(crate::SharedPulse::new(Self {
+    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
+        Ok(how_far::SharedPulse::new(Self {
             inner: self.inner.clone(),
             meter: self.meter.clone(),
             span: self.span.clone(),
         }))
+    }
+}
+
+// Legacy owned reporting handles must retain misuse evidence too.
+struct DiagnosticReport {
+    inner: Option<Arc<dyn Report>>,
+    meter: Arc<Meter>,
+    span: Arc<SpanInner>,
+}
+impl Report for DiagnosticReport {
+    #[track_caller]
+    fn advance(&self, n: u64) {
+        self.meter.reporting(n);
+        advanced(&self.span, &self.inner, n);
+    }
+    fn may_report(&self) -> bool {
+        true
     }
 }
 
@@ -547,6 +656,30 @@ impl Trace {
     /// [`Profiler::measure_callback`] records around each callback.
     pub fn diagnose(&self, options: &Options) -> Vec<Finding> {
         let mut findings = Vec::new();
+        for incident in &self.incidents {
+            findings.push(Finding {
+                kind: match incident.problem { Problem::Plan(_) => Kind::ProtocolMisuse, _ => Kind::InvalidReport },
+                evidence: format!("phase {} at {}: {:?}", incident.node, incident.site, incident.problem),
+                advice: "Plan before reporting, select each phase once, and join workers before completing their owner. The work result was preserved.".into(),
+                sample_code: None,
+            });
+        }
+        if self.dropped_incidents != 0 {
+            findings.push(Finding {
+                kind: Kind::IncompleteEvidence,
+                evidence: format!("{} reporting incidents omitted", self.dropped_incidents),
+                advice: "Increase the incident budget or fix repeated protocol misuse.".into(),
+                sample_code: None,
+            });
+        }
+        if let Some(root) = &self.progress {
+            lifecycle_findings(root, false, &mut findings);
+        }
+        if self.cancelled_at.is_some() && self.returned_at.is_some() && self.observed_at.is_none() {
+            findings.push(Finding { kind: Kind::UnobservedCancellation,
+                evidence: "host recorded cancellation and operation return, but no instrumented checkpoint observed the stop".into(),
+                advice: "Check at entry and finish the final paced batch. A request racing completion or uninstrumented checks can also explain this; timing alone does not prove a bug.".into(), sample_code: None });
+        }
         if self.dropped_spans != 0 || self.active_spans != 0 {
             findings.push(Finding {
                 kind: Kind::IncompleteEvidence,
@@ -560,6 +693,11 @@ impl Trace {
             });
         }
         for span in &self.spans {
+            if span.stats.stopped_at.is_some() && span.outcome != Outcome::Cancelled {
+                findings.push(Finding { kind: Kind::StopOutcomeMismatch,
+                    evidence: format!("task {:?} observed a stop but ended {:?}", span.task, span.outcome),
+                    advice: "Propagate StopReason and implement the borrowed error conversion. If recovery is intentional, record each attempt separately.".into(), sample_code: None });
+            }
             if span.stats.overflowed
                 || span.stats.clock_regressions != 0
                 || span.stats.unattributed_calls != 0
@@ -822,8 +960,8 @@ fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Findin
 
 fn phase_spec_code(child: &Snapshot, weight: u64) -> String {
     let total = match child.initial_total {
-        crate::Total::Exact(n) => format!("Total::Exact({n})"),
-        crate::Total::Estimated(n) => format!("Total::Estimated({n})"),
+        how_far::Total::Exact(n) => format!("Total::Exact({n})"),
+        how_far::Total::Estimated(n) => format!("Total::Estimated({n})"),
         _ => "Total::Unknown".into(),
     };
     let mut code = format!("PhaseSpec::new({:?}, {weight}, {total})", child.name);
@@ -1021,4 +1159,65 @@ fn stage_time(trace: &Trace, stage: &Snapshot) -> Option<(Duration, Duration)> {
         });
     }
     time
+}
+
+impl how_far::Complete for DiagnosticPulse {
+    fn complete_as(self, outcome: Outcome) {
+        let Self { tree, meter } = self;
+        how_far::Complete::complete_as(tree, outcome);
+        meter.close(outcome);
+    }
+}
+
+fn lifecycle_findings(node: &Snapshot, parent_succeeded: bool, out: &mut Vec<Finding>) {
+    let mut add = |kind, evidence: String, advice: &str| {
+        out.push(Finding {
+            kind,
+            evidence: format!("phase {:?} ({}): {}", node.name, node.id, evidence),
+            advice: advice.into(),
+            sample_code: None,
+        })
+    };
+    if node.completion_inferred {
+        add(
+            Kind::InferredCompletion,
+            format!("completion inferred as {:?}", node.status),
+            "An unused optional phase and forgotten required work are indistinguishable from progress alone. Assert required outputs in library tests; skip explicitly when the decision is known.",
+        );
+    }
+    if node.status == Status::Finished(Outcome::Abandoned) {
+        add(
+            Kind::AbandonedPhase,
+            "owner or enclosing result boundary ended without this phase's result".into(),
+            "Pass the final Result to complete or finish_phase. A bare ? bypasses that handoff; a panic or intentionally abandoned attempt can also cause this finding.",
+        );
+    }
+    if parent_succeeded && node.status == Status::Finished(Outcome::Failed) {
+        add(
+            Kind::RecoveredFailure,
+            "failed attempt inside a successful operation".into(),
+            "This can be correct recovery. Keep the failed attempt visible and test that fallback fulfilled the operation's contract; the tracker cannot prove that.",
+        );
+    }
+    if node.children.is_empty()
+        && let how_far::Total::Exact(total) = node.total
+        && (node.overrun()
+            || (node.status == Status::Finished(Outcome::Succeeded) && node.completed != total))
+    {
+        add(
+            Kind::CountMismatch,
+            format!(
+                "{} completed units for exact total {}",
+                node.completed, total
+            ),
+            "Report completed work exactly once and flush local batches before completing the phase. If the total is not exact, declare Estimated or Unknown.",
+        );
+    }
+    for child in &node.children {
+        lifecycle_findings(
+            child,
+            node.status == Status::Finished(Outcome::Succeeded),
+            out,
+        );
+    }
 }
