@@ -16,8 +16,10 @@ The source checkout `/home/lilith/work/enough--howfar-v2` is clean at
 `a1d0286` on `codex/howfar-v2`. A writable local copy with the documentation
 refresh is prepared at `/tmp/enough-opus-handoff-20261005`. In that copy,
 `origin` points to the local enough repository, not GitHub, and its
-`origin/main` is the recorded main base `6bd6b96`. Do not push to that local
-origin expecting it to update a PR.
+`origin/main` is the recorded main base `6bd6b96`. The prepared copy also merges
+that main commit: original v2 branched at `9e1231a`, so it otherwise omits main's
+18-line cancel-latency results table. The handoff preserves that existing main
+documentation. Do not push to the copy's local origin expecting a PR update.
 
 ```sh
 git log --oneline origin/main..HEAD
@@ -26,10 +28,10 @@ git diff origin/main...HEAD -- crates/how-far crates/how-far-along crates/how-fa
 ```
 
 These comparisons include the full implementation and the handoff documentation.
-The implementation before the docs refresh changes 140 files, with 21,702 added
-and 19 removed lines versus the recorded main base. Most additions are new
-crates, tests, examples, fixtures and measurements. Review the substance rather
-than treating that line count as an API-size target.
+Most additions are new crates, tests, examples, fixtures and measurements.
+The copy's merge base is now `6bd6b96`, so the PR-style three-dot comparison and
+the endpoint comparison against recorded main agree on the intended file delta.
+Refresh remote main before landing and preserve any newer unrelated changes.
 
 ## Branches, PR and concurrent work
 
@@ -188,6 +190,9 @@ erase those limitations or claim codec parity from these progress experiments.
 On 2026-10-05 the session permits writes only in `/home/lilith/work/enough` and
 `/tmp`, with the original `.git` read-only. Hence the docs refresh is in the
 writable copy, and a patch is saved in the original checkout's docs directory.
+That patch applies to source head `a1d0286` and includes the existing main table
+along with the documentation refresh. It does not overwrite the dirty main
+checkout or commit the zenav1-svt experiment.
 The Herdr socket call was denied by the sandbox, so no new Opus tab was created.
 `/home/lilith/work/enough/dev/launch-how-far-opus.py` is a prepared user-run launcher for a new tab in
 the copy, selecting `--model opus --effort xhigh`. It does not auto-answer a
