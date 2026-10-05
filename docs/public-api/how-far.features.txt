@@ -1,0 +1,51 @@
+# how-far public API — additions from non-default features
+# features: adapters,checked
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub types (struct/enum/trait/alias)         3
+#   inherent methods                           11
+#   enum variants                               2
+#   trait roster entries (type × trait)        11
+#   auto-trait exceptions                       3
+#
+# per-module pub lines:
+#   (root)                           16
+
+## items (16 lines)
+
+#[non_exhaustive] pub enum RunError<E>
+pub RunError::Plan(PlanError)
+pub RunError::Work(E)
+pub struct TryStages<'a>
+pub fn TryStages<'a>::finish(self) -> core::result::Result<(), PlanError>
+pub fn TryStages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> core::result::Result<Self, PlanError>
+pub fn TryStages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn TryStages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, RunError<E>>
+pub fn TryStages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, RunError<E>>) -> core::result::Result<T, RunError<E>>
+pub fn TryStages<'a>::run_stoppable<T>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, enough::reason::StopReason>) -> core::result::Result<T, RunError<enough::reason::StopReason>>
+pub fn TryStages<'a>::skip(&mut self) -> core::result::Result<(), PlanError>
+pub struct WithStop<'a>
+pub fn WithStop<'a>::borrowed(&'a dyn Pulse, &'a dyn enough::Stop) -> Self
+pub fn WithStop<'a>::new(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
+pub fn WithStop<'a>::replacing(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
+pub fn WithStop<'a>::replacing_borrowed(&'a dyn Pulse, &'a dyn enough::Stop) -> Self
+
+## trait impls (3 types)
+
+RunError<E>: Debug, Display, Eq, Error, From<PlanError>, PartialEq
+TryStages<'_>: Debug
+WithStop<'_>: ChildPulse, Pulse, Report, enough::Stop
+
+## auto traits
+
+0 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+RunError<E>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+TryStages<'a>: !RefUnwindSafe !UnwindSafe
+WithStop<'a>: !RefUnwindSafe !UnwindSafe

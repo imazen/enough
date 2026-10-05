@@ -1,0 +1,45 @@
+# how-far-along public API — additions from non-default features
+# features: adapters,callback,json,std
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub types (struct/enum/trait/alias)         2
+#   inherent methods                           10
+#   re-exports                                  1
+#   trait roster entries (type × trait)         5
+#   auto-trait-complete types                   1
+#   auto-trait exceptions                       1
+#
+# per-module pub lines:
+#   (root)                           13
+
+## items (13 lines)
+
+pub use WithStop
+pub struct Checkpoint<'a>
+pub fn Checkpoint<'_>::phase_id(&self) -> NodeId
+pub fn Checkpoint<'_>::phase_name(&self) -> &str
+pub fn Checkpoint<'_>::snapshot(&self) -> Snapshot
+pub fn Checkpoint<'_>::summary(&self) -> Summary
+pub fn Checkpoint<'_>::try_snapshot(&self) -> core::option::Option<Snapshot>
+pub fn Checkpoint<'_>::try_summary(&self) -> core::option::Option<Summary>
+pub struct FnPulse
+pub fn FnPulse::finish(self, how_far::pulse::Outcome) -> core::result::Result<(), how_far::pulse::PlanError>
+pub fn FnPulse::new(&str, impl core::ops::function::Fn(&Checkpoint<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn FnPulse::observer(&self) -> Observer
+pub fn FnPulse::with_phase(Phase, impl core::ops::function::Fn(&Checkpoint<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
+
+## trait impls (1 types)
+
+FnPulse: Debug, enough::Stop, how_far::completion::Complete, how_far::pulse::Pulse, how_far::report::Report
+
+## auto traits
+
+1 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+FnPulse: !RefUnwindSafe !UnwindSafe

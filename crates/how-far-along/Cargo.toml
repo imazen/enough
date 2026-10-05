@@ -1,0 +1,47 @@
+[package]
+name = "how-far-along"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+description = "Tracking and observation for cooperative progress and cancellation"
+keywords = ["progress", "cancellation", "no_std"]
+categories = ["concurrency", "no-std"]
+
+[features]
+# Features are additive: they add items and fields and never remove or retype any.
+default = ["std", "json"]
+std = ["enough/std"]
+callback = []
+adapters = ["how-far/adapters"]
+json = []
+
+[dependencies]
+enough = { workspace = true, features = ["alloc"] }
+how-far.workspace = true
+critical-section = "1.2"
+
+[dev-dependencies]
+how-far = { workspace = true, features = ["checked"] }
+critical-section = { version = "1.2", features = ["std"] }
+almost-enough.workspace = true
+rayon = "1.12.0"
+tokio = { version = "1.53.1", features = ["rt", "sync"] }
+zenbench = { workspace = true }
+
+[[example]]
+name = "phases"
+required-features = ["std"]
+
+[[bench]]
+name = "overhead"
+harness = false
+required-features = ["std"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[example]]
+name = "contention"
+required-features = ["std"]

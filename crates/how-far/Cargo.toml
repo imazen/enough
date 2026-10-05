@@ -1,0 +1,20 @@
+[package]
+name = "how-far"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+description = "Cancellation, progress, and weighted phases through one interface for library authors"
+keywords = ["progress", "cancellation", "no_std"]
+categories = ["concurrency", "no-std"]
+
+[features]
+# Only convenience implementations; Pulse and its behavior never vary.
+adapters = []
+# Explicitly fallible legacy plan runner; normal Results need no wrapper.
+checked = []
+
+[dependencies]
+# `alloc` gives `Arc<dyn Stop>` its `Stop` impl, which `PulseHandle` relies on.
+enough = { workspace = true, features = ["alloc"] }

@@ -25,13 +25,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, 1.85]
+        rust: [stable, '1.85']
         exclude:
           # MSRV only on Linux
           - os: windows-latest
-            rust: 1.85
+            rust: '1.85'
           - os: macos-latest
-            rust: 1.85
+            rust: '1.85'
 
     steps:
       - uses: actions/checkout@v6
@@ -44,7 +44,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --workspace
+        if: matrix.rust == 'stable'
+        run: cargo test --workspace --all-features
+
+      # enough and almost-enough need 1.85; the how-far crates share 1.88
+      # and are tested at it in the how-far job.
+      - name: Test at the 1.85 MSRV
+        if: matrix.rust == '1.85'
+        run: >-
+          cargo test --workspace --exclude how-far --exclude how-far-along --exclude how-far-really
+          --exclude how-far-example-codec --exclude how-far-example-pipeline --exclude how-far-example-app
+          --exclude test-how-far-codec --exclude test-how-far-pipeline --exclude test-how-far-app
 
       - name: Test (no default features)
         run: |
@@ -79,7 +89,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
 
   # ==========================================================================
   # Cross-compiled 32-bit testing (i686 via QEMU)
@@ -103,7 +113,7 @@ jobs:
           key: cross-i686
 
       - name: Test (i686/QEMU)
-        run: cross test --workspace --target i686-unknown-linux-gnu
+        run: cross test --workspace --all-features --target i686-unknown-linux-gnu
 
   # ==========================================================================
   # no_std and WASM build verification
@@ -133,6 +143,15 @@ jobs:
       - name: Build WASM (almost-enough)
         run: cargo build -p almost-enough --target wasm32-unknown-unknown --no-default-features --features alloc
 
+      - name: Build both progress crates without std (alloc, WASM)
+        run: |
+          cargo build -p how-far --target thumbv7em-none-eabihf
+          cargo build -p how-far --target wasm32-unknown-unknown
+          cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features
+          cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features
+          cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features --features callback,adapters,json
+          cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features --features callback,adapters,json
+
   # ==========================================================================
   # Feature powerset — verify all feature combinations compile
   # ==========================================================================
@@ -151,7 +170,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check feature powerset
-        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough
+        run: cargo hack check --feature-powerset --no-dev-deps -p enough -p almost-enough -p how-far -p how-far-along -p how-far-really
 
   # ==========================================================================
   # Semver — catch accidental breaking changes
@@ -176,6 +195,9 @@ jobs:
       - name: Check semver (almost-enough)
         run: cargo semver-checks -p almost-enough
 
+      # how-far and how-far-along have no published baseline yet; add
+      # `cargo semver-checks -p how-far -p how-far-along` after their first release.
+
   # ==========================================================================
   # Miri — check unsafe code soundness (enough-ffi)
   # ==========================================================================
@@ -196,6 +218,83 @@ jobs:
         run: cargo +nightly miri test -p enough-ffi
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
+
+      - name: Run Miri (how-far-along metadata replacement and snapshots)
+        run: |
+          cargo +nightly miri test -p how-far-along --lib
+          cargo +nightly miri test -p how-far-along --test phases snapshots_during_metadata_publication
+          cargo +nightly miri test -p how-far-along --all-features --test redesign root_abandonment_racing
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+
+  how-far:
+    name: how-far MSRV (1.88) and instrumentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo test -p how-far --all-features
+          cargo test -p test-how-far-codec -p test-how-far-pipeline -p test-how-far-app
+          cargo test -p how-far-along --all-features
+          cargo test -p how-far-really
+          cargo run -p how-far-really --example diagnostics
+          cargo test -p how-far-example-app
+          cargo test -p how-far-along --no-default-features
+      - name: Verify interface boundary and report cold builds
+        run: python3 dev/bench-how-far-build.py --runs 3
+      - name: Build the checkpoint-cost harness
+        run: cargo build --release --manifest-path dev/how-far-checkpoint-cost/Cargo.toml
+
+  how-far-wasm:
+    name: how-far WASM host boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      - run: cargo build --manifest-path dev/how-far-wasm/Cargo.toml --target wasm32-unknown-unknown
+      - run: node dev/how-far-wasm/check.mjs
+
+  how-far-browser:
+    name: how-far browser Rayon / UI (Chromium + WebKit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # The consumer's threaded WASM build requires nightly/build-std. The
+      # libraries stay on stable: the how-far crates on 1.88.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-02
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dev/how-far-browser
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: dev/how-far-browser/package-lock.json
+      - name: Install matching bindings CLI
+        run: RUSTFLAGS='' cargo +stable install wasm-bindgen-cli --version 0.2.123 --locked
+      - run: bash dev/how-far-browser/build.sh
+      - run: cargo +stable build --manifest-path dev/how-far-wasm/Cargo.toml --target wasm32-unknown-unknown
+      - name: Browser tests with real workers and shared Wasm memory
+        working-directory: dev/how-far-browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+          npm test
 
   # ==========================================================================
   # Dependency audit — licenses and advisories
@@ -249,7 +348,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build docs
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -270,7 +369,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5

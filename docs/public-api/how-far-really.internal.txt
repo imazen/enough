@@ -1,0 +1,34 @@
+# how-far-really public API — doc(hidden) items and excluded-feature surface
+# excluded features: (none)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   inherent methods                            5
+#   trait roster entries (type × trait)         6
+#
+# per-module pub lines:
+#   diagnostics                       2
+#   profile                           3
+
+## items (5 lines)
+
+pub fn diagnostics::Kind::assert_fields_are_eq(&self)
+pub fn diagnostics::Problem::assert_fields_are_eq(&self)
+pub fn profile::SourceSite::assert_fields_are_eq(&self)
+pub fn profile::SpanId::assert_fields_are_eq(&self)
+pub fn profile::SpanKind::assert_fields_are_eq(&self)
+
+## trait impls (6 types)
+
+diagnostics::Kind: TrivialClone
+diagnostics::Problem: TrivialClone
+profile::SourceSite: TrivialClone
+profile::SpanId: TrivialClone
+profile::SpanKind: TrivialClone
+profile::StdClock: TrivialClone

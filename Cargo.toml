@@ -1,10 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
+    "examples/how-far-codec",
+    "examples/how-far-pipeline",
+    "examples/how-far-app",
     "crates/enough",
     "crates/almost-enough",
     "crates/enough-tokio",
     "crates/enough-ffi",
+    "crates/how-far",
+    "crates/how-far-along",
+    "crates/how-far-really",
     "tests/test-basic",
     "tests/test-atomic",
     "tests/test-timeout",
@@ -15,11 +21,14 @@ members = [
     "tests/test-codec-mock",
     "tests/test-ergonomics",
     "tests/test-or-do-this",
+    "tests/test-how-far-codec",
+    "tests/test-how-far-pipeline",
+    "tests/test-how-far-app",
 ]
 # `apidoc/` is the CI-free public-API snapshot runner: excluded so plain
 # `cargo test` and every CI job (incl. --all-features) never compile its
 # dependency tree or run rustdoc. Regenerate via `just api-doc`.
-exclude = ["apidoc", "dev/cancel-latency"]
+exclude = ["apidoc", "dev/cancel-latency", "dev/how-far-checkpoint-cost", "dev/how-far-wasm", "dev/how-far-browser"]
 
 [workspace.package]
 version = "0.4.4"
@@ -37,3 +46,7 @@ zenbench = "0.1.6"
 # enough-tokio and enough-ffi have independent versioning
 enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }
+how-far = { version = "0.1.0", path = "crates/how-far" }
+how-far-along = { path = "crates/how-far-along", default-features = false }
+
+how-far-really = { path = "crates/how-far-really" }

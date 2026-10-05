@@ -1,0 +1,19 @@
+[package]
+name = "how-far-browser-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+how-far = { path = "../../crates/how-far" }
+how-far-really = { path = "../../crates/how-far-really" }
+almost-enough = { path = "../../crates/almost-enough" }
+how-far-along = { path = "../../crates/how-far-along", features = ["std", "json"] }
+rayon = "1.10"
+# Match zenpipe/demo's binding and worker adapter versions. Test-only dependencies.
+wasm-bindgen = "=0.2.123"
+wasm-bindgen-rayon = { version = "1.3", features = ["no-bundler"] }

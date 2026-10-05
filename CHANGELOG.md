@@ -2,7 +2,49 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+<!-- Breaks that will ship together in one leading-digit bump. None queued. -->
+
 ### Added
+
+- `how-far` (new crate; Rust 1.88, `no_std + alloc`, depends only on `enough`):
+  the object-safe `&dyn Pulse` library interface for cancellation, completed
+  units, and nested weighted phases. `Stages` and `Phases` preserve ordinary
+  library results; consuming `Complete` / `ResultExt::finish_phase` handoffs
+  close the owners without changing the original value or error;
+  `Complete::complete_with` runs a multi-step body so an early `?` still
+  reaches the handoff; `complete_with_classified` does so for foreign error
+  wrappers. `StopOnly` turns an application's cancellation token
+  into a pulse without features or a tracker. A library implements `IsStop`
+  for its error so owners record cancellation as `Cancelled`; forgetting it is
+  a compile error that names the fix. Works with published `enough` 0.4.4. Cancellation
+  classification borrows errors. Shared views preserve planning and total
+  revisions but never own completion. `Paced::finish` flushes and checks the
+  final batch. Optional `adapters` adds stop composition; `checked` adds the
+  explicit legacy `TryStages` / `RunError` interface.
+- `how-far-along` (new crate; Rust 1.88, `no_std + alloc`): tracking trees,
+  allocation-free summaries, full snapshots, and host-driven pollers. Defaults
+  are `std,json`; the optional `callback` feature adds `FnPulse` with lazy
+  checkpoint observations. Checks may dispatch callbacks; reports, completion,
+  and Drop only update accounting. Failed attempts remain visible under a
+  successful recovered parent; prevented work is `NotRun`, unnecessary work is
+  `Skipped`, and missing result handoffs are `Abandoned`. JSON schema 2 records
+  terminal states and inferred-completion provenance.
+- `how-far-really` (new crate; Rust 1.88, `std`): bounded opt-in profiling and
+  diagnostics, source-line checkpoint/report gaps, independent call-frequency
+  hints, callback duration and cadence targets (10 ms by default), cancellation
+  latency, protocol incidents, and candidate sequential stage weights.
+  It has no public core/tracker re-exports and neither library crate depends
+  on it. Negligible stages keep their planned weights in one-run advice.
+- Cross-crate examples and tests cover nested library results, owned and scoped
+  workers, Rayon, consumer polling, optional stop composition, and diagnostics
+  that preserve library results. Browser fixtures exercise worker-owned Rayon
+  with UI observation/cancellation in Chromium and Playwright WebKit. An isolated
+  zenpng fixture validates feature-gated adoption in existing codec loops.
+- Build guards bound per-call-site core code generation and separately bound
+  tracker and diagnostic compiled code. Current measurements and their scope
+  are recorded in [the validation report](benchmarks/howfar-results-validation.md).
 
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
