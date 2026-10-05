@@ -8,7 +8,7 @@
 
 ### Added
 
-- `how-far` (new crate; Rust 1.86, `no_std + alloc`, depends only on `enough`):
+- `how-far` (new crate; Rust 1.88, `no_std + alloc`, depends only on `enough`):
   the object-safe `&dyn Pulse` library interface for cancellation, completed
   units, and nested weighted phases. `Stages` and `Phases` preserve ordinary
   library results; consuming `Complete` / `ResultExt::finish_phase` handoffs

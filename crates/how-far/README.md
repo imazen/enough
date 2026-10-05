@@ -3,7 +3,8 @@
 A small `no_std + alloc` protocol for cooperative cancellation and approximate
 progress. Libraries accept `&dyn Pulse` and return their own ordinary `Result`.
 No tracker, clock, executor, serialization, or diagnostic collector is required.
-Rust 1.86; pointer atomics and an allocator are required.
+Rust 1.88, like the other how-far crates; pointer atomics and an allocator are
+required.
 
 ```rust
 use how_far::{prelude::*, PhaseSpec, Stages, StopReason, Total};

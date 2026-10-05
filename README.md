@@ -185,7 +185,7 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
-| [`how-far`](https://github.com/imazen/enough/blob/main/crates/how-far/README.md) | Cancellation, progress, and weighted phases through one interface for libraries (`no_std + alloc`, Rust 1.86) |
+| [`how-far`](https://github.com/imazen/enough/blob/main/crates/how-far/README.md) | Cancellation, progress, and weighted phases through one interface for libraries (`no_std + alloc`, Rust 1.88) |
 | [`how-far-along`](https://github.com/imazen/enough/blob/main/crates/how-far-along/README.md) | Progress trees, observers, pollers, and optional checkpoint callbacks (`no_std + alloc`, Rust 1.88) |
 | [`how-far-really`](https://github.com/imazen/enough/blob/main/crates/how-far-really/README.md) | Opt-in profiling, checkpoint cadence, and progress diagnostics for tests and consumers (`std`, Rust 1.88) |
 
