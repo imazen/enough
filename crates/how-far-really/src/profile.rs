@@ -419,8 +419,8 @@ impl Profiler {
             .next_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
-            })
-            .unwrap_or(usize::MAX);
+            });
+        let (Ok(id) | Err(id)) = id;
         let now = self.inner.clock.now();
         let start = match entered {
             Some(at) => at.min(now),

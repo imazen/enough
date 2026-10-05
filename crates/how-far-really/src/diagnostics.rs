@@ -315,6 +315,15 @@ struct SpanSlot {
     /// a finished span, which ignores them, instead of opening one that never ends.
     last: Option<Arc<SpanInner>>,
 }
+impl SpanSlot {
+    /// Finish the open span, keeping it for late calls.
+    fn retire(&mut self, outcome: Outcome) {
+        if let Some(span) = self.open.take() {
+            self.last = Some(span.shared());
+            span.finish(outcome);
+        }
+    }
+}
 
 impl Meter {
     /// `inner.check()`, recorded in this phase's span while it has one.
@@ -397,27 +406,21 @@ impl Meter {
         if self.closed.load(Ordering::Acquire) || self.has_children.swap(true, Ordering::Relaxed) {
             return;
         }
-        let now = self.profiler.now();
-        let segment = match slot.open.take() {
-            Some(span) => Some(span),
-            // Work before the split without a checkpoint still took time.
-            None => match &self.entered {
-                Some(entered) if *entered.lock() < now => Some(self.start_span()),
-                _ => None,
-            },
+        let Some(entered) = &self.entered else {
+            slot.retire(Outcome::Succeeded);
+            return;
         };
-        if let Some(segment) = segment {
-            slot.last = Some(segment.shared());
-            segment.finish(Outcome::Succeeded);
+        let now = self.profiler.now();
+        // Work before the split without a checkpoint still took time.
+        if slot.open.is_none() && *entered.lock() < now {
+            slot.open = Some(self.start_span());
         }
-        if self.entered.is_some() {
-            slot.open = Some(self.profiler.span_from(
-                Some(self.node),
-                self.name.clone(),
-                SpanKind::Wait,
-                now,
-            ));
-        }
+        slot.retire(Outcome::Succeeded);
+        slot.open =
+            Some(
+                self.profiler
+                    .span_from(Some(self.node), self.name.clone(), SpanKind::Wait, now),
+            );
     }
 
     fn split<'s>(
@@ -477,10 +480,7 @@ impl Meter {
             // A leaf stage with no checkpoint still took time.
             slot.open = Some(self.start_span());
         }
-        if let Some(span) = slot.open.take() {
-            slot.last = Some(span.shared());
-            span.finish(outcome);
-        }
+        slot.retire(outcome);
         drop(slot);
         if let Some(exited) = &self.exited {
             // Read after the span closed, so the next stage never starts first.
@@ -928,14 +928,14 @@ struct CallbackGroup<'a> {
 
 /// When any work ran: the union of Work spans, merged into disjoint windows.
 fn busy_windows(trace: &Trace) -> Vec<(Duration, Duration)> {
-    let work: Vec<_> = trace
-        .spans
-        .iter()
-        .filter(|span| span.kind == SpanKind::Work)
-        .map(|span| (span.start, span.end))
-        .collect();
+    let mut work: Vec<(Duration, Duration)> = Vec::new();
+    for span in &trace.spans {
+        if span.kind == SpanKind::Work {
+            work.push((span.start, span.end));
+        }
+    }
     let mut merged: Vec<(Duration, Duration)> = Vec::new();
-    for index in sorted_indices(work.len(), &|a, b| work[a].0.cmp(&work[b].0)) {
+    for &index in &sorted_indices(work.len(), &|a, b| work[a].0.cmp(&work[b].0)) {
         let (start, end) = work[index];
         match merged.last_mut() {
             Some(last) if start <= last.1 => last.1 = last.1.max(end),
@@ -943,6 +943,16 @@ fn busy_windows(trace: &Trace) -> Vec<(Duration, Duration)> {
         }
     }
     merged
+}
+
+/// Whether one busy window holds the whole interval from `from` to `to`.
+fn within(windows: &[(Duration, Duration)], from: Duration, to: Duration) -> bool {
+    for &(start, end) in windows {
+        if start <= from && to <= end {
+            return true;
+        }
+    }
+    false
 }
 
 fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Finding>) {
@@ -971,7 +981,7 @@ fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Findin
         for pair in by_start.windows(2) {
             let (from, to) = (samples[pair[0]].0, samples[pair[1]].0);
             // Idle time between operations is not a missed callback.
-            if !busy.is_empty() && !busy.iter().any(|&(start, end)| start <= from && to <= end) {
+            if !busy.is_empty() && !within(&busy, from, to) {
                 continue;
             }
             let gap = to.saturating_sub(from);
@@ -1131,25 +1141,27 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
     // declared weight instead of being calibrated to a near-zero share, unless
     // the held stages together would own more than half the bar, which
     // negligible work cannot justify. Smaller planned shares are held first.
-    let mut frozen = vec![false; children.len()];
+    // One bit per stage; a sequence has at most 100.
+    let mut frozen = 0_u128;
+    let is_frozen = |frozen: u128, index: usize| frozen >> index & 1 == 1;
     let mut frozen_mass = 0.0;
     let negligible = sorted_indices(children.len(), &|a, b| declared[a].total_cmp(&declared[b]));
-    for index in negligible {
+    for &index in &negligible {
         if shares[index] < options.negligible_stage_share && frozen_mass + declared[index] <= 0.5 {
-            frozen[index] = true;
+            frozen |= 1 << index;
             frozen_mass += declared[index];
         }
     }
     let mut free_measured = 0.0;
-    for (share, held) in shares.iter().zip(&frozen) {
-        if !held {
+    for (index, share) in shares.iter().enumerate() {
+        if !is_frozen(frozen, index) {
             free_measured += share;
         }
     }
     let mut candidate = Vec::with_capacity(children.len());
     let mut biggest_difference = 0.0_f64;
     for i in 0..shares.len() {
-        if frozen[i] {
+        if is_frozen(frozen, i) {
             candidate.push(declared[i]);
         } else {
             let value = (1.0 - frozen_mass) * shares[i] / free_measured;
@@ -1166,7 +1178,7 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
     let mut planned = Vec::with_capacity(children.len());
     let mut code = String::from("[\n");
     for (i, child) in children.iter().enumerate() {
-        if frozen[i] {
+        if is_frozen(frozen, i) {
             held.push(child.name.as_str());
         }
         planned.push(child.weight);
