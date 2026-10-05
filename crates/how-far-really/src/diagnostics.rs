@@ -23,8 +23,8 @@
 
 use crate::{
     profile::{
-        Instrumented, Profiler, SiteStats, SourceSite, Span, SpanInner, SpanKind, SpanRecord,
-        Trace, advanced, checked, sorted_indices,
+        Profiler, SiteStats, SourceSite, Span, SpanInner, SpanKind, SpanRecord, Trace, advanced,
+        checked, sorted_indices,
     },
     sync::Mutex,
 };
@@ -66,8 +66,8 @@ pub struct Options {
     pub weight_difference: f64,
     /// A stage that took less than this share of the sequence's time is too
     /// small to calibrate from one run (a flush that is trivial for this input
-    /// may not be for the next). It keeps its declared weight and cannot
-    /// trigger weight advice on its own.
+    /// may not be for the next). It keeps its declared weight, as long as the
+    /// stages held this way together own at most half the bar.
     pub negligible_stage_share: f64,
 }
 impl Default for Options {
@@ -216,6 +216,11 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 /// span. Workers that share one phase share its span; give each worker its
 /// own [`Span`] when one worker's long silence matters.
 ///
+/// A phase that splits hands its time to its children: its own span ends at
+/// the split, and a sequential stage then records a [`SpanKind::Wait`] span
+/// while it coordinates them. A stage is thereby timed from entry to exit,
+/// and its children's work never counts as its own missing checkpoints.
+///
 /// [`Pulse::handle`] returns an instrumented handle, so checks made inside
 /// code that owns its stop policy, such as a codec context, count toward the
 /// stage that handed it out. `may_stop` and `may_report` are always `true`, so
@@ -240,14 +245,13 @@ impl DiagnosticPulse {
     pub fn new(tree: PulseTree, profiler: &Profiler) -> Self {
         profiler.set_report_timing(true);
         let observer = tree.observer();
-        let snapshot = observer.snapshot();
         Self {
             meter: MeterOwner(Arc::new(Meter {
+                node: observer.id(),
+                name: observer.name().into(),
                 observer,
                 profiler: profiler.clone(),
-                node: snapshot.id,
-                name: snapshot.name,
-                span: Mutex::new(None),
+                span: Mutex::new(SpanSlot::default()),
                 entered: None,
                 exited: None,
                 has_children: AtomicBool::new(false),
@@ -289,11 +293,12 @@ impl Drop for MeterOwner {
     }
 }
 struct Meter {
+    /// This phase's own node, not the root's.
     observer: Observer,
     profiler: Profiler,
     node: NodeId,
     name: String,
-    span: Mutex<Option<Span>>,
+    span: Mutex<SpanSlot>,
     /// A sequential stage: when it was entered (the previous stage's end).
     entered: Option<Arc<Mutex<Duration>>>,
     /// A sequential stage: where the next stage reads its entry time.
@@ -303,7 +308,33 @@ struct Meter {
     closed: AtomicBool,
 }
 
+/// The span this phase records into now, and the last one it closed.
+#[derive(Default)]
+struct SpanSlot {
+    open: Option<Span>,
+    /// Kept after close: late calls through retained views or handles land in
+    /// a finished span, which ignores them, instead of opening one that never ends.
+    last: Option<Arc<SpanInner>>,
+}
+
 impl Meter {
+    /// `inner.check()`, recorded in this phase's span while it has one.
+    #[track_caller]
+    fn check(&self, inner: &dyn Stop) -> Result<(), StopReason> {
+        match self.span() {
+            Some(span) => checked(&span, inner),
+            None => inner.check(),
+        }
+    }
+    /// `inner.advance(n)`, recorded like [`Self::check`].
+    #[track_caller]
+    fn advance(&self, inner: &dyn Report, completed: u64) {
+        self.reporting(completed);
+        match self.span() {
+            Some(span) => advanced(&span, inner, completed),
+            None => inner.advance(completed),
+        }
+    }
     #[track_caller]
     fn issue(&self, problem: Problem) {
         let at = core::panic::Location::caller();
@@ -341,16 +372,53 @@ impl Meter {
         }
     }
 
-    /// This phase's span, started at its first checkpoint.
-    fn span(&self) -> Arc<SpanInner> {
-        let mut owner = self.span.lock();
-        let span = match owner.take() {
-            Some(span) => span,
-            None => self.start_span(),
-        };
+    /// This phase's span, started at its first checkpoint. After the phase
+    /// closed, the span it closed, if any.
+    fn span(&self) -> Option<Arc<SpanInner>> {
+        let mut slot = self.span.lock();
+        if let Some(span) = &slot.open {
+            return Some(span.shared());
+        }
+        if self.closed.load(Ordering::Acquire) {
+            return slot.last.clone();
+        }
+        let span = self.start_span();
         let shared = span.shared();
-        *owner = Some(span);
-        shared
+        slot.open = Some(span);
+        Some(shared)
+    }
+
+    /// The phase now delegates its time to children. Time spent before the
+    /// split is a segment of its own work, timed from entry for a sequential
+    /// stage. A sequential stage's remaining time, coordinating its children,
+    /// becomes a `Wait` span, so the stage is timed from entry to exit without
+    /// treating the children's work as its own silence.
+    fn delegate(&self) {
+        let mut slot = self.span.lock();
+        if self.closed.load(Ordering::Acquire) || self.has_children.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let now = self.profiler.now();
+        let segment = match slot.open.take() {
+            Some(span) => Some(span),
+            // Work before the split without a checkpoint still took time.
+            None => match &self.entered {
+                Some(entered) if *entered.lock() < now => Some(self.start_span()),
+                _ => None,
+            },
+        };
+        if let Some(segment) = segment {
+            slot.last = Some(segment.shared());
+            segment.finish(Outcome::Succeeded);
+        }
+        if self.entered.is_some() {
+            slot.open = Some(self.profiler.span_from(
+                Some(self.node),
+                self.name.clone(),
+                SpanKind::Wait,
+                now,
+            ));
+        }
     }
 
     fn split<'s>(
@@ -360,12 +428,8 @@ impl Meter {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'s>>, PlanError> {
         let children = inner.split(execution, parts)?;
-        self.has_children.store(true, Ordering::Relaxed);
-        let snapshot = self.observer.snapshot();
-        let nodes = match find_node(&snapshot, self.node) {
-            Some(node) => &node.children[..],
-            None => &[],
-        };
+        self.delegate();
+        let nodes = self.observer.children();
         // cells[i] is stage i's entry and stage i-1's exit.
         let mut cells = Vec::new();
         if execution == Execution::Sequence {
@@ -379,14 +443,18 @@ impl Meter {
             measured.push(Child::new(DiagnosticChild {
                 inner: child,
                 meter: MeterOwner(Arc::new(Meter {
-                    observer: self.observer.clone(),
+                    // A sink with no node per part keeps measuring this one.
+                    observer: match nodes.get(index) {
+                        Some(node) => node.clone(),
+                        None => self.observer.clone(),
+                    },
                     profiler: self.profiler.clone(),
                     node: match nodes.get(index) {
-                        Some(node) => node.id,
+                        Some(node) => node.id(),
                         None => self.node,
                     },
                     name: parts[index].name.into(),
-                    span: Mutex::new(None),
+                    span: Mutex::new(SpanSlot::default()),
                     entered: cells.get(index).cloned(),
                     exited: cells.get(index + 1).cloned(),
                     has_children: AtomicBool::new(false),
@@ -399,13 +467,14 @@ impl Meter {
 
     fn handle(self: &Arc<Self>, inner: &dyn Pulse) -> PulseHandle {
         let handle = inner.handle();
-        let span = self.span();
         ProgressWithStop::new(
-            Some(Arc::new(Instrumented::new(handle.stop, Arc::clone(&span))) as Arc<dyn Stop>),
-            Some(Arc::new(DiagnosticReport {
+            Some(Arc::new(Metered {
+                inner: handle.stop,
+                meter: Arc::clone(self),
+            }) as Arc<dyn Stop>),
+            Some(Arc::new(Metered {
                 inner: handle.report,
-                meter: self.clone(),
-                span,
+                meter: Arc::clone(self),
             }) as Arc<dyn Report>),
         )
     }
@@ -414,19 +483,20 @@ impl Meter {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        let mut owner = self.span.lock();
-        if owner.is_none()
+        let mut slot = self.span.lock();
+        if slot.open.is_none()
             && outcome == Outcome::Succeeded
             && self.entered.is_some()
             && !self.has_children.load(Ordering::Relaxed)
         {
             // A leaf stage with no checkpoint still took time.
-            *owner = Some(self.start_span());
+            slot.open = Some(self.start_span());
         }
-        if let Some(span) = owner.take() {
+        if let Some(span) = slot.open.take() {
+            slot.last = Some(span.shared());
             span.finish(outcome);
         }
-        drop(owner);
+        drop(slot);
         if let Some(exited) = &self.exited {
             // Read after the span closed, so the next stage never starts first.
             *exited.lock() = self.profiler.now();
@@ -449,7 +519,7 @@ fn find_node(snapshot: &Snapshot, id: NodeId) -> Option<&Snapshot> {
 impl Stop for DiagnosticPulse {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        checked(&self.meter.span(), &self.tree)
+        self.meter.check(&self.tree)
     }
     fn may_stop(&self) -> bool {
         true
@@ -459,8 +529,7 @@ impl Stop for DiagnosticPulse {
 impl Report for DiagnosticPulse {
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.meter.reporting(completed);
-        advanced(&self.meter.span(), &self.tree, completed);
+        self.meter.advance(&self.tree, completed);
     }
     fn may_report(&self) -> bool {
         true
@@ -486,10 +555,9 @@ impl Pulse for DiagnosticPulse {
         self.tree.start()
     }
     fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(DiagnosticView {
+        Ok(how_far::SharedPulse::new(Metered {
             inner: self.tree.share()?,
             meter: Arc::clone(&self.meter.0),
-            span: self.meter.span(),
         }))
     }
     fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
@@ -506,7 +574,7 @@ struct DiagnosticChild<'a> {
 impl Stop for DiagnosticChild<'_> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        checked(&self.meter.span(), &self.inner)
+        self.meter.check(&self.inner)
     }
     fn may_stop(&self) -> bool {
         true
@@ -516,8 +584,7 @@ impl Stop for DiagnosticChild<'_> {
 impl Report for DiagnosticChild<'_> {
     #[track_caller]
     fn advance(&self, completed: u64) {
-        self.meter.reporting(completed);
-        advanced(&self.meter.span(), &self.inner, completed);
+        self.meter.advance(&self.inner, completed);
     }
     fn may_report(&self) -> bool {
         true
@@ -543,10 +610,9 @@ impl Pulse for DiagnosticChild<'_> {
         self.inner.start()
     }
     fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(DiagnosticView {
+        Ok(how_far::SharedPulse::new(Metered {
             inner: self.inner.share()?,
             meter: Arc::clone(&self.meter.0),
-            span: self.meter.span(),
         }))
     }
     fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
@@ -578,33 +644,33 @@ impl ChildPulse for DiagnosticChild<'_> {
     }
 }
 
-// A non-owning measurement view keeps the original span, including after close.
-// SpanInner ignores late measurements; dropping this view never ends the span.
-struct DiagnosticView {
-    inner: how_far::SharedPulse,
+// An owned, non-owning view of one phase: a shared pulse, or a legacy handle's
+// stop or sink. Each call records into whatever span the phase has now, so a
+// view retained past a split or the phase's close records consistently, and
+// dropping it never ends a span.
+struct Metered<T> {
+    inner: T,
     meter: Arc<Meter>,
-    span: Arc<SpanInner>,
 }
-impl Stop for DiagnosticView {
+impl<T: Stop> Stop for Metered<T> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        checked(&self.span, &self.inner)
+        self.meter.check(&self.inner)
     }
     fn may_stop(&self) -> bool {
         true
     }
 }
-impl Report for DiagnosticView {
+impl<T: Report> Report for Metered<T> {
     #[track_caller]
     fn advance(&self, n: u64) {
-        self.meter.reporting(n);
-        advanced(&self.span, &self.inner, n)
+        self.meter.advance(&self.inner, n);
     }
     fn may_report(&self) -> bool {
         true
     }
 }
-impl Pulse for DiagnosticView {
+impl Pulse for Metered<how_far::SharedPulse> {
     #[track_caller]
     fn record_issue(&self, error: PlanError) {
         self.meter.issue(Problem::Plan(error));
@@ -624,26 +690,8 @@ impl Pulse for DiagnosticView {
     fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
         Ok(how_far::SharedPulse::new(Self {
             inner: self.inner.clone(),
-            meter: self.meter.clone(),
-            span: self.span.clone(),
+            meter: Arc::clone(&self.meter),
         }))
-    }
-}
-
-// Legacy owned reporting handles must retain misuse evidence too.
-struct DiagnosticReport {
-    inner: Option<Arc<dyn Report>>,
-    meter: Arc<Meter>,
-    span: Arc<SpanInner>,
-}
-impl Report for DiagnosticReport {
-    #[track_caller]
-    fn advance(&self, n: u64) {
-        self.meter.reporting(n);
-        advanced(&self.span, &self.inner, n);
-    }
-    fn may_report(&self) -> bool {
-        true
     }
 }
 
@@ -675,7 +723,11 @@ impl Trace {
         if let Some(root) = &self.progress {
             lifecycle_findings(root, false, &mut findings);
         }
-        if self.cancelled_at.is_some() && self.returned_at.is_some() && self.observed_at.is_none() {
+        // A request after the operation returned had nothing left to stop.
+        if let (Some(cancelled), Some(returned)) = (self.cancelled_at, self.returned_at)
+            && cancelled <= returned
+            && self.observed_at.is_none()
+        {
             findings.push(Finding { kind: Kind::UnobservedCancellation,
                 evidence: "host recorded cancellation and operation return, but no instrumented checkpoint observed the stop".into(),
                 advice: "Check at entry and finish the final paced batch. A request racing completion or uninstrumented checks can also explain this; timing alone does not prove a bug.".into(), sample_code: None });
@@ -757,7 +809,7 @@ impl Trace {
                     sample_code: None,
                 });
             }
-            if span.stats.reports > 0
+            if counts_units(self, span)
                 && let Some(gap) = &span.stats.max_report_gap
                 && gap.duration > options.report_gap_target
             {
@@ -899,6 +951,25 @@ struct CallbackGroup<'a> {
     samples: Vec<(Duration, Duration)>,
 }
 
+/// When any work ran: the union of Work spans, merged into disjoint windows.
+fn busy_windows(trace: &Trace) -> Vec<(Duration, Duration)> {
+    let work: Vec<_> = trace
+        .spans
+        .iter()
+        .filter(|span| span.kind == SpanKind::Work)
+        .map(|span| (span.start, span.end))
+        .collect();
+    let mut merged: Vec<(Duration, Duration)> = Vec::new();
+    for index in sorted_indices(work.len(), &|a, b| work[a].0.cmp(&work[b].0)) {
+        let (start, end) = work[index];
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
 fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Finding>) {
     let mut groups: Vec<CallbackGroup<'_>> = Vec::new();
     'spans: for span in &trace.spans {
@@ -918,11 +989,17 @@ fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Findin
             samples: vec![sample],
         });
     }
+    let busy = busy_windows(trace);
     for CallbackGroup { task, samples, .. } in &groups {
         let by_start = sorted_indices(samples.len(), &|a, b| samples[a].0.cmp(&samples[b].0));
         let mut interval: Option<Duration> = None;
         for pair in by_start.windows(2) {
-            let gap = samples[pair[1]].0.saturating_sub(samples[pair[0]].0);
+            let (from, to) = (samples[pair[0]].0, samples[pair[1]].0);
+            // Idle time between operations is not a missed callback.
+            if !busy.is_empty() && !busy.iter().any(|&(start, end)| start <= from && to <= end) {
+                continue;
+            }
+            let gap = to.saturating_sub(from);
             interval = Some(match interval {
                 Some(longest) => longest.max(gap),
                 None => gap,
@@ -1059,10 +1136,8 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
             sequential = false;
         }
         previous_end = Some(end);
+        // A stage within one clock tick has a measured share of zero.
         let duration = end.saturating_sub(start);
-        if duration.is_zero() {
-            return None;
-        }
         durations.push(duration);
         total = total.saturating_add(duration);
         weight_sum += child.weight;
@@ -1072,26 +1147,29 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
     }
     let mut shares = Vec::with_capacity(children.len());
     let mut declared = Vec::with_capacity(children.len());
-    let mut frozen = Vec::with_capacity(children.len());
-    let mut frozen_mass = 0.0;
-    let mut free_measured = 0.0;
     for (child, duration) in children.iter().zip(&durations) {
-        let share = duration.as_secs_f64() / total.as_secs_f64();
-        let planned = child.weight as f64 / weight_sum as f64;
-        // A stage this small is dominated by clock and scheduling noise and
-        // may be input-dependent (a flush that is trivial for this input). It
-        // keeps its declared weight instead of being calibrated to a
-        // near-zero share, unless the plan gave it most of the bar, which a
-        // negligible stage cannot justify.
-        let hold = share < options.negligible_stage_share && planned <= 0.5;
-        if hold {
-            frozen_mass += planned;
-        } else {
+        shares.push(duration.as_secs_f64() / total.as_secs_f64());
+        declared.push(child.weight as f64 / weight_sum as f64);
+    }
+    // A stage this small is dominated by clock and scheduling noise and may be
+    // input-dependent (a flush that is trivial for this input). It keeps its
+    // declared weight instead of being calibrated to a near-zero share, unless
+    // the held stages together would own more than half the bar, which
+    // negligible work cannot justify. Smaller planned shares are held first.
+    let mut frozen = vec![false; children.len()];
+    let mut frozen_mass = 0.0;
+    let negligible = sorted_indices(children.len(), &|a, b| declared[a].total_cmp(&declared[b]));
+    for index in negligible {
+        if shares[index] < options.negligible_stage_share && frozen_mass + declared[index] <= 0.5 {
+            frozen[index] = true;
+            frozen_mass += declared[index];
+        }
+    }
+    let mut free_measured = 0.0;
+    for (share, held) in shares.iter().zip(&frozen) {
+        if !held {
             free_measured += share;
         }
-        shares.push(share);
-        declared.push(planned);
-        frozen.push(hold);
     }
     let mut candidate = Vec::with_capacity(children.len());
     let mut biggest_difference = 0.0_f64;
@@ -1139,14 +1217,26 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
     })
 }
 
+/// Whether `span` belongs to work expected to report units: a leaf of the
+/// attached tree, or any span that reported when no tree is attached. A branch
+/// delegates its units, and stop-only spans have no node.
+fn counts_units(trace: &Trace, span: &SpanRecord) -> bool {
+    let (Some(node), Some(root)) = (span.node, &trace.progress) else {
+        return span.stats.reports > 0;
+    };
+    find_node(root, node).is_some_and(|phase| phase.children.is_empty())
+}
+
 /// When a stage ran: from its spans' earliest start to their latest end.
+/// A branch's `Wait` span covers its coordination after the split, including
+/// any time after its last child finished.
 fn stage_time(trace: &Trace, stage: &Snapshot) -> Option<(Duration, Duration)> {
     let mut time: Option<(Duration, Duration)> = None;
     for span in &trace.spans {
         let Some(node) = span.node else {
             continue;
         };
-        if span.kind != SpanKind::Work
+        if !matches!(span.kind, SpanKind::Work | SpanKind::Wait)
             || span.stats.clock_regressions != 0
             || span.outcome != Outcome::Succeeded
             || find_node(stage, node).is_none()

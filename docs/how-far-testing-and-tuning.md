@@ -79,7 +79,10 @@ Every phase the library plans gets its own span, tied to its node in the
 tree. A stage of a sequential plan is timed from when the previous stage
 finished, so work done before a stage's first checkpoint is measured, and a
 stage that never checks at all still gets a span. Other phases start at their
-first check or report.
+first check or report. A phase that splits ends its own span there; a
+sequential stage then records a `Wait` span while it coordinates its children,
+so its timing runs from entry to exit without treating the children's work as
+its own silence.
 
 Workers that share one phase share its span, so one busy worker can hide
 another's long silence. When that matters, give each worker its own
@@ -147,7 +150,8 @@ includes waits and changes with input, hardware and configuration. A stage
 that took less than `Options::negligible_stage_share` (2% by default) is too
 small to calibrate from one run (a flush that is trivial for this input may
 not be for the next), so it keeps its declared weight and cannot trigger
-advice on its own, unless the plan gave it more than half the bar. Fork-join
+advice on its own, unless the stages held this way would together own more
+than half the bar. Fork-join
 plans, failed stages, incomplete traces and overlapping spans get no weight
 advice.
 

@@ -1,6 +1,6 @@
 //! Checkpoint advice from deterministic, clock-driven traces.
 
-use how_far::{NoReport, ProgressWithStop, RunError, TryStages};
+use how_far::{Complete, NoReport, Phases, ProgressWithStop, RunError, Stages, TryStages};
 use how_far_along::poll::LocalPoller;
 use how_far_along::{
     Execution, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, Report, Stop, StopReason,
@@ -282,7 +282,9 @@ fn nested_children_keep_their_node_ids_and_outcomes() {
     measured.finish(Outcome::Succeeded).unwrap();
     let snapshot = observer.snapshot();
     let trace = profiler.snapshot();
-    assert_eq!(trace.spans.len(), 2);
+    // Each child's work, then the branch's coordination while they ran. The
+    // branch split on entry, so it has no work segment of its own.
+    assert_eq!(trace.spans.len(), 3);
     assert_eq!(
         trace.spans[0].node,
         Some(snapshot.children[0].children[0].id)
@@ -290,6 +292,13 @@ fn nested_children_keep_their_node_ids_and_outcomes() {
     assert_eq!(
         trace.spans[1].node,
         Some(snapshot.children[0].children[1].id)
+    );
+    assert_eq!(trace.spans[2].node, Some(snapshot.children[0].id));
+    assert_eq!(trace.spans[2].kind, SpanKind::Wait);
+    assert!(
+        trace.spans[..2]
+            .iter()
+            .all(|span| span.kind == SpanKind::Work)
     );
     assert!(
         trace
@@ -688,4 +697,336 @@ fn report_counts_reach_the_tree_through_the_wrapper() {
     measured.finish(Outcome::Succeeded).unwrap();
     assert_eq!(observer.snapshot().completed, 3);
     assert_eq!(profiler.snapshot().spans[0].stats.units, 3);
+}
+
+fn diagnose(measured: DiagnosticPulse, profiler: &Profiler) -> (Trace, Vec<Kind>) {
+    let observer = measured.observer();
+    measured.finish(Outcome::Succeeded).unwrap();
+    let trace = profiler.snapshot().with_progress(observer.snapshot());
+    let kinds = trace
+        .diagnose(&Options::default())
+        .iter()
+        .map(|f| f.kind)
+        .collect();
+    (trace, kinds)
+}
+
+fn stage_weights(trace: &Trace) -> Option<String> {
+    trace
+        .diagnose(&Options::default())
+        .into_iter()
+        .find(|f| f.kind == Kind::StageWeights)
+        .map(|f| f.evidence)
+}
+
+#[test]
+fn audit_nested_stage_includes_coordination_after_children() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 16);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let observer = measured.observer();
+    let [before, middle, after] = measured
+        .split_array(
+            Execution::Sequence,
+            [
+                PhaseSpec::new("before", 33, Total::Exact(1)),
+                PhaseSpec::new("middle", 34, Total::Unknown),
+                PhaseSpec::new("after", 33, Total::Exact(1)),
+            ],
+        )
+        .unwrap();
+    before.check().unwrap();
+    clock.set(10);
+    before.step(1).unwrap();
+    before.finish(Outcome::Succeeded).unwrap();
+
+    let [quick, slow] = middle
+        .split_array(
+            Execution::ForkJoin,
+            [
+                PhaseSpec::new("quick", 1, Total::Exact(1)),
+                PhaseSpec::new("slow", 1, Total::Exact(1)),
+            ],
+        )
+        .unwrap();
+    quick.check().unwrap();
+    slow.check().unwrap();
+    clock.set(30);
+    quick.step(1).unwrap();
+    quick.finish(Outcome::Succeeded).unwrap();
+    clock.set(80);
+    slow.step(1).unwrap();
+    slow.finish(Outcome::Succeeded).unwrap();
+    clock.set(90); // ten ms of parent coordination after the workers finish
+    middle.finish(Outcome::Succeeded).unwrap();
+
+    after.check().unwrap();
+    clock.set(100);
+    after.step(1).unwrap();
+    after.finish(Outcome::Succeeded).unwrap();
+    measured.finish(Outcome::Succeeded).unwrap();
+    let trace = profiler.snapshot().with_progress(observer.snapshot());
+    let weights = trace
+        .diagnose(&Options::default())
+        .into_iter()
+        .find(|finding| finding.kind == Kind::StageWeights)
+        .unwrap();
+    assert!(
+        weights.evidence.contains("[10, 80, 10]"),
+        "{}",
+        weights.evidence
+    );
+    assert!(
+        weights
+            .sample_code
+            .unwrap()
+            .contains("PhaseSpec::new(\"middle\", 80, Total::Unknown)")
+    );
+}
+
+#[test]
+fn a_root_that_checks_on_entry_and_then_splits_is_not_silent() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let pulse: &dyn Pulse = &measured;
+    pulse.check().unwrap();
+    let mut t = 0;
+    Stages::new(
+        pulse,
+        &[
+            PhaseSpec::new("a", 1, Total::Exact(100)),
+            PhaseSpec::new("b", 1, Total::Exact(100)),
+        ],
+    )
+    .complete_with(|stages| {
+        for _ in 0..2 {
+            stages.run(|stage| {
+                for _ in 0..100 {
+                    t += 1;
+                    clock.set(t);
+                    stage.step(1)?;
+                }
+                Ok::<_, StopReason>(())
+            })?;
+        }
+        Ok::<_, StopReason>(())
+    })
+    .unwrap();
+    let (_, kinds) = diagnose(measured, &profiler);
+    assert!(!kinds.contains(&Kind::StopGap), "{kinds:?}");
+}
+
+#[test]
+fn held_negligible_stages_cannot_hide_a_misweighted_bar() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut stages = Stages::new(
+        &measured,
+        &[
+            PhaseSpec::new("a", 45, Total::Exact(1)),
+            PhaseSpec::new("b", 45, Total::Exact(1)),
+            PhaseSpec::new("c", 10, Total::Exact(1)),
+        ],
+    );
+    for end in [10, 20, 1000] {
+        stages
+            .run(|stage| {
+                clock.set(end);
+                stage.step(1)
+            })
+            .unwrap();
+    }
+    stages.complete_as(Outcome::Succeeded);
+    let (trace, _) = diagnose(measured, &profiler);
+    // Held stages may own at most half the bar together, so only one 45%
+    // stage keeps its share and the misweighting is still reported.
+    let evidence = stage_weights(&trace).expect("90% of the bar on 2% of the time");
+    assert!(evidence.contains("[45, 1, 54]"), "{evidence}");
+}
+
+#[test]
+fn a_branch_stage_is_timed_from_entry_to_exit() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut stages = Stages::new(
+        &measured,
+        &[
+            PhaseSpec::new("a", 50, Total::Unknown),
+            PhaseSpec::new("b", 50, Total::Exact(1)),
+        ],
+    );
+    stages
+        .run(|stage| {
+            clock.set(30); // setup without a checkpoint, then fork-join
+            let parts = [
+                PhaseSpec::new("x", 1, Total::Exact(1)),
+                PhaseSpec::new("y", 1, Total::Exact(1)),
+            ];
+            let workers = stage.plan(Execution::ForkJoin, &parts);
+            clock.set(40);
+            for worker in workers {
+                worker.step(1)?;
+                worker.finish(Outcome::Succeeded).unwrap();
+            }
+            Ok::<_, StopReason>(())
+        })
+        .unwrap();
+    stages
+        .run(|stage| {
+            clock.set(80);
+            stage.step(1)
+        })
+        .unwrap();
+    stages.complete_as(Outcome::Succeeded);
+    let (trace, kinds) = diagnose(measured, &profiler);
+    // 40 ms each, as planned.
+    assert_eq!(stage_weights(&trace), None);
+    // The 30 ms of setup before the split is the stage's own silence.
+    let gap = trace
+        .diagnose(&Options::default())
+        .into_iter()
+        .find(|f| f.kind == Kind::StopGap)
+        .expect("setup without a check");
+    assert!(gap.evidence.contains("\"a\": 30.00 ms"), "{}", gap.evidence);
+    assert!(!kinds.contains(&Kind::IncompleteEvidence));
+}
+
+#[test]
+fn a_view_retained_past_its_phase_records_nothing_and_leaves_no_open_span() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut kept = None;
+    let mut stages = Stages::new(
+        &measured,
+        &[
+            PhaseSpec::new("a", 1, Total::Exact(1)),
+            PhaseSpec::new("b", 1, Total::Exact(1)),
+        ],
+    );
+    stages
+        .run(|stage| {
+            kept = Some(stage.share().unwrap());
+            clock.set(20);
+            stage.step(1)
+        })
+        .unwrap();
+    // A codec context keeps its owned view and asks for a legacy handle later.
+    let late = kept.as_ref().unwrap().handle();
+    late.check().unwrap();
+    kept.as_ref().unwrap().check().unwrap();
+    stages
+        .run(|stage| {
+            clock.set(80);
+            stage.step(1)
+        })
+        .unwrap();
+    stages.complete_as(Outcome::Succeeded);
+    let (trace, kinds) = diagnose(measured, &profiler);
+    assert_eq!(trace.active_spans, 0);
+    assert!(!kinds.contains(&Kind::IncompleteEvidence), "{kinds:?}");
+    assert!(
+        stage_weights(&trace).is_some(),
+        "20/60 against a 50/50 plan"
+    );
+    let a = trace.spans.iter().find(|s| s.task == "a").unwrap();
+    assert_eq!(a.stats.checks, 1, "late checks are not attributed to a");
+}
+
+#[test]
+fn a_leaf_that_checks_but_never_reports_has_a_report_gap() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut phases = Phases::new(
+        &measured,
+        Execution::ForkJoin,
+        &[PhaseSpec::new("a", 1, Total::Unknown)],
+    );
+    phases
+        .run(0, |phase| {
+            for t in 0..2000 {
+                clock.set(t);
+                phase.check()?;
+            }
+            Ok::<_, StopReason>(())
+        })
+        .unwrap();
+    phases.complete_as(Outcome::Succeeded);
+    let (_, kinds) = diagnose(measured, &profiler);
+    assert!(kinds.contains(&Kind::ReportGap), "{kinds:?}");
+    // It checked every millisecond: only the progress granularity is coarse.
+    assert!(!kinds.contains(&Kind::StopGap), "{kinds:?}");
+}
+
+#[test]
+fn a_stage_within_one_clock_tick_still_gets_weight_advice() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 8);
+    let measured = DiagnosticPulse::new(tree(), &profiler);
+    let mut stages = Stages::new(
+        &measured,
+        &[
+            PhaseSpec::new("frames", 10, Total::Exact(1)),
+            PhaseSpec::new("flush", 90, Total::Exact(1)),
+        ],
+    );
+    for end in [1000, 1000] {
+        stages
+            .run(|stage| {
+                clock.set(end);
+                stage.step(1)
+            })
+            .unwrap();
+    }
+    stages.complete_as(Outcome::Succeeded);
+    let (trace, _) = diagnose(measured, &profiler);
+    let evidence = stage_weights(&trace).expect("flush owns 90% of the bar but no time");
+    assert!(evidence.contains("[99, 1]"), "{evidence}");
+}
+
+#[test]
+fn a_cancellation_after_the_operation_returned_is_not_unobserved() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 4);
+    let span = profiler.span(None, "op", SpanKind::Work);
+    let stop = span.instrument(Unstoppable);
+    stop.check().unwrap();
+    clock.set(5);
+    span.finish(Outcome::Succeeded);
+    profiler.operation_returned();
+    clock.set(50);
+    profiler.cancellation_requested();
+    let kinds: Vec<_> = profiler
+        .snapshot()
+        .diagnose(&Options::default())
+        .iter()
+        .map(|f| f.kind)
+        .collect();
+    assert!(!kinds.contains(&Kind::UnobservedCancellation), "{kinds:?}");
+}
+
+#[test]
+fn callback_cadence_ignores_idle_time_between_operations() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 16);
+    for base in [0_u64, 1000] {
+        clock.set(base);
+        let work = profiler.span(None, "operation", SpanKind::Work);
+        for i in 0..4 {
+            clock.set(base + i * 5);
+            profiler.measure_callback("render", || ());
+        }
+        work.finish(Outcome::Succeeded);
+    }
+    let kinds: Vec<_> = profiler
+        .snapshot()
+        .diagnose(&Options::default())
+        .iter()
+        .map(|f| f.kind)
+        .collect();
+    assert!(!kinds.contains(&Kind::CallbackInterval), "{kinds:?}");
 }

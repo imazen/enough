@@ -61,7 +61,8 @@ use how_far_really::PulseTree;
 ```
 
 Trace JSON uses schema version 2 and embeds a complete versioned tracking JSON
-document under `progress`. Node/span identifiers are local to the process/trace;
-integer counts are strings to avoid JavaScript precision loss.
+document under `progress`. Node/span identifiers are local to the process/trace.
+Times and unit totals are strings, to avoid JavaScript precision loss; call
+counts and identifiers are JSON numbers.
 See the [example crates](../../examples/how-far-app/README.md) and
 [API boundaries](../../docs/how-far-api.md).

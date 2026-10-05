@@ -412,11 +412,15 @@ impl Profiler {
         kind: SpanKind,
         entered: Option<Duration>,
     ) -> Span {
+        // Saturates: a span past the last identifier is counted as dropped,
+        // never a panic inside an instrumented check.
         let id = self
             .inner
             .next_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-            .expect("span identifiers exhausted");
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_add(1))
+            })
+            .unwrap_or(usize::MAX);
         let now = self.inner.clock.now();
         let start = match entered {
             Some(at) => at.min(now),
@@ -561,6 +565,9 @@ impl SpanInner {
         let end = self.now();
         let mut state = self.state.lock();
         if state.closed {
+            // The span's statistics are final, but the stop was still observed.
+            drop(state);
+            self.observed(result, end);
             return;
         }
         // A worker sharing this span may have recorded a later reading
@@ -592,6 +599,11 @@ impl SpanInner {
             site.max_gap_before_check = site.max_gap_before_check.max(gap);
         }
         drop(state);
+        self.observed(result, end);
+    }
+
+    /// Record when an instrumented check first returned a stop.
+    fn observed(&self, result: Result<(), StopReason>, end: Duration) {
         if result.is_err() {
             let mut trace = self.profiler.inner.state.lock();
             trace.observed_at = Some(match trace.observed_at {
@@ -697,7 +709,7 @@ impl SpanInner {
             stats,
         };
         let mut trace = self.profiler.inner.state.lock();
-        if trace.spans.len() < self.profiler.inner.capacity {
+        if self.id.0 != usize::MAX && trace.spans.len() < self.profiler.inner.capacity {
             trace.spans.push(record);
         } else {
             trace.dropped = trace.dropped.saturating_add(1);
@@ -786,9 +798,6 @@ impl<T: fmt::Debug> fmt::Debug for Instrumented<T> {
 }
 
 impl<T> Instrumented<T> {
-    pub(crate) fn new(value: T, span: Arc<SpanInner>) -> Self {
-        Self { value, span }
-    }
     /// The wrapped value. Calls made through it are not recorded.
     pub fn inner(&self) -> &T {
         &self.value
@@ -1253,6 +1262,27 @@ fn optional_site(out: &mut impl fmt::Write, value: Option<SourceSite>) -> fmt::R
 mod tests {
     use super::sorted_indices;
     use alloc::vec::Vec;
+
+    #[test]
+    fn exhausted_span_identifiers_are_dropped_not_a_panic() {
+        use super::{Profiler, SpanKind, StdClock};
+        use core::sync::atomic::Ordering;
+        use how_far::Outcome;
+        let profiler = Profiler::new(StdClock::new(), 8);
+        profiler
+            .inner
+            .next_id
+            .store(usize::MAX - 1, Ordering::Relaxed);
+        for _ in 0..3 {
+            profiler
+                .span(None, "work", SpanKind::Work)
+                .finish(Outcome::Succeeded);
+        }
+        let trace = profiler.snapshot();
+        assert_eq!(trace.spans.len(), 1);
+        assert_eq!(trace.dropped_spans, 2);
+        assert_eq!(trace.active_spans, 0);
+    }
 
     #[test]
     fn sorted_indices_is_a_stable_sort() {
