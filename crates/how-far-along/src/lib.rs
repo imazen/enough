@@ -23,7 +23,8 @@ pub use how_far::WithStop;
 use how_far::ChildPulse;
 pub use how_far::{
     Child, Complete, Execution, NoPulse, Outcome, Paced, PhaseSpec, Phases, PlanError, ProgressExt,
-    Pulse, Report, ResultExt, SharedPulse, Stages, Stop, StopReason, Total, Unstoppable, prelude,
+    Pulse, Report, ResultExt, SharedPulse, Stages, Stop, StopOnly, StopReason, Total, Unstoppable,
+    prelude,
 };
 
 pub use pulse::PulseTree;

@@ -1,7 +1,7 @@
 //! Erased cancellation adapters; no copy of their machinery per inner type.
 use crate::{
-    Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, Report,
-    SharedPulse, Stop, StopReason, Total,
+    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, Pulse, Report, SharedPulse, Stop,
+    StopReason, Total, stop_only::StopSource,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
@@ -24,25 +24,6 @@ enum Inner<'a> {
     Borrowed(&'a dyn Pulse),
     Shared(SharedPulse),
     Child(Child<'a>),
-}
-#[derive(Clone)]
-enum StopSource<'a> {
-    Borrowed(&'a dyn Stop),
-    Owned(Arc<dyn Stop>),
-}
-impl StopSource<'_> {
-    fn get(&self) -> &dyn Stop {
-        match self {
-            Self::Borrowed(stop) => *stop,
-            Self::Owned(stop) => stop.as_ref(),
-        }
-    }
-    fn owned(&self) -> Result<Arc<dyn Stop>, PlanError> {
-        match self {
-            Self::Borrowed(_) => Err(PlanError::NotShareable),
-            Self::Owned(stop) => Ok(stop.clone()),
-        }
-    }
 }
 #[derive(Clone, Copy)]
 enum Mode {
@@ -88,12 +69,6 @@ impl<'a> WithStop<'a> {
             Inner::Shared(p) => p.as_pulse(),
             Inner::Child(p) => p.pulse(),
         }
-    }
-}
-impl WithStop<'static> {
-    /// Cancellation only: validate plans, ignore progress, retain the stop policy.
-    pub fn stop_only(stop: impl Stop + 'static) -> Self {
-        Self::new(&NoPulse, stop)
     }
 }
 impl Stop for WithStop<'_> {

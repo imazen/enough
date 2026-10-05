@@ -9,7 +9,8 @@ application/tests → how-far-really → how-far-along + how-far
 ```
 
 `how-far` owns the portable protocol: `Pulse`, `Stop`, `Report`, planning specs,
-`Child`, `SharedPulse`, `Stages`, `Phases`, pacing and result handoffs. Libraries
+`Child`, `SharedPulse`, `Stages`, `Phases`, pacing and result handoffs, plus the
+two pulses that observe nothing: `NoPulse` and the cancellation-only `StopOnly`. Libraries
 should expose `&dyn Pulse` and their own error types. Re-export selected core
 types if that simplifies adoption. Do not expose tracker owners or diagnostic
 records through a codec's API unless observation itself is its purpose.

@@ -21,7 +21,8 @@
   library results; consuming `Complete` / `ResultExt::finish_phase` handoffs
   close the owners without changing the original value or error;
   `Complete::complete_with` runs a multi-step body so an early `?` still
-  reaches the handoff. Cancellation
+  reaches the handoff. `StopOnly` turns an application's cancellation token
+  into a pulse without features or a tracker. Cancellation
   classification borrows errors. Shared views preserve planning and total
   revisions but never own completion. `Paced::finish` flushes and checks the
   final batch. Optional `adapters` adds stop composition; `checked` adds the

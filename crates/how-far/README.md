@@ -28,6 +28,11 @@ encode(&[1, 2, 3], &how_far::NoPulse)?;
 # Ok::<(), StopReason>(())
 ```
 
+An application calls such a library with `&how_far::NoPulse`, a tracker from
+`how-far-along`, or, when it has only a cancellation token, with
+`&StopOnly::new(token)` (or `StopOnly::borrowed(&token)`): every nested phase
+checks that token, and progress costs nothing.
+
 `Stages` runs a sequence. An escaping error makes its remaining stages `NotRun`.
 `Phases` runs independently selected phases, allowing a library to catch a failed
 attempt and run a fallback. Neither helper introduces a planning error into the

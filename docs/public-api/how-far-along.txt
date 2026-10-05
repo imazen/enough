@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 129 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
+# files: how-far-along.txt 130 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -16,17 +16,17 @@
 #   inherent methods                           46
 #   struct fields                              17
 #   enum variants                               3
-#   re-exports                                 20
+#   re-exports                                 21
 #   trait roster entries (type × trait)        48
 #   auto-trait-complete types                   8
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                           82
+#   (root)                           83
 #   ext                               6
 #   poll                             19
 
-## items (107 lines)
+## items (108 lines)
 
 pub mod how_far_along
 pub use Child
@@ -45,6 +45,7 @@ pub use ResultExt
 pub use SharedPulse
 pub use Stages
 pub use Stop
+pub use StopOnly
 pub use StopReason
 pub use Total
 pub use Unstoppable

@@ -10,15 +10,15 @@
 ## summary
 #
 #   pub types (struct/enum/trait/alias)         3
-#   inherent methods                           12
+#   inherent methods                           11
 #   enum variants                               2
 #   trait roster entries (type × trait)        11
 #   auto-trait exceptions                       3
 #
 # per-module pub lines:
-#   (root)                           17
+#   (root)                           16
 
-## items (17 lines)
+## items (16 lines)
 
 #[non_exhaustive] pub enum RunError<E>
 pub RunError::Plan(PlanError)
@@ -32,7 +32,6 @@ pub fn TryStages<'a>::run_nested<T, E>(&mut self, impl core::ops::function::FnOn
 pub fn TryStages<'a>::run_stoppable<T>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, enough::reason::StopReason>) -> core::result::Result<T, RunError<enough::reason::StopReason>>
 pub fn TryStages<'a>::skip(&mut self) -> core::result::Result<(), PlanError>
 pub struct WithStop<'a>
-pub fn WithStop<'static>::stop_only(impl enough::Stop + 'static) -> Self
 pub fn WithStop<'a>::borrowed(&'a dyn Pulse, &'a dyn enough::Stop) -> Self
 pub fn WithStop<'a>::new(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
 pub fn WithStop<'a>::replacing(&'a dyn Pulse, impl enough::Stop + 'static) -> Self

@@ -18,6 +18,7 @@ mod phases;
 mod pulse;
 mod report;
 mod stages;
+mod stop_only;
 #[cfg(feature = "checked")]
 mod try_stages;
 
@@ -31,6 +32,7 @@ pub use pulse::{
 };
 pub use report::{NoReport, ProgressWithStop, Report};
 pub use stages::Stages;
+pub use stop_only::StopOnly;
 #[cfg(feature = "checked")]
 pub use try_stages::{RunError, TryStages};
 

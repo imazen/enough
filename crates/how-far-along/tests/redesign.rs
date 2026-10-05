@@ -249,7 +249,7 @@ fn root_abandonment_racing_with_administration_freezes_after_the_administrator_e
 #[test]
 fn added_stop_policies_survive_splitting_and_owned_nesting() {
     let stop = almost_enough::Stopper::new();
-    let pulse = WithStop::stop_only(stop.clone());
+    let pulse = WithStop::new(&NoPulse, stop.clone());
     let [child] = pulse
         .split_array(
             Execution::Sequence,
