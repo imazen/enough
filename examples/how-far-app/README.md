@@ -23,8 +23,9 @@ sequential work. Both convert `StopReason` into their own errors for `?`, and
 implement `TryFrom<&Error> for StopReason` for borrowed classification. The outer
 error delegates classification to its codec error without losing it.
 
-The pipeline captures its body result in a closure, then calls
-`result.finish_phase(stages)`. Every nested runner closes only the children it
+The pipeline runs its body through `stages.complete_with(|stages| ...)`, which
+hands the body's result to the plan even after an early `?`; the codec, with one
+expression, calls `result.finish_phase(attempts)`. Every nested runner closes only the children it
 owns. The application finally closes the root. Neither Rust's `?` nor `map` nor
 Drop automatically communicates a plain Result to a progress owner.
 
