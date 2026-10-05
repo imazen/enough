@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+<!-- Breaks that will ship together in one leading-digit bump. None queued. -->
+
+### Release ordering
+
+- `how-far` needs the `enough` release that adds `From<&StopReason>`
+  (crates.io `enough` 0.4.4 lacks it, so `Stages::run` / `complete` with a bare
+  `StopReason` error would not compile against it). Publish `enough` first and
+  raise the workspace `enough` requirement to that version in the same commit.
+
 ### Added
 
 - `how-far` (new crate; Rust 1.86, `no_std + alloc`, depends only on `enough`):
