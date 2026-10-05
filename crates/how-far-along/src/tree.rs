@@ -116,6 +116,9 @@ fn decode(code: u8) -> Option<Outcome> {
         _ => None,
     }
 }
+/// How many recent total revisions a phase keeps.
+const MAX_REVISIONS: usize = 16;
+
 struct Node {
     id: NodeId,
     parent: Option<NodeId>,
@@ -375,8 +378,8 @@ impl Phase {
     }
     /// Revise a leaf's total while it runs.
     ///
-    /// Every revision is kept in [`Snapshot::total_revisions`]. A fraction can
-    /// go down after a revision; smoothing is the display's job.
+    /// The most recent revisions are kept in [`Snapshot::total_revisions`].
+    /// A fraction can go down after a revision; smoothing is the display's job.
     pub fn set_total(&mut self, total: Total) -> Result<(), PlanError> {
         self.ensure_live()?;
         if self.node.branch.load(Ordering::Relaxed) {
@@ -385,6 +388,11 @@ impl Phase {
         let mut meta = (*self.node.meta.get()).clone();
         if meta.total != total {
             meta.total = total;
+            // Bounded, so a streaming estimate revised per chunk stays cheap
+            // to revise, snapshot and export.
+            if meta.revisions.len() == MAX_REVISIONS {
+                meta.revisions.remove(0);
+            }
             meta.revisions.push(total);
             self.node.meta.publish(meta);
         }
@@ -445,7 +453,9 @@ impl Phase {
         }
         let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
+        // A branch has no total of its own, so neither does its history.
         meta.total = Total::Unknown;
+        meta.revisions.clear();
         meta.children = nodes;
         self.node.meta.publish(meta);
         self.node.branch.store(true, Ordering::Release);
@@ -705,7 +715,8 @@ pub struct Snapshot {
     pub total: Total,
     /// The total declared when the phase was planned.
     pub initial_total: Total,
-    /// Every later revision of the total, in order.
+    /// The most recent revisions of a leaf's total, oldest first: at most 16.
+    /// Empty for a branch, which has no total of its own.
     pub total_revisions: Vec<Total>,
     /// How this phase's work is scheduled.
     pub execution: Execution,

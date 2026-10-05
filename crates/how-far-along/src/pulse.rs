@@ -111,24 +111,19 @@ impl State {
         self.with_owner(|p| p.set_total(total))?
     }
 
+    /// Administer the phase. Concurrent administrators, including shared
+    /// views, run one at a time; a closed owner reports `Finished`.
     fn with_owner<R>(&self, f: impl FnOnce(&mut Phase) -> R) -> Result<R, PlanError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(PlanError::Finished);
         }
-        let mut phase = self.owner.take().ok_or(PlanError::Busy)?;
-        let result = f(&mut phase);
-        self.owner.put(phase);
-        // If the owner dropped while administration was in progress, the
-        // administrator performs the deferred abandonment. Recheck AFTER put
-        // so a racing close can never miss a restored owner.
-        if self.closed.load(Ordering::Acquire) {
-            drop(self.owner.take());
-        }
-        Ok(result)
+        self.owner.with(f).ok_or(PlanError::Finished)
     }
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.activity.store(FINISHED, Ordering::Release);
+        // Waits only for an administrative call already under way; an
+        // unfinished phase records Abandoned as it drops, outside the lock.
         drop(self.owner.take());
     }
     fn finish(&self, outcome: Outcome) -> Result<(), PlanError> {
@@ -203,6 +198,8 @@ impl Report for State {
         if n == 0 {
             return;
         }
+        // During a split the reporter decides: it ignores a phase that became
+        // a branch, and counts work for one whose split failed.
         if self.activity.load(Ordering::Acquire) == COUNTING
             || matches!(
                 self.activity.compare_exchange(
@@ -211,7 +208,7 @@ impl Report for State {
                     Ordering::AcqRel,
                     Ordering::Acquire
                 ),
-                Ok(_) | Err(COUNTING)
+                Ok(_) | Err(COUNTING) | Err(SPLIT)
             )
         {
             self.reporter.advance(n);

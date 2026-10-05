@@ -43,9 +43,10 @@ independently chosen attempts, so the library decides what is recoverable.
 `TryStages` is the optional `checked` runner for callers who explicitly want
 planning failures in their return type; its `RunError<E>` and `run_stoppable`
 are not the normal adoption path. All low-level administration methods retain
-explicit errors. Busy means overlapping administration of one owner, not a
-failed encode or a locked progress counter. Best-effort planning records that
-rejection and supplies cancellation-preserving untracked children.
+explicit errors. Best-effort planning records a rejection and supplies
+cancellation-preserving untracked children. The tracker serializes
+administration rather than refusing it; `PlanError::Busy` remains for sinks
+that cannot wait.
 
 Completion rights are owned and consumed; shared views never acquire them.
 That makes duplicate completion through the same handle unrepresentable.

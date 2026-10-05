@@ -40,10 +40,11 @@ is unchanged. New owned integrations should use `share()`.
 
 The root/child owner holds one completion token separate from shared state. A
 retained shared handle cannot extend the lifecycle. Reports after completion are
-ignored, and terminal observations are frozen. If dropping the owner races a
-cold administration operation already holding the phase, abandonment is deferred
-until that administrator restores/releases it. Joining administrators establishes
-the stable terminal observation. No waiting or spinning is introduced into Drop.
+ignored, and terminal observations are frozen. Administration (start, total
+revision, split, completion) runs under one short per-phase lock that never
+spans user code, so the owner and shared views queue instead of refusing each
+other. Dropping the owner waits at most for an administrative call already
+under way, then records abandonment outside the lock.
 
 A phase can start before discovering its plan. Only a nonzero report makes it a
 counting leaf and prevents a split; zero reports are inert. Totals are revisable

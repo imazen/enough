@@ -2,8 +2,9 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-/// Move a unique owner out under a short lock, then administer it outside the
-/// lock. In particular, phase splitting may allocate and publish metadata.
+/// A unique owner, administered under a short lock. No user code runs inside
+/// it, so concurrent administrators queue instead of failing, and Drop takes
+/// the owner under the same lock and destroys it after releasing it.
 pub(crate) struct OwnerCell<T> {
     #[cfg(feature = "std")]
     value: std::sync::Mutex<Option<T>>,
@@ -32,23 +33,19 @@ impl<T> OwnerCell<T> {
             critical_section::with(|cs| self.value.borrow(cs).borrow_mut().take())
         }
     }
-    pub(crate) fn put(&self, value: T) {
+    /// Administer the owner, if it is still present, under the lock.
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> Option<R> {
         #[cfg(feature = "std")]
         {
-            let mut slot = self
-                .value
+            self.value
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            debug_assert!(slot.is_none());
-            *slot = Some(value);
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_mut()
+                .map(f)
         }
         #[cfg(not(feature = "std"))]
         {
-            critical_section::with(|cs| {
-                let mut slot = self.value.borrow(cs).borrow_mut();
-                debug_assert!(slot.is_none());
-                *slot = Some(value);
-            });
+            critical_section::with(|cs| self.value.borrow(cs).borrow_mut().as_mut().map(f))
         }
     }
 }
