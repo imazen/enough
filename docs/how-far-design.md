@@ -34,9 +34,9 @@ completion; a private runner enum prevents contradictory lifecycle flags.
 `share()` returns a cloneable owned pulse with the same planning, cancellation,
 start and total-revision capabilities. It never transfers completion rights.
 Unsupported ownership returns `NotShareable`. References, boxes, Arcs, children,
-callback pulses and diagnostic wrappers forward these operations. `handle()` is
-retained as the legacy count/check-only adapter; its weaker implementor contract
-is unchanged. New owned integrations should use `share()`.
+callback pulses and diagnostic wrappers forward these operations. `share()` is
+the only owned view: a `SharedPulse` works wherever a `Stop` or `Report` is
+expected, such as a codec context that stores `impl Stop + 'static`.
 
 The root/child owner holds one completion token separate from shared state. A
 retained shared handle cannot extend the lifecycle. Reports after completion are

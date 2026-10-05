@@ -1,6 +1,6 @@
 //! Phase planning and the combined cancellation/progress interface.
 
-use crate::{ProgressWithStop, Report};
+use crate::Report;
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{fmt, num::NonZeroUsize};
 use enough::{Stop, StopReason};
@@ -109,8 +109,6 @@ pub enum PlanError {
     UnfinishedChildren,
     /// Every declared stage has already run.
     NoMoreStages,
-    /// Another thread is planning or finishing this phase.
-    Busy,
 }
 
 impl fmt::Display for PlanError {
@@ -121,11 +119,10 @@ impl fmt::Display for PlanError {
             Self::AlreadyInUse => "the phase already counted work or planned children",
             Self::NotALeaf => "only a leaf phase has its own total",
             Self::Unsupported => "this pulse cannot plan children",
-            Self::NotShareable => "this pulse cannot provide an owned handle",
+            Self::NotShareable => "this pulse cannot provide an owned view",
             Self::Finished => "the phase already has an outcome",
             Self::UnfinishedChildren => "every child must finish before its parent",
             Self::NoMoreStages => "every declared stage has already run",
-            Self::Busy => "another thread is planning or finishing this phase",
         })
     }
 }
@@ -233,8 +230,9 @@ impl<'a> PhaseSpec<'a> {
 ///   and otherwise returns one [`Child::new`] per part, in order, each
 ///   checking and counting like any pulse. Children from [`Child::inert`]
 ///   cannot be stopped or observed, so they suit only parts nobody watches.
-/// - `handle` returns an owned handle that checks the same stop and counts
-///   into the same phase, or [`PulseHandle::default()`], documented as such.
+/// - [`share`](Self::share) returns an owned view that checks the same stop,
+///   counts into the same phase and plans its children, or fails with
+///   [`PlanError::NotShareable`]; it never silently drops cancellation.
 /// - [`ChildPulse::finish`] fails with [`PlanError::UnfinishedChildren`] while
 ///   a descendant is unfinished. Completed failed attempts may belong to a
 ///   successful parent. A dropped unfinished child records `Abandoned`.
@@ -256,20 +254,6 @@ pub trait Pulse: Stop + Report {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'_>>, PlanError>;
 
-    /// An owned handle to this pulse's stop policy and counter.
-    ///
-    /// The handle checks the same stop policy and counts into the same phase,
-    /// but it cannot plan or finish anything. It is `'static`, cloneable and
-    /// thread-safe: give it to work that must own its stop policy or progress
-    /// sink, such as a codec context that stores `impl Stop + 'static`, a
-    /// `std::thread::spawn` worker, or an async task. Its `stop` field alone
-    /// also implements `Stop`.
-    ///
-    /// A pulse that cannot provide a handle returns
-    /// [`PulseHandle::default()`], which never stops and discards reports;
-    /// such a pulse should document that.
-    fn handle(&self) -> PulseHandle;
-
     /// Mark this phase running, without counting or ending planning.
     /// Implementations without lifecycle observations may ignore this.
     fn start(&self) -> Result<(), PlanError> {
@@ -283,8 +267,12 @@ pub trait Pulse: Stop + Report {
     }
 
     /// Share all pulse capabilities with owned work, but never completion rights.
-    /// Join such work before finishing the original owner. Unsupported ownership
-    /// is explicit; this method never silently replaces cancellation with a no-op.
+    ///
+    /// The [`SharedPulse`] is `'static`, cloneable and thread-safe, and works
+    /// wherever a `Stop` or `Report` is expected: give it to a codec context that
+    /// stores `impl Stop + 'static`, a spawned thread, or an async task. Join
+    /// such work before finishing the original owner. Unsupported ownership is
+    /// explicit; this method never silently replaces cancellation with a no-op.
     fn share(&self) -> Result<SharedPulse, PlanError> {
         Err(PlanError::NotShareable)
     }
@@ -306,10 +294,6 @@ impl<P: Pulse + ?Sized> Pulse for &P {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'_>>, PlanError> {
         (**self).split(execution, parts)
-    }
-    #[inline]
-    fn handle(&self) -> PulseHandle {
-        (**self).handle()
     }
     fn start(&self) -> Result<(), PlanError> {
         (**self).start()
@@ -335,10 +319,6 @@ impl<P: Pulse + ?Sized> Pulse for &mut P {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         (**self).split(execution, parts)
     }
-    #[inline]
-    fn handle(&self) -> PulseHandle {
-        (**self).handle()
-    }
     fn start(&self) -> Result<(), PlanError> {
         (**self).start()
     }
@@ -363,10 +343,6 @@ impl<P: Pulse + ?Sized> Pulse for Box<P> {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         (**self).split(execution, parts)
     }
-    #[inline]
-    fn handle(&self) -> PulseHandle {
-        (**self).handle()
-    }
     fn start(&self) -> Result<(), PlanError> {
         (**self).start()
     }
@@ -390,10 +366,6 @@ impl<P: Pulse + ?Sized> Pulse for Arc<P> {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'_>>, PlanError> {
         (**self).split(execution, parts)
-    }
-    #[inline]
-    fn handle(&self) -> PulseHandle {
-        (**self).handle()
     }
     fn start(&self) -> Result<(), PlanError> {
         (**self).start()
@@ -563,10 +535,6 @@ impl<P: Pulse> Pulse for Untracked<P> {
             .map(|_| Child::untracked(&self.inner))
             .collect())
     }
-    fn handle(&self) -> PulseHandle {
-        let handle = self.inner.handle();
-        ProgressWithStop::new(handle.stop, None)
-    }
     fn share(&self) -> Result<SharedPulse, PlanError> {
         Ok(SharedPulse::new(Untracked {
             inner: self.inner.share()?,
@@ -624,9 +592,6 @@ impl Pulse for Child<'_> {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         self.pulse().split(execution, parts)
     }
-    fn handle(&self) -> PulseHandle {
-        self.pulse().handle()
-    }
     fn start(&self) -> Result<(), PlanError> {
         self.pulse().start()
     }
@@ -637,13 +602,6 @@ impl Pulse for Child<'_> {
         self.pulse().share()
     }
 }
-
-/// An owned, cloneable, `'static` view of a pulse's stop policy and counter.
-///
-/// Returned by [`Pulse::handle`]. `stop` and `report` are `None` when the
-/// source pulse never stops or discards reports. The handle implements `Stop`
-/// and `Report`, so `check`, `advance` and `step` work on it directly.
-pub type PulseHandle = ProgressWithStop<Option<Arc<dyn Stop>>, Option<Arc<dyn Report>>>;
 
 /// The type of [`NoPulse`]. It has exactly one value, that static: nothing
 /// outside this crate can build, copy or move one.
@@ -703,9 +661,6 @@ impl Pulse for Inert {
             children.push(Child::inert());
         }
         Ok(children)
-    }
-    fn handle(&self) -> PulseHandle {
-        ProgressWithStop::new(None, None)
     }
     fn set_total(&self, _: Total) -> Result<(), PlanError> {
         Ok(())
@@ -809,9 +764,6 @@ impl Pulse for SharedPulse {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Child<'_>>, PlanError> {
         self.as_pulse().split(execution, parts)
-    }
-    fn handle(&self) -> PulseHandle {
-        self.as_pulse().handle()
     }
     fn start(&self) -> Result<(), PlanError> {
         self.as_pulse().start()

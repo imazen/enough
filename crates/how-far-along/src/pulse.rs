@@ -1,8 +1,7 @@
 //! One lifecycle owner and shareable, non-owning pulse views.
 use crate::{
-    Child, ChildPulse, Execution, NodeId, Observer, Outcome, Phase, PhaseSpec, PlanError,
-    ProgressWithStop, Pulse, PulseHandle, Report, Reporter, SharedPulse, Stop, StopReason, Total,
-    sync::OwnerCell,
+    Child, ChildPulse, Execution, NodeId, Observer, Outcome, Phase, PhaseSpec, PlanError, Pulse,
+    Report, Reporter, SharedPulse, Stop, StopReason, Total, sync::OwnerCell,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
@@ -12,7 +11,7 @@ use core::{
 
 /// Owns the root of a tracked operation. Workers borrow it or use `share()`.
 /// Finish after joining workers. Dropping this owner freezes abandonment even
-/// when non-owning shared handles remain alive.
+/// when non-owning shared views remain alive.
 #[must_use = "finish the root after its work joins; dropping it unfinished records Abandoned"]
 pub struct PulseTree {
     node: TreePulse,
@@ -272,14 +271,6 @@ macro_rules! pulse_view {
             ) -> Result<Vec<Child<'_>>, PlanError> {
                 self.$field.split(e, parts)
             }
-            fn handle(&self) -> PulseHandle {
-                // Keep the legacy count-only shape; both views retain checkpoint
-                // callbacks and lifecycle guards instead of bypassing them.
-                ProgressWithStop::new(
-                    Some(self.$field.clone() as Arc<dyn Stop>),
-                    Some(self.$field.clone() as Arc<dyn Report>),
-                )
-            }
             fn start(&self) -> Result<(), PlanError> {
                 self.$field.start()
             }
@@ -317,9 +308,6 @@ impl Report for PulseTree {
 impl Pulse for PulseTree {
     fn split(&self, e: Execution, p: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         self.node.split(e, p)
-    }
-    fn handle(&self) -> PulseHandle {
-        self.node.handle()
     }
     fn start(&self) -> Result<(), PlanError> {
         self.node.start()

@@ -617,7 +617,7 @@ fn checks_inside_a_codec_that_owns_its_stop_count_toward_the_stage() {
         .run_stoppable(|stage| {
             // The codec context is built once and owns a `'static` stop.
             let encoder = Encoder {
-                stop: stage.handle().stop,
+                stop: stage.share().unwrap(),
             };
             stage.check()?;
             for frame in 0..2 {
@@ -693,7 +693,7 @@ fn report_counts_reach_the_tree_through_the_wrapper() {
     );
     let observer = measured.observer();
     measured.step(2).unwrap();
-    measured.handle().advance(1);
+    measured.share().unwrap().advance(1);
     measured.finish(Outcome::Succeeded).unwrap();
     assert_eq!(observer.snapshot().completed, 3);
     assert_eq!(profiler.snapshot().spans[0].stats.units, 3);
@@ -914,8 +914,8 @@ fn a_view_retained_past_its_phase_records_nothing_and_leaves_no_open_span() {
             stage.step(1)
         })
         .unwrap();
-    // A codec context keeps its owned view and asks for a legacy handle later.
-    let late = kept.as_ref().unwrap().handle();
+    // A codec context keeps its owned view and shares it again later.
+    let late = kept.as_ref().unwrap().share().unwrap();
     late.check().unwrap();
     kept.as_ref().unwrap().check().unwrap();
     stages

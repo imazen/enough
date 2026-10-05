@@ -127,8 +127,8 @@ pub fn encode(image: &Image, pulse: &dyn Pulse) -> Result<Vec<u8>, CodecError> {
     let transformed =
         stages.run_classified(CodecError::is_stop, |stage| transform(image, stage))?;
     let bytes = stages.run_classified(CodecError::is_stop, |stage| {
-        // The coder owns its handle, like a codec built with `with_stop`.
-        let mut coder = EntropyCoder::new(stage.handle());
+        // The coder owns its view, like a codec built with `with_stop`.
+        let mut coder = EntropyCoder::new(stage.share()?);
         coder.code(&transformed)
     })?;
     stages.finish()?;
@@ -271,18 +271,19 @@ pub fn encode_groups(
 /// Encode tiles on `'static` threads that cannot borrow the pulse.
 ///
 /// `std::thread::spawn` needs owned data, so each worker gets a
-/// [`PulseHandle`](how_far::PulseHandle) and an `Arc` of the pixels; the
+/// [`SharedPulse`](how_far::SharedPulse) and an `Arc` of the pixels; the
 /// library joins them before returning.
 pub fn encode_detached(image: &Image, pulse: &dyn Pulse) -> Result<Vec<u8>, CodecError> {
     let image = Arc::new(image.clone());
+    let shared = pulse.share()?;
     let workers: Vec<_> = (0..image.tiles())
         .map(|index| {
-            let handle = pulse.handle();
+            let shared = shared.clone();
             let image = Arc::clone(&image);
             std::thread::spawn(move || -> Result<Vec<u8>, CodecError> {
-                handle.check()?;
+                shared.check()?;
                 let tile = transform_tile(image.tile(index));
-                handle.step(1)?;
+                shared.step(1)?;
                 Ok(tile)
             })
         })

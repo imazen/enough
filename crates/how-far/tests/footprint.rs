@@ -8,7 +8,7 @@
 
 use how_far::{
     Child, Execution, Inert, NoReport, Outcome, Paced, PhaseSpec, PlanError, ProgressWithStop,
-    Pulse, PulseHandle, Report, Stages, Stop, StopReason, Total, Unstoppable,
+    Pulse, Report, Stages, Stop, StopReason, Total, Unstoppable,
 };
 use std::mem::size_of;
 
@@ -28,7 +28,6 @@ const _: () = {
     assert!(size_of::<Result<(), StopReason>>() == 1);
     assert!(size_of::<Result<(), PlanError>>() == 1);
     assert!(size_of::<Outcome>() == 1);
-    assert!(size_of::<PulseHandle>() == 4 * WORD);
     // One byte, so the one static `NoPulse` has an address of its own.
     assert!(size_of::<Inert>() == 1);
     assert!(size_of::<NoReport>() == 0);

@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 160 lines (supported surface) | how-far.features.txt 25 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 155 lines (supported surface) | how-far.features.txt 24 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        25
+#   pub types (struct/enum/trait/alias)        24
 #   pub consts/statics                          7
-#   free functions                             16
-#   inherent methods                           57
+#   free functions                             14
+#   inherent methods                           55
 #   struct fields                               8
-#   enum variants                              23
+#   enum variants                              22
 #   re-exports                                  4
 #   trait roster entries (type × trait)        77
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                          120
-#   prelude                          22
+#   (root)                          115
+#   prelude                          21
 
-## items (129 lines)
+## items (124 lines)
 
 pub mod how_far
 pub use Stop
@@ -41,13 +41,11 @@ pub fn prelude::Complete::complete_with<T, E>(self, impl core::ops::function::Fn
 pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
-pub fn prelude::Pulse::handle(&self) -> PulseHandle
 pub fn prelude::Pulse::record_issue(&self, PlanError)
 pub fn prelude::Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
 pub fn prelude::Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
 pub fn prelude::Pulse::split(&self, Execution, &[PhaseSpec<'_>]) -> core::result::Result<alloc::vec::Vec<Child<'_>>, PlanError>
 pub fn prelude::Pulse::start(&self) -> core::result::Result<(), PlanError>
-pub fn &mut P::handle(&self) -> PulseHandle [also: (root)]
 pub fn &mut P::record_issue(&self, PlanError) [also: (root)]
 pub fn &mut P::set_total(&self, Total) -> core::result::Result<(), PlanError> [also: (root)]
 pub fn &mut P::share(&self) -> core::result::Result<SharedPulse, PlanError> [also: (root)]
@@ -75,7 +73,6 @@ pub Outcome::Succeeded
 pub fn Outcome::from_result<T, E>(&core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> Self
 #[non_exhaustive] pub enum PlanError
 pub PlanError::AlreadyInUse
-pub PlanError::Busy
 pub PlanError::EmptyOrZeroWeight
 pub PlanError::Finished
 pub PlanError::NoMoreStages
@@ -145,7 +142,6 @@ pub fn ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
 pub trait Pulse: enough::Stop + Report [also: prelude]
-pub fn Pulse::handle(&self) -> PulseHandle
 pub fn Pulse::record_issue(&self, PlanError)
 pub fn Pulse::set_total(&self, Total) -> core::result::Result<(), PlanError>
 pub fn Pulse::share(&self) -> core::result::Result<SharedPulse, PlanError>
@@ -156,7 +152,6 @@ pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub trait ResultExt<T, E>: core::marker::Sized [also: prelude]
 pub fn ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
-pub type PulseHandle = ProgressWithStop<core::option::Option<alloc::sync::Arc<dyn enough::Stop>>, core::option::Option<alloc::sync::Arc<dyn Report>>>
 
 ## trait impls (24 types)
 

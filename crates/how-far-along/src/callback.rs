@@ -1,7 +1,7 @@
 //! Checkpoint callbacks over the same accounting state as PulseTree.
 use crate::{
-    Child, Execution, NodeId, Observer, Outcome, Phase, PhaseSpec, PlanError, Pulse, PulseHandle,
-    PulseTree, Report, SharedPulse, Snapshot, Stop, StopReason, Summary, Total,
+    Child, Execution, NodeId, Observer, Outcome, Phase, PhaseSpec, PlanError, Pulse, PulseTree,
+    Report, SharedPulse, Snapshot, Stop, StopReason, Summary, Total,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
@@ -159,9 +159,6 @@ impl Report for FnPulse {
 impl Pulse for FnPulse {
     fn split(&self, e: Execution, p: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         self.tree.split(e, p)
-    }
-    fn handle(&self) -> PulseHandle {
-        self.tree.handle()
     }
     fn start(&self) -> Result<(), PlanError> {
         self.tree.start()

@@ -27,7 +27,7 @@ pub use paced::Paced;
 pub use phases::Phases;
 pub use pulse::{
     Child, ChildPulse, Execution, Inert, NoPulse, Outcome, PhaseSpec, PlanError, Pulse,
-    PulseHandle, SharedPulse, Total,
+    SharedPulse, Total,
 };
 pub use report::{NoReport, ProgressWithStop, Report};
 pub use stages::Stages;
@@ -37,7 +37,7 @@ pub use try_stages::{RunError, TryStages};
 /// The traits whose methods library code calls: `use how_far::prelude::*;`.
 ///
 /// Trait methods need their trait in scope. `&dyn Pulse` brings its own, but
-/// values such as [`ProgressExt::live`]'s `Option` or a [`PulseHandle`] need
+/// values such as [`ProgressExt::live`]'s `Option` or a [`SharedPulse`] need
 /// `Stop`, `Report` and `ProgressExt` imported to call `check`, `advance` and
 /// `step`.
 pub mod prelude {

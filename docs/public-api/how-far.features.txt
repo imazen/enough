@@ -10,15 +10,15 @@
 ## summary
 #
 #   pub types (struct/enum/trait/alias)         3
-#   inherent methods                           13
+#   inherent methods                           12
 #   enum variants                               2
 #   trait roster entries (type × trait)        11
 #   auto-trait exceptions                       3
 #
 # per-module pub lines:
-#   (root)                           18
+#   (root)                           17
 
-## items (18 lines)
+## items (17 lines)
 
 #[non_exhaustive] pub enum RunError<E>
 pub RunError::Plan(PlanError)
@@ -37,7 +37,6 @@ pub fn WithStop<'a>::borrowed(&'a dyn Pulse, &'a dyn enough::Stop) -> Self
 pub fn WithStop<'a>::new(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
 pub fn WithStop<'a>::replacing(&'a dyn Pulse, impl enough::Stop + 'static) -> Self
 pub fn WithStop<'a>::replacing_borrowed(&'a dyn Pulse, &'a dyn enough::Stop) -> Self
-pub fn WithStop<'a>::try_handle(&self) -> core::result::Result<PulseHandle, PlanError>
 
 ## trait impls (3 types)
 

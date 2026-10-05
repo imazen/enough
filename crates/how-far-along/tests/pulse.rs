@@ -514,7 +514,7 @@ fn a_count_only_library_leaves_finishing_to_the_application() {
 }
 
 #[test]
-fn a_tree_shares_its_stop_policy_with_every_phase_and_handle() {
+fn a_tree_shares_its_stop_policy_with_every_phase_and_shared_view() {
     let stop = almost_enough::Stopper::new();
     let tree = PulseTree::new(Phase::new("job", Total::Unknown), stop.clone());
     let [child] = tree
@@ -523,15 +523,10 @@ fn a_tree_shares_its_stop_policy_with_every_phase_and_handle() {
             [PhaseSpec::new("child", 1, Total::Exact(1))],
         )
         .unwrap();
-    let handle = child.handle();
-    assert!(tree.check().is_ok() && child.check().is_ok() && handle.check().is_ok());
+    let shared = child.share().unwrap();
+    assert!(tree.check().is_ok() && child.check().is_ok() && shared.check().is_ok());
     stop.cancel();
-    for result in [
-        tree.check(),
-        child.check(),
-        handle.check(),
-        handle.stop.check(),
-    ] {
+    for result in [tree.check(), child.check(), shared.check()] {
         assert_eq!(result, Err(StopReason::Cancelled));
     }
 }

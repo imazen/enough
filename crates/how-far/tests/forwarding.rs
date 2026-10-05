@@ -2,14 +2,14 @@
 //! by value or owns one can hold any pulse, `NoPulse` included.
 
 use how_far::{
-    Child, Execution, NoPulse, PhaseSpec, PlanError, ProgressExt, ProgressWithStop, Pulse,
-    PulseHandle, Report, Stop, StopReason, Total,
+    Child, Execution, NoPulse, PhaseSpec, PlanError, ProgressExt, Pulse, Report, SharedPulse, Stop,
+    StopReason, Total,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Stops on request, counts, plans inert children, and hands out a handle.
-#[derive(Default)]
+/// Stops on request, counts, plans inert children, and shares itself.
+#[derive(Clone, Default)]
 struct Flagged {
     stopped: Arc<AtomicBool>,
     units: Arc<AtomicU64>,
@@ -22,12 +22,6 @@ impl Stop for Flag {
         } else {
             Ok(())
         }
-    }
-}
-struct Units(Arc<AtomicU64>);
-impl Report for Units {
-    fn advance(&self, completed: u64) {
-        self.0.fetch_add(completed, Ordering::Relaxed);
     }
 }
 impl Stop for Flagged {
@@ -48,11 +42,8 @@ impl Pulse for Flagged {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         NoPulse.split(execution, parts)
     }
-    fn handle(&self) -> PulseHandle {
-        ProgressWithStop::new(
-            Some(Arc::new(Flag(self.stopped.clone()))),
-            Some(Arc::new(Units(self.units.clone()))),
-        )
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Ok(SharedPulse::new(self.clone()))
     }
 }
 
@@ -90,7 +81,7 @@ fn owned_pulses_can_default_to_no_pulse() {
     }
     let options = Options::default();
     options.pulse.step(3).unwrap();
-    assert!(options.pulse.handle().stop.is_none());
+    assert!(!options.pulse.share().unwrap().may_stop());
     assert_eq!(
         options.pulse.split(Execution::Sequence, &[]).err(),
         Some(PlanError::EmptyOrZeroWeight)
@@ -102,7 +93,7 @@ fn owned_pulses_can_default_to_no_pulse() {
 }
 
 #[test]
-fn wrappers_forward_stops_reports_splits_and_handles() {
+fn wrappers_forward_stops_reports_splits_and_shares() {
     let flagged = Arc::new(Flagged::default());
     let wrapped: [Box<dyn Pulse>; 3] = [
         Box::new(Arc::clone(&flagged)),
@@ -112,14 +103,14 @@ fn wrappers_forward_stops_reports_splits_and_handles() {
     for pulse in &wrapped {
         pulse.step(2).unwrap();
         assert_eq!(two_stages(&**pulse), Ok(2));
-        let handle = pulse.handle();
-        handle.advance(1);
-        assert!(handle.stop.is_some());
+        let shared = pulse.share().unwrap();
+        shared.advance(1);
+        assert!(shared.may_stop());
     }
     assert_eq!(flagged.units.load(Ordering::Relaxed), 9);
     flagged.stopped.store(true, Ordering::Relaxed);
     for pulse in &wrapped {
         assert_eq!(pulse.check(), Err(StopReason::Cancelled));
-        assert_eq!(pulse.handle().check(), Err(StopReason::Cancelled));
+        assert_eq!(pulse.share().unwrap().check(), Err(StopReason::Cancelled));
     }
 }

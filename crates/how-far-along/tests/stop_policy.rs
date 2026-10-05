@@ -35,10 +35,6 @@ fn borrowed_policies_apply_at_every_depth_and_keep_completion_ownership() {
                 WithStop::borrowed(&root, &local)
             };
             assert!(matches!(combined.share(), Err(PlanError::NotShareable)));
-            assert!(matches!(
-                combined.try_handle(),
-                Err(PlanError::NotShareable)
-            ));
             let child = combined
                 .split(
                     Execution::Sequence,

@@ -31,7 +31,7 @@ where
 mod tests {
     use super::*;
     use almost_enough::Stopper;
-    use how_far::{Child, Execution, Outcome, PhaseSpec, PlanError, PulseHandle, Unstoppable};
+    use how_far::{Child, Execution, Outcome, PhaseSpec, PlanError, Unstoppable};
     use how_far_along::Status;
     use how_far_example_codec::{self as codec, Mode};
     use how_far_example_pipeline::{self as pipeline, Bug, Error};
@@ -198,12 +198,12 @@ mod tests {
         );
         let observer = pulse.observer();
         let shared = pulse.share().unwrap();
-        let legacy = shared.handle();
+        let again = shared.share().unwrap();
         pulse.advance(1);
         pulse.complete(Ok::<_, StopReason>(())).unwrap();
         let before = observer.snapshot();
         shared.advance(2);
-        legacy.advance(3);
+        again.advance(3);
         assert_eq!(observer.snapshot(), before);
         let trace = profiler.snapshot();
         assert_eq!(trace.incidents.len(), 1);
@@ -326,32 +326,29 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_sink_preserves_bare_stop_reason_and_never_panics_or_spins() {
-        struct Busy;
-        impl Stop for Busy {
+    fn a_rejecting_sink_preserves_bare_stop_reason_and_never_panics_or_spins() {
+        struct Rejecting;
+        impl Stop for Rejecting {
             fn check(&self) -> Result<(), StopReason> {
                 Err(StopReason::TimedOut)
             }
         }
-        impl Report for Busy {
+        impl Report for Rejecting {
             fn advance(&self, _: u64) {}
         }
-        impl Pulse for Busy {
+        impl Pulse for Rejecting {
             fn split(
                 &self,
                 _: Execution,
                 _: &[PhaseSpec<'_>],
             ) -> Result<Vec<Child<'_>>, PlanError> {
-                Err(PlanError::Busy)
-            }
-            fn handle(&self) -> PulseHandle {
-                PulseHandle::default()
+                Err(PlanError::Unsupported)
             }
         }
         let mut phases = how_far::Phases::new(
-            &Busy,
+            &Rejecting,
             Execution::Sequence,
-            &[PhaseSpec::new("busy", 1, Total::Unknown)],
+            &[PhaseSpec::new("rejected", 1, Total::Unknown)],
         );
         let result: Result<(), StopReason> = phases.run(0, |p| p.check());
         assert_eq!(result.finish_phase(phases), Err(StopReason::TimedOut));

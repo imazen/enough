@@ -1,8 +1,8 @@
-//! `'static` ownership: trees moved between threads, handles stored in codec
-//! contexts, and async runtimes.
+//! `'static` ownership: trees moved between threads, shared views stored in
+//! codec contexts, and async runtimes.
 
 use almost_enough::Stopper;
-use how_far::{PulseHandle, TryStages};
+use how_far::{SharedPulse, TryStages};
 use how_far_along::{
     Child, Observer, Outcome, Phase, ProgressExt, Pulse, PulseTree, Reporter, Snapshot, Status,
     Stop, StopReason, Unstoppable,
@@ -15,9 +15,9 @@ fn owned<T: Send + Sync + 'static>() {}
 fn shared<T: Send + Sync>() {}
 
 #[test]
-fn handles_and_trees_are_owned_and_thread_safe() {
+fn shared_views_and_trees_are_owned_and_thread_safe() {
     owned::<PulseTree>();
-    owned::<PulseHandle>();
+    owned::<SharedPulse>();
     owned::<Phase>();
     owned::<Reporter>();
     owned::<Observer>();
@@ -31,12 +31,12 @@ fn handles_and_trees_are_owned_and_thread_safe() {
 
 #[test]
 fn a_codec_context_that_owns_its_stop_is_cancelled_mid_loop() {
-    // Many codecs keep `impl Stop + 'static` in a context object. The handle
-    // reaches inside it: the coder stops between tiles, not after the frame.
+    // Many codecs keep `impl Stop + 'static` in a context object. A shared
+    // view reaches inside it: the coder stops between tiles, not after the frame.
     let tiles: Vec<Vec<u8>> = (0..12).map(|i| vec![i as u8; 256]).collect();
     let tracked = tree_stopping_when("coder", |root| root.completed >= 3);
     let observer = tracked.observer();
-    let mut coder = EntropyCoder::new(tracked.handle());
+    let mut coder = EntropyCoder::new(tracked.share().unwrap());
     assert_eq!(
         coder.code(&tiles),
         Err(CodecError::Stopped(StopReason::Cancelled))
@@ -46,7 +46,7 @@ fn a_codec_context_that_owns_its_stop_is_cancelled_mid_loop() {
 }
 
 #[test]
-fn a_stage_handle_stored_by_the_codec_stops_inside_its_stage() {
+fn a_stage_view_stored_by_the_codec_stops_inside_its_stage() {
     let image = Image::pattern(32, 16 * 20);
     let tracked = tree_stopping_when("encode", |root| {
         root.children.len() == 3 && root.children[2].completed >= 4
@@ -139,15 +139,15 @@ fn blocking_work_runs_on_tokio_while_an_async_task_watches_and_cancels() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn async_tasks_report_through_handles() {
+async fn async_tasks_report_through_shared_views() {
     let tracked = tree("async", Unstoppable);
     let observer = tracked.observer();
     let tasks: Vec<_> = (0..8)
         .map(|_| {
-            let handle = tracked.handle();
+            let shared = tracked.share().unwrap();
             tokio::spawn(async move {
                 for _ in 0..5 {
-                    handle.step(1)?;
+                    shared.step(1)?;
                     tokio::task::yield_now().await;
                 }
                 Ok::<_, StopReason>(())
@@ -162,13 +162,13 @@ async fn async_tasks_report_through_handles() {
 }
 
 #[test]
-fn a_handle_outlives_its_tree_harmlessly() {
+fn a_shared_view_outlives_its_tree_harmlessly() {
     let tracked = tree("short-lived", Unstoppable);
     let observer = tracked.observer();
-    let handle = tracked.handle();
+    let shared = tracked.share().unwrap();
     tracked.finish(Outcome::Succeeded).unwrap();
-    // Late reports from a stale handle cannot change a finished record.
-    handle.step(10).unwrap();
+    // Late reports from a stale view cannot change a finished record.
+    shared.step(10).unwrap();
     assert_eq!(observer.snapshot().completed, 0);
-    assert!(handle.stop.check().is_ok());
+    assert!(shared.check().is_ok());
 }

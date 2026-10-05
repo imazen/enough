@@ -61,5 +61,5 @@ The app also runs deliberately buggy library variants:
 
 Diagnostics cannot recover intent or fix a library that swallows its own errors.
 Tests assert both the original result and the observation, including the limits
-of what can be inferred. A deliberately Busy sink confirms that rejected tracking
-cannot replace even a bare `Result<(), StopReason>` or spin waiting for a lock.
+of what can be inferred. A sink that rejects every plan confirms that rejected
+tracking cannot replace even a bare `Result<(), StopReason>`.

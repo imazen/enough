@@ -1,15 +1,15 @@
 //! A hand-written `Pulse` shared by OS threads, with no tracker involved.
 
 use how_far::{
-    Child, Execution, PhaseSpec, PlanError, ProgressExt, ProgressWithStop, Pulse, PulseHandle,
-    Report, Stop, StopReason,
+    Child, Execution, PhaseSpec, PlanError, ProgressExt, Pulse, Report, SharedPulse, Stop,
+    StopReason,
 };
 use std::sync::{
     Arc, Barrier,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-/// A leaf whose state is shared, so it can also hand out `'static` handles.
+/// A leaf whose state is shared, so it can also hand out `'static` views.
 #[derive(Clone, Default)]
 struct SharedLeaf {
     completed: Arc<AtomicU64>,
@@ -24,12 +24,6 @@ impl Stop for Flag {
         } else {
             Ok(())
         }
-    }
-}
-struct Counter(Arc<AtomicU64>);
-impl Report for Counter {
-    fn advance(&self, units: u64) {
-        self.0.fetch_add(units, Ordering::Relaxed);
     }
 }
 
@@ -47,11 +41,8 @@ impl Pulse for SharedLeaf {
     fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         Err(PlanError::Unsupported)
     }
-    fn handle(&self) -> PulseHandle {
-        ProgressWithStop::new(
-            Some(Arc::new(Flag(self.cancelled.clone()))),
-            Some(Arc::new(Counter(self.completed.clone()))),
-        )
+    fn share(&self) -> Result<SharedPulse, PlanError> {
+        Ok(SharedPulse::new(self.clone()))
     }
 }
 
@@ -94,16 +85,16 @@ fn four_scoped_threads_share_one_dyn_pulse_and_all_see_cancellation() {
 }
 
 #[test]
-fn spawned_static_threads_work_through_owned_handles() {
+fn spawned_static_threads_work_through_shared_views() {
     let leaf = SharedLeaf::default();
     let pulse: &dyn Pulse = &leaf;
     let workers: Vec<_> = (0..4)
         .map(|_| {
-            let handle = pulse.handle();
+            let shared = pulse.share().unwrap();
             // `thread::spawn` needs `'static`; a borrowed pulse cannot move in.
             std::thread::spawn(move || {
                 for _ in 0..25 {
-                    handle.step(1)?;
+                    shared.step(1)?;
                 }
                 Ok::<(), StopReason>(())
             })
@@ -115,8 +106,8 @@ fn spawned_static_threads_work_through_owned_handles() {
     assert_eq!(leaf.completed.load(Ordering::Relaxed), 100);
 
     leaf.cancelled.store(true, Ordering::Release);
-    let handle = pulse.handle();
-    let stopped = std::thread::spawn(move || handle.stop.check());
+    let shared = pulse.share().unwrap();
+    let stopped = std::thread::spawn(move || shared.check());
     assert_eq!(stopped.join().unwrap(), Err(StopReason::Cancelled));
 }
 

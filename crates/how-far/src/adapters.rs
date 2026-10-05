@@ -1,7 +1,7 @@
 //! Erased cancellation adapters; no copy of their machinery per inner type.
 use crate::{
-    Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, ProgressWithStop, Pulse,
-    PulseHandle, Report, SharedPulse, Stop, StopReason, Total,
+    Child, ChildPulse, Execution, NoPulse, Outcome, PhaseSpec, PlanError, Pulse, Report,
+    SharedPulse, Stop, StopReason, Total,
 };
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
@@ -82,17 +82,6 @@ impl<'a> WithStop<'a> {
             mode: Mode::Replace,
         }
     }
-    /// Fallible access to the legacy count/check handle. Borrowed policies cannot
-    /// become `'static` handles. Prefer [`Pulse::share`] for full capabilities.
-    pub fn try_handle(&self) -> Result<PulseHandle, PlanError> {
-        let stop = self.stop.owned()?;
-        let handle = self.inner().handle();
-        let stop: Arc<dyn Stop> = match self.mode {
-            Mode::Combine => Arc::new(BothStop(handle.stop, stop)),
-            Mode::Replace => stop,
-        };
-        Ok(ProgressWithStop::new(Some(stop), handle.report))
-    }
     fn inner(&self) -> &dyn Pulse {
         match &self.inner {
             Inner::Borrowed(p) => *p,
@@ -147,16 +136,6 @@ impl Pulse for WithStop<'_> {
             })
             .collect())
     }
-    /// Legacy infallible handle conversion.
-    ///
-    /// # Panics
-    /// Panics for a borrowed stop source. Use [`Self::try_handle`] or
-    /// [`Pulse::share`] to handle this lifetime limitation explicitly.
-    #[track_caller]
-    fn handle(&self) -> PulseHandle {
-        self.try_handle()
-            .expect("borrowed stop cannot become a static handle; use share or try_handle")
-    }
     fn share(&self) -> Result<SharedPulse, PlanError> {
         let stop = self.stop.owned()?;
         Ok(SharedPulse::new(WithStop {
@@ -188,16 +167,5 @@ impl ChildPulse for WithStop<'_> {
             Inner::Child(child) => child.finish(outcome),
             _ => Err(PlanError::Unsupported),
         }
-    }
-}
-struct BothStop(Option<Arc<dyn Stop>>, Arc<dyn Stop>);
-impl Stop for BothStop {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.0.check()?;
-        self.1.check()
-    }
-    fn may_stop(&self) -> bool {
-        self.0.may_stop() || self.1.may_stop()
     }
 }

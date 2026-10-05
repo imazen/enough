@@ -17,7 +17,7 @@ records through a codec's API unless observation itself is its purpose.
 `how-far-along` owns concrete tracking: `Phase`, `PulseTree`, `Reporter`,
 `Observer`, `NodeId`, `Status`, `Summary`, `Snapshot`, polling and optional callback
 adapters. Its root re-exports the author-facing core types, not `ChildPulse`,
-legacy count/check handle implementation types, `RunError`, or `TryStages`.
+`RunError`, or `TryStages`.
 Implementors import those directly from core. It never re-exports diagnostics.
 
 `how-far-really` owns opt-in profiling and analysis. Its two public modules are
@@ -45,8 +45,7 @@ planning failures in their return type; its `RunError<E>` and `run_stoppable`
 are not the normal adoption path. All low-level administration methods retain
 explicit errors. Best-effort planning records a rejection and supplies
 cancellation-preserving untracked children. The tracker serializes
-administration rather than refusing it; `PlanError::Busy` remains for sinks
-that cannot wait.
+administration rather than refusing it.
 
 Completion rights are owned and consumed; shared views never acquire them.
 That makes duplicate completion through the same handle unrepresentable.
@@ -92,9 +91,8 @@ std-only crate. Encoder adoption can gate both dependency and instrumentation.
 `WithStop::borrowed` combines checkpoints; `replacing_borrowed` bypasses the
 original checkpoint policy, including callbacks. Both preserve reporting and
 completion. Owned `new`/`replacing` policies support `share`; borrowed policies
-support scoped workers and return NotShareable for ownership conversion. The
-legacy infallible `handle()` cannot represent that error and panics for borrowed
-policies; use `share()` or adapter `try_handle()` where ownership is optional.
+support scoped workers and return NotShareable for ownership conversion. No
+owned-view path panics or silently drops a policy.
 
 Extensible enums and observation records are non-exhaustive. Do not use diagnostic
 messages as machine identifiers or treat timing thresholds as correctness rules.

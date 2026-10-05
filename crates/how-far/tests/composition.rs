@@ -7,8 +7,8 @@
 //! outer finish failed (`Plan(Finished)`), replacing the real result.
 
 use how_far::{
-    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, PulseHandle,
-    Report, RunError, Stop, StopReason, Total, TryStages,
+    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressExt, Pulse, Report,
+    RunError, Stop, StopReason, Total, TryStages,
 };
 use std::{
     collections::BTreeMap,
@@ -94,9 +94,6 @@ impl Pulse for Recorder {
                 ))
             })
             .collect())
-    }
-    fn handle(&self) -> PulseHandle {
-        PulseHandle::default()
     }
 }
 

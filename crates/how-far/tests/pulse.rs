@@ -25,9 +25,9 @@ fn no_pulse_supports_the_whole_nested_api() {
     library_operation(&NoPulse).unwrap();
     assert!(!NoPulse.may_stop());
     assert!(!NoPulse.may_report());
-    let handle = NoPulse.handle();
-    assert!(handle.stop.is_none() && handle.report.is_none());
-    handle.step(1).unwrap();
+    let shared = NoPulse.share().unwrap();
+    assert!(!shared.may_stop() && !shared.may_report());
+    shared.step(1).unwrap();
 }
 
 #[test]
@@ -182,9 +182,6 @@ fn split_array_rejects_a_pulse_that_breaks_the_split_contract() {
         ) -> Result<Vec<how_far::Child<'_>>, PlanError> {
             Ok(Vec::new())
         }
-        fn handle(&self) -> how_far::PulseHandle {
-            how_far::PulseHandle::default()
-        }
     }
     let _ = Broken.split_array(
         Execution::Sequence,
@@ -254,10 +251,12 @@ fn the_prelude_brings_every_checkpoint_method_into_scope() {
             live.check()?;
             live.advance(1);
             live.step(1)?;
-            let handle = pulse.handle();
-            handle.check()?;
-            handle.advance(1);
-            handle.step(1)
+            if let Ok(shared) = pulse.share() {
+                shared.check()?;
+                shared.advance(1);
+                shared.step(1)?;
+            }
+            Ok(())
         }
     }
     library::run(&NoPulse).unwrap();

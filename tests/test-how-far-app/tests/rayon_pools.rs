@@ -93,17 +93,17 @@ fn the_global_pool_works_like_a_custom_one() {
 }
 
 #[test]
-fn static_rayon_spawns_report_through_handles() {
+fn static_rayon_spawns_report_through_shared_views() {
     let tracked = tree("spawned", Unstoppable);
     let observer = tracked.observer();
     let (done, finished) = mpsc::channel();
     for _ in 0..16 {
-        let handle = tracked.handle();
+        let shared = tracked.share().unwrap();
         let done = done.clone();
         // `rayon::spawn` needs `'static`, so it cannot borrow the pulse.
         rayon::spawn(move || {
             for _ in 0..4 {
-                handle.step(1).unwrap();
+                shared.step(1).unwrap();
             }
             done.send(()).unwrap();
         });

@@ -6,7 +6,7 @@
 use almost_enough::{FnStop, Stopper};
 use how_far::prelude::*;
 use how_far::{
-    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, PulseHandle, RunError,
+    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, RunError,
     StopReason, TryStages, Unstoppable,
 };
 use how_far_along::{Checkpoint, FnPulse, Phase, PulseTree, Total};
@@ -157,9 +157,6 @@ impl<S: Stop, R: Report> Report for Combo<S, R> {
 impl<S: Stop, R: Report> Pulse for Combo<S, R> {
     fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         Err(PlanError::Unsupported)
-    }
-    fn handle(&self) -> PulseHandle {
-        PulseHandle::default()
     }
 }
 

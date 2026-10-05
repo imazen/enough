@@ -1,8 +1,6 @@
 //! `Paced`: local counting, reaching the pulse only every so many units.
 
-use how_far::{
-    Child, Execution, Paced, PhaseSpec, PlanError, Pulse, PulseHandle, Report, Stop, StopReason,
-};
+use how_far::{Child, Execution, Paced, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -45,9 +43,6 @@ impl Report for Probe {
 impl Pulse for Probe {
     fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         Err(PlanError::Unsupported)
-    }
-    fn handle(&self) -> PulseHandle {
-        PulseHandle::default()
     }
 }
 impl Probe {

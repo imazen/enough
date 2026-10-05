@@ -55,8 +55,8 @@ cancellation error. Counters do not synchronize application data.
 
 `share()` preserves the complete Pulse interface for owned tasks but grants no
 completion rights. Join workers before completing their original owner.
-Unsupported sharing remains an explicit capability error. `handle()` is the
-legacy count/check-only adapter. `Pulse::split`, `start`, `set_total`,
+Unsupported sharing is an explicit `NotShareable` error, never a silent loss of
+cancellation. `Pulse::split`, `start`, `set_total`,
 and `Child::finish` are the explicitly fallible administration layer. The optional
 `checked` feature adds `TryStages` and its `RunError` wrapper.
 

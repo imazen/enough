@@ -35,8 +35,7 @@ use core::{
     time::Duration,
 };
 use how_far::{
-    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, ProgressWithStop, Pulse,
-    PulseHandle, Report, Stop, StopReason,
+    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, Pulse, Report, Stop, StopReason,
 };
 use how_far_along::{NodeId, Observer, PulseTree, Snapshot, Status};
 
@@ -221,7 +220,7 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 /// while it coordinates them. A stage is thereby timed from entry to exit,
 /// and its children's work never counts as its own missing checkpoints.
 ///
-/// [`Pulse::handle`] returns an instrumented handle, so checks made inside
+/// [`Pulse::share`] returns an instrumented owned view, so checks made inside
 /// code that owns its stop policy, such as a codec context, count toward the
 /// stage that handed it out. `may_stop` and `may_report` are always `true`, so
 /// libraries that skip calls on no-op pulses still make the calls measured.
@@ -312,7 +311,7 @@ struct Meter {
 #[derive(Default)]
 struct SpanSlot {
     open: Option<Span>,
-    /// Kept after close: late calls through retained views or handles land in
+    /// Kept after close: late calls through retained shared views land in
     /// a finished span, which ignores them, instead of opening one that never ends.
     last: Option<Arc<SpanInner>>,
 }
@@ -465,20 +464,6 @@ impl Meter {
         Ok(measured)
     }
 
-    fn handle(self: &Arc<Self>, inner: &dyn Pulse) -> PulseHandle {
-        let handle = inner.handle();
-        ProgressWithStop::new(
-            Some(Arc::new(Metered {
-                inner: handle.stop,
-                meter: Arc::clone(self),
-            }) as Arc<dyn Stop>),
-            Some(Arc::new(Metered {
-                inner: handle.report,
-                meter: Arc::clone(self),
-            }) as Arc<dyn Report>),
-        )
-    }
-
     fn close(&self, outcome: Outcome) {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
@@ -548,14 +533,11 @@ impl Pulse for DiagnosticPulse {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         self.meter.split(&self.tree, execution, parts)
     }
-    fn handle(&self) -> PulseHandle {
-        self.meter.0.handle(&self.tree)
-    }
     fn start(&self) -> Result<(), PlanError> {
         self.tree.start()
     }
     fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(Metered {
+        Ok(how_far::SharedPulse::new(DiagnosticView {
             inner: self.tree.share()?,
             meter: Arc::clone(&self.meter.0),
         }))
@@ -603,14 +585,11 @@ impl Pulse for DiagnosticChild<'_> {
     ) -> Result<Vec<Child<'_>>, PlanError> {
         self.meter.split(&self.inner, execution, parts)
     }
-    fn handle(&self) -> PulseHandle {
-        self.meter.0.handle(&self.inner)
-    }
     fn start(&self) -> Result<(), PlanError> {
         self.inner.start()
     }
     fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(Metered {
+        Ok(how_far::SharedPulse::new(DiagnosticView {
             inner: self.inner.share()?,
             meter: Arc::clone(&self.meter.0),
         }))
@@ -644,15 +623,14 @@ impl ChildPulse for DiagnosticChild<'_> {
     }
 }
 
-// An owned, non-owning view of one phase: a shared pulse, or a legacy handle's
-// stop or sink. Each call records into whatever span the phase has now, so a
-// view retained past a split or the phase's close records consistently, and
-// dropping it never ends a span.
-struct Metered<T> {
-    inner: T,
+// An owned, non-owning view of one phase. Each call records into whatever span
+// the phase has now, so a view retained past a split or the phase's close
+// records consistently, and dropping it never ends a span.
+struct DiagnosticView {
+    inner: how_far::SharedPulse,
     meter: Arc<Meter>,
 }
-impl<T: Stop> Stop for Metered<T> {
+impl Stop for DiagnosticView {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
         self.meter.check(&self.inner)
@@ -661,7 +639,7 @@ impl<T: Stop> Stop for Metered<T> {
         true
     }
 }
-impl<T: Report> Report for Metered<T> {
+impl Report for DiagnosticView {
     #[track_caller]
     fn advance(&self, n: u64) {
         self.meter.advance(&self.inner, n);
@@ -670,16 +648,13 @@ impl<T: Report> Report for Metered<T> {
         true
     }
 }
-impl Pulse for Metered<how_far::SharedPulse> {
+impl Pulse for DiagnosticView {
     #[track_caller]
     fn record_issue(&self, error: PlanError) {
         self.meter.issue(Problem::Plan(error));
     }
     fn split(&self, e: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         self.meter.split(&self.inner, e, parts)
-    }
-    fn handle(&self) -> PulseHandle {
-        self.meter.handle(&self.inner)
     }
     fn start(&self) -> Result<(), PlanError> {
         self.inner.start()
