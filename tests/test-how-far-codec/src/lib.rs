@@ -109,7 +109,7 @@ impl From<RunError<CodecError>> for CodecError {
 ///
 /// The three stages show the common shapes: a serial loop, a Rayon stage
 /// whose workers share one count, and a codec context that owns its stop
-/// policy and progress sink and therefore needs `'static` handles.
+/// policy and progress sink and therefore needs a `'static` shared view.
 pub fn encode(image: &Image, pulse: &dyn Pulse) -> Result<Vec<u8>, CodecError> {
     let tiles = image.tiles() as u64;
     let workers = NonZeroUsize::new(rayon::current_num_threads()).unwrap_or(NonZeroUsize::MIN);
@@ -174,7 +174,7 @@ fn transform(image: &Image, stage: &dyn Pulse) -> Result<Vec<Vec<u8>>, CodecErro
 ///
 /// Codec contexts often store `impl Stop + 'static` so they can outlive the
 /// call that built them. A borrowed `&dyn Pulse` cannot be stored like that;
-/// [`Pulse::handle`] can.
+/// the [`SharedPulse`](how_far::SharedPulse) from [`Pulse::share`] can.
 pub struct EntropyCoder<P: Stop + Report + 'static> {
     pulse: P,
     state: u64,

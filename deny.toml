@@ -15,6 +15,9 @@ exclude = [
     "test-how-far-codec",
     "test-how-far-pipeline",
     "test-how-far-app",
+    "how-far-example-codec",
+    "how-far-example-pipeline",
+    "how-far-example-app",
 ]
 
 [advisories]

@@ -209,10 +209,12 @@ mod tests {
         assert_eq!(trace.incidents.len(), 1);
         assert_eq!(trace.dropped_incidents, 1);
         assert_eq!(trace.incidents[0].problem, Problem::ReportAfterCompletion);
+        // Windows reports the path with backslashes.
         assert!(
             trace.incidents[0]
                 .site
                 .file
+                .replace('\\', "/")
                 .ends_with("how-far-app/src/lib.rs")
         );
     }
