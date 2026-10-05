@@ -150,3 +150,19 @@ fn the_pulse_sees_the_step_call_site() {
     pace.check().unwrap();
     assert_eq!(*probe.line.lock().unwrap(), line);
 }
+
+#[test]
+fn an_owned_worker_paces_through_its_shared_view() {
+    let probe = std::sync::Arc::new(Probe::default());
+    let shared = how_far::SharedPulse::new(std::sync::Arc::clone(&probe));
+    let worker = std::thread::spawn(move || {
+        let mut pace = shared.paced(10);
+        for _ in 0..25 {
+            pace.step(1)?;
+        }
+        pace.finish()
+    });
+    assert_eq!(worker.join().unwrap(), Ok(()));
+    // Two full batches, then the final partial batch flushed by finish.
+    assert_eq!(probe.counts(), (3, 3, 25));
+}

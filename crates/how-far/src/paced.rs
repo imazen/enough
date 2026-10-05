@@ -159,3 +159,11 @@ impl crate::Child<'_> {
         Paced::new(self.pulse(), every)
     }
 }
+
+impl crate::SharedPulse {
+    /// Checkpoints that reach this shared pulse once every `every` units; see
+    /// [`Paced`]. One per worker, like any `Paced`.
+    pub fn paced(&self, every: u64) -> Paced<'_> {
+        Paced::new(self.as_pulse(), every)
+    }
+}

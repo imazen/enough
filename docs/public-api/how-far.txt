@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 164 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 166 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,7 +14,7 @@
 #   pub types (struct/enum/trait/alias)        27
 #   pub consts/statics                          7
 #   free functions                             14
-#   inherent methods                           59
+#   inherent methods                           61
 #   struct fields                               8
 #   enum variants                              22
 #   re-exports                                  4
@@ -23,10 +23,10 @@
 #   auto-trait exceptions                       7
 #
 # per-module pub lines:
-#   (root)                          120
+#   (root)                          122
 #   prelude                          23
 
-## items (130 lines)
+## items (132 lines)
 
 pub mod how_far
 pub use Stop
@@ -123,6 +123,8 @@ pub const fn ProgressWithStop<S, R>::new(S, R) -> Self
 pub struct SharedPulse(_)
 pub fn SharedPulse::as_pulse(&self) -> &dyn Pulse
 pub fn SharedPulse::new(impl Pulse + 'static) -> Self
+pub fn SharedPulse::plan(&self, Execution, &[PhaseSpec<'_>]) -> alloc::vec::Vec<Child<'_>>
+pub fn SharedPulse::paced(&self, u64) -> Paced<'_>
 pub struct Stages<'a>
 pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> Self
 pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop

@@ -727,6 +727,12 @@ impl SharedPulse {
             None => &NoPulse,
         }
     }
+
+    /// Best-effort planning, as for a borrowed pulse; see `<dyn Pulse>::plan`.
+    #[track_caller]
+    pub fn plan(&self, execution: Execution, parts: &[PhaseSpec<'_>]) -> Vec<Child<'_>> {
+        self.as_pulse().plan(execution, parts)
+    }
 }
 impl fmt::Debug for SharedPulse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
