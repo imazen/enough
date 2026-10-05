@@ -1,10 +1,10 @@
 //! Best-effort observation of sequential work; errors belong to the work.
-use crate::{Child, Complete, Execution, Outcome, PhaseSpec, PlanError, Pulse, StopReason};
+use crate::{Child, Complete, Execution, IsStop, Outcome, PhaseSpec, PlanError, Pulse};
 use alloc::collections::VecDeque;
 
 /// Sequential work returning the library's ordinary `Result<T, E>`.
 ///
-/// Implement `TryFrom<&YourError> for StopReason` to recognize cancellation.
+/// Implement [`IsStop`] for your error to recognize cancellation.
 /// `From<StopReason>` supports `?` at checks; no planning-error conversion is
 /// required. For explicitly fallible planning use `TryStages` (the `checked` feature).
 ///
@@ -41,7 +41,7 @@ impl<'a> Stages<'a> {
     #[track_caller]
     pub fn run<T, E>(&mut self, work: impl FnOnce(&dyn Pulse) -> Result<T, E>) -> Result<T, E>
     where
-        for<'e> &'e E: TryInto<StopReason>,
+        E: IsStop,
     {
         let child = self.begin();
         let result = work(&child);
@@ -65,9 +65,9 @@ impl<'a> Stages<'a> {
     // Keep bookkeeping out of the per-closure monomorphization.
     fn complete_result<T, E>(&mut self, child: Child<'_>, result: Result<T, E>) -> Result<T, E>
     where
-        for<'e> &'e E: TryInto<StopReason>,
+        E: IsStop,
     {
-        let outcome = Outcome::from_result(&result, |error| error.try_into().is_ok());
+        let outcome = Outcome::from_result(&result, |error| error.stop_reason().is_some());
         self.end(child, outcome);
         result
     }

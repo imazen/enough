@@ -47,11 +47,11 @@ become `Skipped` on success or `NotRun` on failure. Drop without a result record
 over whatever the body returns, so an early `?` cannot bypass the handoff. A borrowed pulse belongs to its caller: complete your child
 owners and plan helpers, never the borrowed input.
 
-For a custom error, implement `From<StopReason>` for `?` and
-`TryFrom<&YourError> for StopReason` for cancellation classification. The latter
-only borrows the error. Bare `StopReason` works directly. With a foreign error
-wrapper that cannot implement the conversion, use an explicit classifier in
-`run_classified`.
+For a custom error, implement `From<StopReason>` for `?` and `IsStop` for
+cancellation classification; the latter only inspects the error. Forgetting it
+is a compile error that names the fix. Bare `StopReason` works directly. For a
+foreign error type you cannot implement `IsStop` for, pass a classifier to
+`run_classified` or `complete_classified`.
 
 `check` invokes cancellation/checkpoint policy; `advance` only counts; `step`
 counts then checks. One `Paced` per worker batches reports. Its `finish()` flushes

@@ -25,12 +25,11 @@ impl From<StopReason> for Error {
         Self::Stopped(reason)
     }
 }
-impl TryFrom<&Error> for StopReason {
-    type Error = ();
-    fn try_from(error: &Error) -> Result<Self, ()> {
-        match error {
-            Error::Stopped(reason) => Ok(*reason),
-            _ => Err(()),
+impl IsStop for Error {
+    fn stop_reason(&self) -> Option<StopReason> {
+        match self {
+            Self::Stopped(reason) => Some(*reason),
+            _ => None,
         }
     }
 }

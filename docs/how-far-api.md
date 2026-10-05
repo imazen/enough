@@ -35,9 +35,12 @@ classification borrows the error and requires neither cloning nor converting it.
 `complete_with` runs a multi-step body and hands over its result, so an early
 `?` inside the body cannot skip the handoff.
 `From<StopReason>` is only for library code using `?` at a checkpoint.
-`TryFrom<&LibraryError> for StopReason` identifies cancellation for observation.
-Foreign error wrappers can use `run_classified` and `complete_classified` to
-avoid Rust's orphan-rule restriction. No PlanError conversion is required.
+`IsStop` identifies cancellation for observation: a one-method trait rather
+than a `TryFrom<&LibraryError> for StopReason` convention, because a bound on
+that conversion lets rustc infer `StopReason` for an unannotated error type and
+report a misleading type mismatch when the conversion is missing. Foreign error
+wrappers can use `run_classified` and `complete_classified` to avoid Rust's
+orphan-rule restriction. No PlanError conversion is required.
 
 `Stages` stops assigning declared phases after a work error. `Phases` permits
 independently chosen attempts, so the library decides what is recoverable.

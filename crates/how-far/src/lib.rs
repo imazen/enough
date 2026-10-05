@@ -22,7 +22,7 @@ mod stop_only;
 #[cfg(feature = "checked")]
 mod try_stages;
 
-pub use completion::{Complete, ResultExt};
+pub use completion::{Complete, IsStop, ResultExt};
 pub use ext::ProgressExt;
 pub use paced::Paced;
 pub use phases::Phases;
@@ -43,5 +43,5 @@ pub use try_stages::{RunError, TryStages};
 /// `Stop`, `Report` and `ProgressExt` imported to call `check`, `advance` and
 /// `step`.
 pub mod prelude {
-    pub use crate::{Complete, ProgressExt, Pulse, Report, ResultExt, Stop};
+    pub use crate::{Complete, IsStop, ProgressExt, Pulse, Report, ResultExt, Stop};
 }

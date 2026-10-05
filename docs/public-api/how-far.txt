@@ -6,27 +6,27 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 160 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 164 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        25
+#   pub types (struct/enum/trait/alias)        27
 #   pub consts/statics                          7
 #   free functions                             14
-#   inherent methods                           57
+#   inherent methods                           59
 #   struct fields                               8
 #   enum variants                              22
 #   re-exports                                  4
-#   trait roster entries (type × trait)        82
+#   trait roster entries (type × trait)        83
 #   auto-trait-complete types                   7
 #   auto-trait exceptions                       7
 #
 # per-module pub lines:
-#   (root)                          118
-#   prelude                          21
+#   (root)                          120
+#   prelude                          23
 
-## items (127 lines)
+## items (130 lines)
 
 pub mod how_far
 pub use Stop
@@ -34,10 +34,11 @@ pub use StopReason
 pub use Unstoppable
 pub mod prelude
 pub use prelude::Stop
-pub fn prelude::Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn prelude::Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
 pub fn prelude::Complete::complete_as(self, Outcome)
 pub fn prelude::Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
-pub fn prelude::Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn prelude::Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
+pub fn prelude::IsStop::stop_reason(&self) -> core::option::Option<enough::reason::StopReason>
 pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
 pub fn prelude::ProgressExt::step(&self, u64) -> core::result::Result<(), enough::reason::StopReason>
@@ -55,7 +56,7 @@ pub fn prelude::Report::advance(&self, u64)
 pub fn prelude::Report::may_report(&self) -> bool
 pub fn &mut T::advance(&self, u64) [also: (root)]
 pub fn &mut T::may_report(&self) -> bool [also: (root)]
-pub fn prelude::ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn prelude::ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where E: IsStop
 #[non_exhaustive] pub enum Execution
 pub Execution::ForkJoin
 pub Execution::Sequence
@@ -112,7 +113,7 @@ pub const fn PhaseSpec<'a>::units(self, &'a str) -> Self
 pub fn PhaseSpec<'a>::validate_split(&[PhaseSpec<'_>]) -> core::result::Result<u64, PlanError>
 pub struct Phases<'a>
 pub fn Phases<'a>::new(&'a dyn Pulse, Execution, &[PhaseSpec<'_>]) -> Self
-pub fn Phases<'a>::run<T, E>(&mut self, usize, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'e> &'e E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Phases<'a>::run<T, E>(&mut self, usize, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
 pub fn Phases<'a>::run_classified<T, E>(&mut self, usize, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 pub fn Phases<'a>::skip(&mut self, usize)
 pub struct ProgressWithStop<S, R>
@@ -124,7 +125,7 @@ pub fn SharedPulse::as_pulse(&self) -> &dyn Pulse
 pub fn SharedPulse::new(impl Pulse + 'static) -> Self
 pub struct Stages<'a>
 pub fn Stages<'a>::new(&'a dyn Pulse, &[PhaseSpec<'_>]) -> Self
-pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'e> &'e E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Stages<'a>::run<T, E>(&mut self, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
 pub fn Stages<'a>::run_classified<T, E>(&mut self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&dyn Pulse) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 pub fn Stages<'a>::skip(&mut self)
 pub struct StopOnly<'a>
@@ -136,10 +137,12 @@ pub fn ChildPulse::complete_as(alloc::boxed::Box<Self>, Outcome)
 pub fn ChildPulse::complete_inferred(alloc::boxed::Box<Self>, Outcome)
 pub fn ChildPulse::finish(alloc::boxed::Box<Self>, Outcome) -> core::result::Result<(), PlanError>
 pub trait Complete: core::marker::Sized [also: prelude]
-pub fn Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
 pub fn Complete::complete_as(self, Outcome)
 pub fn Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
-pub fn Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
+pub trait IsStop [also: prelude]
+pub fn IsStop::stop_reason(&self) -> core::option::Option<enough::reason::StopReason>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]
 pub fn ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
@@ -154,9 +157,9 @@ pub trait Report: core::marker::Send + core::marker::Sync [also: prelude]
 pub fn Report::advance(&self, u64)
 pub fn Report::may_report(&self) -> bool
 pub trait ResultExt<T, E>: core::marker::Sized [also: prelude]
-pub fn ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where for<'a> &'a E: core::convert::TryInto<enough::reason::StopReason>
+pub fn ResultExt::finish_phase(self, impl Complete) -> core::result::Result<T, E> where E: IsStop
 
-## trait impls (25 types)
+## trait impls (26 types)
 
 &P: Pulse
 &T: Report
@@ -183,6 +186,7 @@ alloc::sync::Arc<P>: Pulse
 alloc::sync::Arc<T>: Report
 core::option::Option<T>: Report
 core::result::Result<T, E>: ResultExt<T, E>
+enough::reason::StopReason: IsStop
 
 ## auto traits
 

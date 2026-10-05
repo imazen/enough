@@ -1,5 +1,5 @@
 //! An application adds tracking and diagnostics without changing either library.
-use how_far::{StopReason, Total, prelude::*};
+use how_far::{Total, prelude::*};
 use how_far_along::{Phase, PulseTree};
 use how_far_really::{
     diagnostics::DiagnosticPulse,
@@ -11,7 +11,7 @@ pub fn observe<T, E>(
     work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
 ) -> (Result<T, E>, Trace)
 where
-    for<'a> &'a E: TryInto<StopReason>,
+    E: IsStop,
 {
     let profiler = Profiler::new(StdClock::new(), 128);
     let pulse = DiagnosticPulse::new(
@@ -31,7 +31,7 @@ where
 mod tests {
     use super::*;
     use almost_enough::Stopper;
-    use how_far::{Child, Execution, Outcome, PhaseSpec, PlanError, Unstoppable};
+    use how_far::{Child, Execution, Outcome, PhaseSpec, PlanError, StopReason, Unstoppable};
     use how_far_along::Status;
     use how_far_example_codec::{self as codec, Mode};
     use how_far_example_pipeline::{self as pipeline, Bug, Error};

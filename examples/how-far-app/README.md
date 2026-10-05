@@ -20,8 +20,8 @@ Both libraries are `no_std + alloc`. Their public signatures expose only core
 `&dyn Pulse`, ordinary inputs, and their own `Result<T, Error>`. The codec uses
 `Phases` for independently selected attempts; the pipeline uses `Stages` for
 sequential work. Both convert `StopReason` into their own errors for `?`, and
-implement `TryFrom<&Error> for StopReason` for borrowed classification. The outer
-error delegates classification to its codec error without losing it.
+implement `how_far::IsStop` for classification. The outer error delegates
+classification to its codec error without losing it.
 
 The pipeline runs its body through `stages.complete_with(|stages| ...)`, which
 hands the body's result to the plan even after an early `?`; the codec, with one

@@ -6,13 +6,6 @@
 
 <!-- Breaks that will ship together in one leading-digit bump. None queued. -->
 
-### Release ordering
-
-- `how-far` needs the `enough` release that adds `From<&StopReason>`
-  (crates.io `enough` 0.4.4 lacks it, so `Stages::run` / `complete` with a bare
-  `StopReason` error would not compile against it). Publish `enough` first and
-  raise the workspace `enough` requirement to that version in the same commit.
-
 ### Added
 
 - `how-far` (new crate; Rust 1.86, `no_std + alloc`, depends only on `enough`):
@@ -22,7 +15,9 @@
   close the owners without changing the original value or error;
   `Complete::complete_with` runs a multi-step body so an early `?` still
   reaches the handoff. `StopOnly` turns an application's cancellation token
-  into a pulse without features or a tracker. Cancellation
+  into a pulse without features or a tracker. A library implements `IsStop`
+  for its error so owners record cancellation as `Cancelled`; forgetting it is
+  a compile error that names the fix. Works with published `enough` 0.4.4. Cancellation
   classification borrows errors. Shared views preserve planning and total
   revisions but never own completion. `Paced::finish` flushes and checks the
   final batch. Optional `adapters` adds stop composition; `checked` adds the
@@ -41,8 +36,6 @@
   latency, protocol incidents, and candidate sequential stage weights.
   It has no public core/tracker re-exports and neither library crate depends
   on it. Negligible stages keep their planned weights in one-run advice.
-- `enough`: borrowed `From<&StopReason>` conversion for result classification.
-  The existing cancellation crates retain Rust 1.85.
 - Cross-crate examples and tests cover nested library results, owned and scoped
   workers, Rayon, consumer polling, optional stop composition, and diagnostics
   that preserve library results. Browser fixtures exercise worker-owned Rayon

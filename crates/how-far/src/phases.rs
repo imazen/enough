@@ -1,5 +1,5 @@
 //! Independently selected phases for branches, attempts, and recoverable failures.
-use crate::{Child, Complete, Execution, Outcome, PhaseSpec, PlanError, Pulse, StopReason};
+use crate::{Child, Complete, Execution, IsStop, Outcome, PhaseSpec, PlanError, Pulse};
 use alloc::vec::Vec;
 
 /// A fixed set of owned phases, selected by index rather than automatic sequence.
@@ -33,7 +33,7 @@ impl<'a> Phases<'a> {
         work: impl FnOnce(&dyn Pulse) -> Result<T, E>,
     ) -> Result<T, E>
     where
-        for<'e> &'e E: TryInto<StopReason>,
+        E: IsStop,
     {
         let child = self.begin(index);
         let result = work(&child);

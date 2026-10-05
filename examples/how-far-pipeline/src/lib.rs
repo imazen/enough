@@ -38,13 +38,13 @@ impl From<StopReason> for Error {
         Self::Stopped(reason)
     }
 }
-impl TryFrom<&Error> for StopReason {
-    type Error = ();
-    fn try_from(error: &Error) -> Result<Self, ()> {
-        match error {
-            Error::Stopped(reason) => Ok(*reason),
-            Error::Codec(error) => Self::try_from(error),
-            _ => Err(()),
+impl IsStop for Error {
+    fn stop_reason(&self) -> Option<StopReason> {
+        match self {
+            Self::Stopped(reason) => Some(*reason),
+            // Classification delegates to the nested library's own error.
+            Self::Codec(error) => error.stop_reason(),
+            Self::Invalid(_) => None,
         }
     }
 }
