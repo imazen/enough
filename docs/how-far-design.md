@@ -1,8 +1,11 @@
 # how-far design
 
 Libraries describe and report work. Owners finish it. Checkpoints run cancellation
-and application callbacks. Observers read the resulting state. This worktree
-implements that contract over the callback branch at `0adafe1`.
+and application callbacks. Observers read the resulting state. The current
+implementation is `codex/howfar-v2` at `a1d0286`, extending
+callback baseline `0adafe1`. The intended deliverable is its full delta from
+main, not just that baseline. See [the handoff](how-far-handoff-opus.md) for
+branch state and unfinished integration work.
 
 ## Interface and ownership
 
@@ -144,7 +147,10 @@ and worker termination do not run Rust destructors.
 
 ## Validation
 
-See [the validation report](../benchmarks/howfar-v2-validation.md) for measured results and reproduction
-commands. The test suite covers ownership, nested spawned libraries, revisions,
+See [the current validation report](../benchmarks/howfar-results-validation.md)
+for the Result-based API, separate diagnostics crate, measured results and
+reproduction commands. [The earlier report](../benchmarks/howfar-v2-validation.md)
+retains measurements for its earlier implementation. The test suite covers
+ownership, nested spawned libraries, revisions,
 zero counts, saturation, concurrent callbacks, final paced cancellation, stale
 handles, diagnostic forwarding and dropping an owner during administration.

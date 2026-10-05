@@ -2,7 +2,10 @@
 
 The current Result/diagnostics changes are in [the validation report](../benchmarks/howfar-results-validation.md).
 The earlier redesign is recorded [here](../benchmarks/howfar-v2-validation.md).
-The dated build/runtime tables below describe the earlier baseline.
+The dated build/runtime tables below describe the earlier baseline. For the
+intended delta from main, current branch state and outstanding work, read
+[the Opus handoff](how-far-handoff-opus.md). These records are prior local
+results, not a claim that the current remote PR head was revalidated today.
 
 What is tested, where, and what the tests do not cover. See
 [the design notes](how-far-design.md) for why things work the way they do.
@@ -32,7 +35,7 @@ What is tested, where, and what the tests do not cover. See
 | Metadata replacement concurrent with snapshots, under Miri with strict provenance | `crates/how-far-along/src/sync.rs`, `crates/how-far-along/tests/phases.rs` |
 | A real Wasm timer boundary, JSPI suspension and cancellation, progress posted from a worker | `dev/how-far-wasm/check.mjs` |
 | A UI thread observing and cancelling a `wasm-bindgen-rayon` pool in Chromium and WebKit | `dev/how-far-browser/browser.spec.mjs` |
-| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` on 1.88; `no_std` builds for Cortex-M (including optional callbacks with native-width counters) and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
+| `enough` on Rust 1.85, `how-far` on 1.86, and `how-far-along` / `how-far-really` on 1.88; `no_std` builds for Cortex-M (including optional callbacks with native-width counters) and wasm32; every feature combination; i686, aarch64 Linux and Windows, Intel macOS | CI |
 
 No test suite proves every consumer's behavior. There is no built-in ETA
 model or executor; exported observations support them without claiming that
@@ -107,18 +110,21 @@ traces from the UI with `Profiler::try_snapshot`.
 
 ## Build cost
 
-A library that adopts `how-far` pays twice: once to compile `how-far`, and
-again for the generic `how-far` code compiled into the library itself.
-`dev/bench-how-far-build.py` measures both and runs in CI. It fails if
-`how-far` gains features other than additive `adapters`, a build script, or a dependency other than
-`enough`, or if one `Stages::run_*` call site adds more than 120 lines of
-`how-far`'s unoptimized LLVM IR to the caller's crate (64 with rustc
-1.99.0 on 2026-10-03, 81 with 1.98.1, 91 with 1.88). It also fails if
-`how-far-along` itself compiles to more than 18,000 lines of unoptimized IR
-with default features (14,923 with 1.99.0 once it shared how-far's split
-check, 15,773 before that, 15,530 with 1.98.1, 16,722 with 1.88; 19,048
-before the reductions below) or 55,000 with `diagnostics` (42,841, 43,691,
-43,748 and 45,976; 85,667 before).
+The current guard is `dev/bench-how-far-build.py`. It permits only the
+additive core `adapters` and `checked` features, only the `enough` production
+dependency, and no build script. It caps `Stages::run` at 120 unoptimized LLVM
+IR lines per call site, tracker code at 22,000, and the separate
+`how-far-really` diagnostics crate at 35,000. The latest recorded values are
+79 / 18,657 / 31,694 with Rust 1.99 and 88 / 20,336 / 33,345 with Rust 1.88.
+See [the current measurement report](../benchmarks/howfar-results-validation.md)
+for source fingerprints, compiler instructions, cold builds and limitations.
+
+### Historical build measurements (2026-10-01–03)
+
+The figures below predate Result-preserving runners and extraction of diagnostics
+to `how-far-really`. Here `how-far-along` still had `profile` / `diagnostics`
+features. These names and costs describe that measured implementation, not the
+current dependency or feature surface.
 
 With `perf` available, it also counts rustc's instructions, which unlike wall
 time do not depend on machine load (the metric
@@ -144,7 +150,7 @@ library's larger dependencies are still compiling.
 Before `Stages` moved its bookkeeping out of its generic methods, a call site
 added 312 lines of IR and cost 16.7 and 70.5 million instructions in debug
 and release builds; `how-far` itself cost 161.1, 302.8 and 382.0. The
-reasoning is in [the design notes](how-far-design.md#compile-time-cost).
+reasoning is in [the design notes](how-far-design.md#compile-time-seams).
 
 `how-far-along` is what applications and tests compile. Before its analysis
 code moved from iterator adapters and per-type sorts to loops and one merge
@@ -173,7 +179,14 @@ Reproduce with `python3 dev/bench-how-far-build.py --runs 5`.
   pulse path, mostly a second copy of its row loop made by a helper generic
   over its report sink.
 
-## Runtime cost
+## Historical runtime cost
+
+These dated measurements predate the current callback implementation. In
+particular, `FnPulse` now lives in `how-far-along/callback` and dispatches at
+checks; reporting and completion do not invoke its callback. Preserve the
+measurements as historical evidence rather than treating them as current
+per-operation costs. Current adoption results are in
+[the Result API validation report](../benchmarks/howfar-results-validation.md).
 
 `dev/how-far-checkpoint-cost` counts, with perf, what each checkpoint style
 and a three-stage plan cost around the same `#[inline(never)]` defilter;

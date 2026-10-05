@@ -1,6 +1,10 @@
 # how-far redesign validation — 2026-10-03
 
-Implementation branch: `codex/howfar-v2`, based on callback branch `0adafe1`.
+Historical snapshot of the initial `codex/howfar-v2` implementation and its
+API-hardening follow-up, based on callback branch `0adafe1`. The later
+Result-preserving API and extraction of diagnostics into `how-far-really` are
+recorded in [the current validation report](howfar-results-validation.md).
+The `profile` / `diagnostics` tracker features below belonged to this snapshot.
 The original enough and callback checkouts are untouched. This is a library
 implementation plus an isolated, reproducible adoption fixture; it does not
 change or publish the production encoder.

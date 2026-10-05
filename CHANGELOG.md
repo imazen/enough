@@ -1,86 +1,43 @@
 # Changelog
 
-## Unreleased how-far redesign
-
-- Keep ordinary `Result<T, E>` throughout `Stages`, `Phases`, and consuming
-  `Complete` / `ResultExt::finish_phase` handoffs. Borrow error classification;
-  retain explicit classifiers for foreign wrappers. Move the older `TryStages`
-  and `RunError` behind the additive `checked` feature.
-- Rename Pending to NotStarted. Resolve untouched phases as Skipped on success
-  or NotRun on error; preserve failed attempts under recovered successful parents.
-  Record completion provenance and diagnose missing handoffs without changing results.
-- Extract std-only profiling and diagnostics to `how-far-really`. Curate tracker
-  re-exports and add cross-crate examples of correct use and buggy omissions.
-  Tracking and trace JSON move to schema 2.
-- Add borrowed stop composition and explicit checkpoint-policy replacement to
-  `WithStop`, retaining the policy across children, scoped and owned workers.
-  Borrowed-to-owned capability conversion explicitly fails.
-
-- Restrict TryStages::run_stoppable to StopReason; use run_classified for mixed
-  failures. Replace the runner's lifecycle booleans with one private state enum.
-  Mark owners, stage runners and pacing guards must_use, with explicit Drop
-  guidance and compile-fail coverage for completion ownership.
-- Move FnPulse to how-far-along's optional callback feature. Checkpoints invoke
-  callbacks once; reports and Drop only count. Callback and tree accounting share
-  the same lifecycle, native counters and revisions.
-- Add full-capability SharedPulse, explicit sharing failure, start/set_total,
-  Paced::finish and Stages::skip. NotRun distinguishes prevented work from skipped
-  work and does not manufacture progress after failure.
-- Freeze abandoned owners even when shared workers remain. Add allocation-free
-  summaries and optional JSON export. Optional adapters compose stop policies
-  through child plans and shared handles.
-- Validate native threads, browser Rayon shared progress, cold builds and an
-  isolated feature-gated adoption in the real zenpng encoder.
-
-
 ## [Unreleased]
-
-### QUEUED BREAKING CHANGES
-
-<!-- Breaks that will ship together in one leading-digit bump. None queued. -->
 
 ### Added
 
 - `how-far` (new crate; Rust 1.86, `no_std + alloc`, depends only on `enough`):
-  `Pulse`, one object-safe interface through which a library checks for
-  cancellation, counts completed work, and plans weighted phases. `Stages` runs
-  sequential plans; owned `Child` handles make finishing a phase owner-only and
-  once-only, so libraries built on `Stages` can call one another;
-  `Pulse::handle` gives `'static` code an owned stop and counter; and
-  `ProgressExt::live` plus `how_far::prelude` make a hot loop's checkpoints
-  free when nobody listens (a967c21, c421c45, fc36c54). Code taking
-  `&dyn Pulse` compiles once whatever pulse is passed, a `Stages::run_*` call
-  site adds 81 lines of IR to the caller's crate, and CI guards both
-  (ecf2e72). `pulse.paced(every)` counts in a local and reaches the pulse once
-  per `every` units, so a checkpoint costs about 2 instructions instead of 58
-  (d3797cf, 47c7e9c). `NoPulse` is one static that `step`, `live()` and
-  `Paced` recognize by its address, so a loop stepping into `&NoPulse`
-  compiles to the bare loop; a `step` into it was 14 instructions (e14e223).
-  With Rust 1.86 trait upcasting, `Stages` hands each stage its own pulse,
-  and a `&dyn Pulse` passes as a `&dyn Stop` or `&dyn Report` (c398ed3).
-- `how-far`: `FnPulse` turns one callback into a pulse. The callback gets
-  `None` on every check and the job's fraction, weighted by every library's
-  plan, after every report and finish; returning an error stops the work at
-  the check. A report costs about 90 instructions and a check 26 to 34, and
-  it adds about 40% to `how-far`'s own release build (026ce0b, 083360e,
-  fe9316a, 2d50a38). For implementors, `PhaseSpec::validate_split` performs the
-  split check every pulse shares, `Child::inert` makes a child nobody
-  watches, and the `Pulse` docs list the rules no type enforces (e818bd4).
-  References, boxes and `Arc`s of a pulse are pulses, so generic and owned
-  code can hold `&NoPulse` (47c318f). `NoPulse`'s type is `Inert`, so
-  documentation links to `NoPulse` resolve to the static (137c48f).
-- `how-far-along` (new crate; Rust 1.88): `PulseTree` and `Observer` for progress
-  trees read from any thread, application-planned `Phase` trees with
-  `Reporter` handles, `LocalPoller` and `SharedPoller` callbacks, an opt-in span
-  profiler (`profile`), and checkpoint advice with `DiagnosticPulse`
-  (`diagnostics`) (a967c21, d61d9a5, 3ca2b81, c421c45, fc36c54). Its debug
-  build is 16% smaller in rustc instructions with default features and 38%
-  with `diagnostics` (release: 20% and 53%) than the first draft, and CI
-  guards its compiled size (a79aead, 2df2564). Finishing a phase whose
-  children have finished allocates nothing, so a live tree costs about 6,800
-  instructions per three-stage operation instead of 16,100 (5bdfa84), and a
-  report to a counting phase takes one locked operation instead of two
-  (d587e13).
+  the object-safe `&dyn Pulse` library interface for cancellation, completed
+  units, and nested weighted phases. `Stages` and `Phases` preserve ordinary
+  library results; consuming `Complete` / `ResultExt::finish_phase` handoffs
+  close the owners without changing the original value or error. Cancellation
+  classification borrows errors. Shared views preserve planning and total
+  revisions but never own completion. `Paced::finish` flushes and checks the
+  final batch. Optional `adapters` adds stop composition; `checked` adds the
+  explicit legacy `TryStages` / `RunError` interface.
+- `how-far-along` (new crate; Rust 1.88, `no_std + alloc`): tracking trees,
+  allocation-free summaries, full snapshots, and host-driven pollers. Defaults
+  are `std,json`; the optional `callback` feature adds `FnPulse` with lazy
+  checkpoint observations. Checks may dispatch callbacks; reports, completion,
+  and Drop only update accounting. Failed attempts remain visible under a
+  successful recovered parent; prevented work is `NotRun`, unnecessary work is
+  `Skipped`, and missing result handoffs are `Abandoned`. JSON schema 2 records
+  terminal states and inferred-completion provenance.
+- `how-far-really` (new crate; Rust 1.88, `std`): bounded opt-in profiling and
+  diagnostics, source-line checkpoint/report gaps, independent call-frequency
+  hints, callback duration and cadence targets (10 ms by default), cancellation
+  latency, protocol incidents, and candidate sequential stage weights.
+  It has no public core/tracker re-exports and neither library crate depends
+  on it. Negligible stages keep their planned weights in one-run advice.
+- `enough`: borrowed `From<&StopReason>` conversion for result classification.
+  The existing cancellation crates retain Rust 1.85.
+- Cross-crate examples and tests cover nested library results, owned and scoped
+  workers, Rayon, consumer polling, optional stop composition, and diagnostics
+  that preserve library results. Browser fixtures exercise worker-owned Rayon
+  with UI observation/cancellation in Chromium and Playwright WebKit. An isolated
+  zenpng fixture validates feature-gated adoption in existing codec loops.
+- Build guards bound per-call-site core code generation and separately bound
+  tracker and diagnostic compiled code. Current measurements and their scope
+  are recorded in [the validation report](benchmarks/howfar-results-validation.md).
+
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100

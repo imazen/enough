@@ -5,10 +5,10 @@ method, one zero-cost no-op type. Long-running operations accept a `Stop` and
 check it periodically; callers that don't need cancellation pass `Unstoppable`,
 which optimizes away to nothing.
 
-Progress reporting is a separate layer: [`how-far`](crates/how-far/README.md)
-provides the small library protocol, [`how-far-along`](crates/how-far-along/README.md)
-tracks it, and [`how-far-really`](crates/how-far-really/README.md) diagnoses and tunes
-it. See the [cross-crate examples](examples/how-far-app/README.md).
+Progress reporting is a separate layer: [`how-far`](https://github.com/imazen/enough/blob/main/crates/how-far/README.md)
+provides the small library protocol, [`how-far-along`](https://github.com/imazen/enough/blob/main/crates/how-far-along/README.md)
+tracks it, and [`how-far-really`](https://github.com/imazen/enough/blob/main/crates/how-far-really/README.md) diagnoses and tunes
+it. See the [cross-crate examples](https://github.com/imazen/enough/blob/main/examples/how-far-app/README.md).
 
 ## Quick start
 
@@ -145,7 +145,7 @@ best.
 For measured checkpoint cadence in tests, add `how-far-really` as a
 dev-dependency. Its profiler wraps any `enough::Stop`
 and reports long gaps and overactive call sites; `enough` itself gains no
-feature or runtime cost. See the [testing and tuning guide](docs/how-far-testing-and-tuning.md).
+feature or runtime cost. See the [testing and tuning guide](https://github.com/imazen/enough/blob/main/docs/how-far-testing-and-tuning.md).
 
 ### Without `almost-enough`
 
@@ -185,8 +185,9 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
-| [`how-far`](crates/how-far/README.md) | Cancellation, progress, and weighted phases through one interface for libraries (`no_std + alloc`, Rust 1.86) |
-| [`how-far-along`](crates/how-far-along/README.md) | Progress trees, observers, callbacks, and checkpoint profiling for applications and tests (Rust 1.88) |
+| [`how-far`](https://github.com/imazen/enough/blob/main/crates/how-far/README.md) | Cancellation, progress, and weighted phases through one interface for libraries (`no_std + alloc`, Rust 1.86) |
+| [`how-far-along`](https://github.com/imazen/enough/blob/main/crates/how-far-along/README.md) | Progress trees, observers, pollers, and optional checkpoint callbacks (`no_std + alloc`, Rust 1.88) |
+| [`how-far-really`](https://github.com/imazen/enough/blob/main/crates/how-far-really/README.md) | Opt-in profiling, checkpoint cadence, and progress diagnostics for tests and consumers (`std`, Rust 1.88) |
 
 Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blob/main/ZERO-DEP.md).
 

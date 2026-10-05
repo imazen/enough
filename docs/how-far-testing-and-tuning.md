@@ -48,7 +48,7 @@ Worth a test each:
   assert that a stage shared by workers counts each unit once.
 
 The repository's
-[scenario tests](https://github.com/imazen/enough/tree/main/tests/test-how-far-app/tests)
+[scenario tests](../tests/test-how-far-app/tests)
 do all of these against a pretend codec and a pipeline built on it, across
 crates, scoped and spawned threads, Rayon, and Tokio.
 
@@ -96,10 +96,14 @@ measured.
 
 Codecs often keep their stop policy in a context object: an encoder built
 with `with_stop(impl Stop + 'static)` checks deep inside each frame. A
-borrowed pulse cannot go there, but `stage.share()?` can, and under
+borrowed pulse cannot be stored there directly; an owned view from
+`stage.share()` can, and under
 `DiagnosticPulse` that handle is instrumented. Checks the encoder makes
 through it count toward the stage that handed it out. Borrowed stop adapters
-cannot become owned views; use scoped workers or an owned stop source:
+cannot become owned views; use scoped workers or an owned stop source.
+Handle sharing failure explicitly: the sketch below assumes the enclosing
+library error represents its chosen response to `NotShareable`, rather than
+requiring every library error to convert all planning errors:
 
 ```rust,ignore
 stages.run_classified(Error::is_stop, |stage| {
