@@ -1,11 +1,9 @@
 # how-far design
 
 Libraries describe and report work. Owners finish it. Checkpoints run cancellation
-and application callbacks. Observers read the resulting state. The current
-implementation is `codex/howfar-v2` at `a1d0286`, extending
-callback baseline `0adafe1`. The intended deliverable is its full delta from
-main, not just that baseline. See [the handoff](how-far-handoff-opus.md) for
-branch state and unfinished integration work.
+and application callbacks. Observers read the resulting state. Encoder adoption
+that is still in progress is recorded in
+[the zenav1 measurement](how-far-zenav1-measurement.md).
 
 ## Interface and ownership
 

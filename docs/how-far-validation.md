@@ -2,10 +2,8 @@
 
 The current Result/diagnostics changes are in [the validation report](../benchmarks/howfar-results-validation.md).
 The earlier redesign is recorded [here](../benchmarks/howfar-v2-validation.md).
-The dated build/runtime tables below describe the earlier baseline. For the
-intended delta from main, current branch state and outstanding work, read
-[the Opus handoff](how-far-handoff-opus.md). These records are prior local
-results, not a claim that the current remote PR head was revalidated today.
+The dated build/runtime tables below describe the earlier baseline. These
+records are prior local results, not a claim that a later head was revalidated.
 
 What is tested, where, and what the tests do not cover. See
 [the design notes](how-far-design.md) for why things work the way they do.
