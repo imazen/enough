@@ -473,7 +473,7 @@ impl Phase {
         Ok(())
     }
 
-    pub(crate) fn complete_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
+    pub(crate) fn record_outcome(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
         self.seal(outcome);
         Ok(())
@@ -491,7 +491,7 @@ impl Phase {
         } else {
             outcome
         };
-        self.complete_with(outcome)
+        self.record_outcome(outcome)
     }
     /// Make `outcome` terminal. When every child has finished, the subtree can
     /// no longer change, so atomics suffice and nothing is allocated. A phase
@@ -544,7 +544,7 @@ impl Drop for Phase {
 
 impl how_far::Complete for Phase {
     fn complete_as(mut self, outcome: Outcome) {
-        let _ = self.complete_with(outcome);
+        let _ = self.record_outcome(outcome);
     }
 }
 

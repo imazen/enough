@@ -25,6 +25,37 @@ fn foreign_nonclone_error_is_borrowed_for_classification_and_returned_unchanged(
 }
 
 #[test]
+fn complete_with_hands_over_an_early_question_mark() {
+    use how_far::Outcome;
+    let parts = [
+        PhaseSpec::new("first", 1, Total::Unknown),
+        PhaseSpec::new("second", 1, Total::Unknown),
+    ];
+    // An early error escapes the body but still reaches the owner, unchanged.
+    let result = Stages::new(&NoPulse, &parts).complete_with(|stages| {
+        stages.run(|_| Err::<(), _>(StopReason::TimedOut))?;
+        stages.run(|_| Ok::<_, StopReason>(()))
+    });
+    assert_eq!(result, Err(StopReason::TimedOut));
+
+    // The owner receives the body's own outcome.
+    struct Recorder<'a>(&'a core::cell::Cell<Option<Outcome>>);
+    impl Complete for Recorder<'_> {
+        fn complete_as(self, outcome: Outcome) {
+            self.0.set(Some(outcome));
+        }
+    }
+    let seen = core::cell::Cell::new(None);
+    let value = Recorder(&seen).complete_with(|_| Ok::<_, StopReason>(5));
+    assert_eq!((value, seen.get()), (Ok(5), Some(Outcome::Succeeded)));
+    let stopped = Recorder(&seen).complete_with(|_| Err::<(), _>(StopReason::Cancelled));
+    assert_eq!(
+        (stopped, seen.get()),
+        (Err(StopReason::Cancelled), Some(Outcome::Cancelled))
+    );
+}
+
+#[test]
 fn plain_stop_reason_works_and_independent_attempts_can_recover() {
     let mut phases = Phases::new(
         &NoPulse,

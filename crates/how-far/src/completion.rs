@@ -27,6 +27,37 @@ pub trait Complete: Sized {
         self.complete_as(Outcome::from_result(&result, is_stop));
         result
     }
+
+    /// Run a multi-step `body` with this owner, then complete the owner with
+    /// the body's result and return that result unchanged.
+    ///
+    /// An early `?` inside `body` still reaches the handoff, which a `?` placed
+    /// before a separate `complete` call would bypass. A panic in `body` drops
+    /// the owner, recording abandonment as usual.
+    ///
+    /// ```
+    /// use how_far::{prelude::*, PhaseSpec, Stages, StopReason, Total};
+    ///
+    /// fn convert(pulse: &dyn Pulse) -> Result<u64, StopReason> {
+    ///     Stages::new(pulse, &[
+    ///         PhaseSpec::new("decode", 1, Total::Exact(1)),
+    ///         PhaseSpec::new("sharpen", 1, Total::Exact(1)),
+    ///     ])
+    ///     .complete_with(|stages| {
+    ///         let pixels = stages.run(|stage| stage.step(1).map(|()| 7))?;
+    ///         // An untouched "sharpen" stage is resolved as Skipped.
+    ///         Ok(pixels)
+    ///     })
+    /// }
+    /// assert_eq!(convert(&how_far::NoPulse), Ok(7));
+    /// ```
+    fn complete_with<T, E>(mut self, body: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E>
+    where
+        for<'a> &'a E: TryInto<StopReason>,
+    {
+        let result = body(&mut self);
+        self.complete(result)
+    }
 }
 
 /// The explicit boundary where a normal Rust result completes its phase owner.

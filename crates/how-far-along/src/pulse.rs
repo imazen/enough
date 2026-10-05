@@ -100,7 +100,7 @@ impl TreePulse {
 }
 impl State {
     fn complete(&self, outcome: Outcome) -> Result<(), PlanError> {
-        self.with_owner(|phase| phase.complete_with(outcome))??;
+        self.with_owner(|phase| phase.record_outcome(outcome))??;
         self.activity.store(FINISHED, Ordering::Release);
         Ok(())
     }

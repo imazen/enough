@@ -38,8 +38,8 @@ wrapper retain evidence of rejected observations.
 `Complete::complete(result)` and `ResultExt::finish_phase(owner)` are explicit
 result handoffs, returning the original value/error unchanged. Untouched phases
 become `Skipped` on success or `NotRun` on failure. Drop without a result records
-`Abandoned`. Capture a multi-step body in a closure when `?` could otherwise
-bypass the handoff. A borrowed pulse belongs to its caller: complete your child
+`Abandoned`. For a multi-step body, `owner.complete_with(|owner| ...)` hands
+over whatever the body returns, so an early `?` cannot bypass the handoff. A borrowed pulse belongs to its caller: complete your child
 owners and plan helpers, never the borrowed input.
 
 For a custom error, implement `From<StopReason>` for `?` and

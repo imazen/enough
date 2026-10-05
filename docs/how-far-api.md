@@ -31,6 +31,8 @@ compile-fail doctests guard these boundaries.
 
 `Complete` consumes an owner. Its methods return the exact original Result;
 classification borrows the error and requires neither cloning nor converting it.
+`complete_with` runs a multi-step body and hands over its result, so an early
+`?` inside the body cannot skip the handoff.
 `From<StopReason>` is only for library code using `?` at a checkpoint.
 `TryFrom<&LibraryError> for StopReason` identifies cancellation for observation.
 Foreign error wrappers can use `run_classified` and `complete_classified` to

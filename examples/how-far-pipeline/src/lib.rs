@@ -49,22 +49,23 @@ impl TryFrom<&Error> for StopReason {
     }
 }
 
-/// Capture the entire body result before `?` can bypass the plan's final handoff.
+/// `complete_with` hands the whole body's result to the plan, so an early `?`
+/// cannot bypass the final handoff.
 pub fn convert(
     input: &[u8],
     pulse: &dyn Pulse,
     mode: Mode,
     sharpen: bool,
 ) -> Result<Vec<u8>, Error> {
-    let mut stages = Stages::new(
+    Stages::new(
         pulse,
         &[
             PhaseSpec::new("decode", 4, Total::Unknown),
             PhaseSpec::new("transform", 4, Total::Exact(input.len() as u64)),
             PhaseSpec::new("sharpen", 1, Total::Exact(1)),
         ],
-    );
-    let result = (|| {
+    )
+    .complete_with(|stages| {
         let mut pixels = stages.run(|p| codec::decode(input, p, mode).map_err(Error::from))?;
         stages.run(|p| {
             p.check()?;
@@ -79,8 +80,7 @@ pub fn convert(
             stages.run(|p| p.step(1).map_err(Error::from))?;
         }
         Ok(pixels)
-    })();
-    result.finish_phase(stages)
+    })
 }
 
 /// Keep the caller's stage and cancellation, adding a library-local stop source.
