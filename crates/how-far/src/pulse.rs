@@ -483,8 +483,9 @@ impl<'a> Child<'a> {
     /// child has finished.
     ///
     /// Fails without recording `outcome` if the child's own children are still
-    /// running, or if `outcome` is `Succeeded` or `Skipped` while one of them
-    /// did not succeed; a tracker then records the child as abandoned.
+    /// running; the consumed child is then dropped, so a tracker records it as
+    /// abandoned. Finished children's outcomes need not match: a successful
+    /// child may retain a failed attempt it recovered from.
     pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
         match self.pulse {
             Some(pulse) => pulse.finish(outcome),
