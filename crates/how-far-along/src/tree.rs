@@ -670,6 +670,18 @@ impl Observer {
     pub fn is_finished(&self) -> bool {
         self.node.state.load(Ordering::Acquire) == 2
     }
+    /// Observers of this phase's planned children, in declared order; empty
+    /// for a leaf. Copies one list of handles, without walking the subtree.
+    pub fn children(&self) -> Vec<Observer> {
+        let meta = self.node.meta.get();
+        let mut children = Vec::with_capacity(meta.children.len());
+        for node in &meta.children {
+            children.push(Observer {
+                node: Arc::clone(node),
+            });
+        }
+        children
+    }
 }
 
 /// A point-in-time copy of a phase and its subtree.

@@ -6,14 +6,14 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 128 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
+# files: how-far-along.txt 129 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 3
 #   pub types (struct/enum/trait/alias)        15
 #   pub consts/statics                          3
-#   inherent methods                           45
+#   inherent methods                           46
 #   struct fields                              17
 #   enum variants                               3
 #   re-exports                                 20
@@ -22,11 +22,11 @@
 #   auto-trait exceptions                       6
 #
 # per-module pub lines:
-#   (root)                           81
+#   (root)                           82
 #   ext                               6
 #   poll                             19
 
-## items (106 lines)
+## items (107 lines)
 
 pub mod how_far_along
 pub use Child
@@ -84,6 +84,7 @@ pub struct NodeId(_)
 pub const NodeId::ROOT: Self
 pub const fn NodeId::get(self) -> usize
 pub struct Observer
+pub fn Observer::children(&self) -> alloc::vec::Vec<Observer>
 pub fn Observer::id(&self) -> NodeId
 pub fn Observer::is_finished(&self) -> bool
 pub fn Observer::name(&self) -> &str
