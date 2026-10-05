@@ -116,12 +116,12 @@ impl<'a> Paced<'a> {
     #[inline]
     #[track_caller]
     pub fn flush(&mut self) {
-        if let Some(pulse) = self.pulse {
-            if self.left != self.every {
-                let pending = self.every - self.left;
-                self.left = self.every;
-                pulse.advance(pending);
-            }
+        if let Some(pulse) = self.pulse
+            && self.left != self.every
+        {
+            let pending = self.every - self.left;
+            self.left = self.every;
+            pulse.advance(pending);
         }
     }
 }
