@@ -14,7 +14,8 @@
   library results; consuming `Complete` / `ResultExt::finish_phase` handoffs
   close the owners without changing the original value or error;
   `Complete::complete_with` runs a multi-step body so an early `?` still
-  reaches the handoff. `StopOnly` turns an application's cancellation token
+  reaches the handoff; `complete_with_classified` does so for foreign error
+  wrappers. `StopOnly` turns an application's cancellation token
   into a pulse without features or a tracker. A library implements `IsStop`
   for its error so owners record cancellation as `Cancelled`; forgetting it is
   a compile error that names the fix. Works with published `enough` 0.4.4. Cancellation
