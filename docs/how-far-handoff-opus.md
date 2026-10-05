@@ -198,3 +198,18 @@ The Herdr socket call was denied by the sandbox, so no new Opus tab was created.
 the copy, selecting `--model opus --effort xhigh`. It does not auto-answer a
 startup trust/approval prompt. The prior user-approved trust was for the former
 PR checkout; preserve normal Herdr agent-control and repository trust rules.
+
+The durable docs patch and Git bundle are
+`/home/lilith/work/enough/docs/how-far-opus-handoff.{patch,bundle}`. If the
+prepared temporary copy disappears, recover its committed handoff without
+changing the original checkout:
+
+```sh
+git clone --local --no-hardlinks --branch codex/howfar-v2 \
+  /home/lilith/work/enough /tmp/enough-opus-handoff-20261005
+git -C /tmp/enough-opus-handoff-20261005 fetch \
+  /home/lilith/work/enough/docs/how-far-opus-handoff.bundle \
+  HEAD:refs/heads/codex/howfar-opus-handoff
+git -C /tmp/enough-opus-handoff-20261005 switch codex/howfar-opus-handoff
+python3 /home/lilith/work/enough/dev/launch-how-far-opus.py
+```
