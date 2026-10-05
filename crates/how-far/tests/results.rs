@@ -71,3 +71,27 @@ fn plain_stop_reason_works_and_independent_attempts_can_recover() {
     // Recovery is the library's decision, even if it chooses to recover a stop.
     assert_eq!(recovered.finish_phase(phases), Ok(42));
 }
+
+#[test]
+fn complete_with_classified_handles_a_foreign_wrapper() {
+    use how_far::Outcome;
+    // A wrapper from another crate, which cannot implement IsStop here.
+    #[derive(Debug, PartialEq)]
+    struct Located(StopReason, u32);
+    struct Recorder<'a>(&'a core::cell::Cell<Option<Outcome>>);
+    impl Complete for Recorder<'_> {
+        fn complete_as(self, outcome: Outcome) {
+            self.0.set(Some(outcome));
+        }
+    }
+    let seen = core::cell::Cell::new(None);
+    let result = Recorder(&seen).complete_with_classified(
+        |_: &Located| true,
+        |_| {
+            Err::<(), _>(Located(StopReason::Cancelled, 42))?;
+            Ok(())
+        },
+    );
+    assert_eq!(result, Err(Located(StopReason::Cancelled, 42)));
+    assert_eq!(seen.get(), Some(Outcome::Cancelled));
+}

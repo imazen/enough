@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far.txt 166 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
+# files: how-far.txt 168 lines (supported surface) | how-far.features.txt 23 added (features: adapters,checked) | how-far.internal.txt 14 lines (14 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -14,7 +14,7 @@
 #   pub types (struct/enum/trait/alias)        27
 #   pub consts/statics                          7
 #   free functions                             14
-#   inherent methods                           61
+#   inherent methods                           63
 #   struct fields                               8
 #   enum variants                              22
 #   re-exports                                  4
@@ -23,10 +23,10 @@
 #   auto-trait exceptions                       7
 #
 # per-module pub lines:
-#   (root)                          122
-#   prelude                          23
+#   (root)                          123
+#   prelude                          24
 
-## items (132 lines)
+## items (134 lines)
 
 pub mod how_far
 pub use Stop
@@ -38,6 +38,7 @@ pub fn prelude::Complete::complete<T, E>(self, core::result::Result<T, E>) -> co
 pub fn prelude::Complete::complete_as(self, Outcome)
 pub fn prelude::Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
 pub fn prelude::Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
+pub fn prelude::Complete::complete_with_classified<T, E>(self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 pub fn prelude::IsStop::stop_reason(&self) -> core::option::Option<enough::reason::StopReason>
 pub fn prelude::ProgressExt::live(&self) -> core::option::Option<&Self>
 pub fn prelude::ProgressExt::split_array<const N: usize>(&self, Execution, [PhaseSpec<'_>; N]) -> core::result::Result<[Child<'_>; N], PlanError> where Self: Pulse
@@ -143,6 +144,7 @@ pub fn Complete::complete<T, E>(self, core::result::Result<T, E>) -> core::resul
 pub fn Complete::complete_as(self, Outcome)
 pub fn Complete::complete_classified<T, E>(self, core::result::Result<T, E>, impl core::ops::function::FnOnce(&E) -> bool) -> core::result::Result<T, E>
 pub fn Complete::complete_with<T, E>(self, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E> where E: IsStop
+pub fn Complete::complete_with_classified<T, E>(self, impl core::ops::function::FnOnce(&E) -> bool, impl core::ops::function::FnOnce(&mut Self) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 pub trait IsStop [also: prelude]
 pub fn IsStop::stop_reason(&self) -> core::option::Option<enough::reason::StopReason>
 pub trait ProgressExt: enough::Stop + Report [also: prelude]

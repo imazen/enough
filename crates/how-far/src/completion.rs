@@ -128,6 +128,18 @@ pub trait Complete: Sized {
         let result = body(&mut self);
         self.complete(result)
     }
+
+    /// [`complete_with`](Self::complete_with) with an explicit classifier, for
+    /// a foreign error type that cannot implement [`IsStop`], such as an error
+    /// wrapped with its source location.
+    fn complete_with_classified<T, E>(
+        mut self,
+        is_stop: impl FnOnce(&E) -> bool,
+        body: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let result = body(&mut self);
+        self.complete_classified(result, is_stop)
+    }
 }
 
 /// The explicit boundary where a normal Rust result completes its phase owner.
