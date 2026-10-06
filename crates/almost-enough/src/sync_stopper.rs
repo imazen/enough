@@ -30,12 +30,12 @@
 //!
 //! # When NOT to Use
 //!
-//! [`Stopper`](crate::Stopper) gives the same guarantee without an Acquire
-//! load on every check: its `cancel()` is also a Release store, and its
-//! [`is_cancelled()`](crate::Stopper::is_cancelled) is the Acquire query to
-//! call after the work reports the stop. Use `SyncStopper` when the code that
-//! reads the handed-over data only sees the stop through `check()` or
-//! `should_stop()`.
+//! [`Stopper`](crate::Stopper) gives the same guarantee, to whoever holds the
+//! `Stopper`, without an Acquire load on every check: its `cancel()` is also a
+//! Release swap, and its [`is_cancelled()`](crate::Stopper::is_cancelled) is
+//! the Acquire query to call after the work reports the cancellation. Use
+//! `SyncStopper` when the code that reads the handed-over data only sees the
+//! cancellation through `check()` or `should_stop()`.
 //!
 //! # Memory Ordering
 //!
@@ -76,7 +76,7 @@ impl Stop for SyncStopperInner {
 
 /// A cancellation primitive with Release/Acquire memory ordering.
 ///
-/// Unlike [`Stopper`](crate::Stopper) which uses Relaxed ordering,
+/// Unlike [`Stopper`](crate::Stopper), whose checks are Relaxed loads,
 /// `SyncStopper` guarantees that all writes before `cancel()` are visible
 /// to any clone that subsequently observes `should_stop() == true`.
 ///
@@ -88,10 +88,11 @@ impl Stop for SyncStopperInner {
 /// On x86-64 an Acquire load is an ordinary load, so a check costs what a
 /// [`Stopper`](crate::Stopper)'s does. On aarch64 it is `ldar` on targets
 /// without RCpc (Linux, Windows, Android, iOS) and `ldapr` with it (macOS):
-/// on a Neoverse-N1, a compute-bound loop checking every 64 bytes ran 3–10%
-/// slower than with a Relaxed check, and nothing measurable at a check per
-/// KiB or in memory-bound loops (`benchmarks/stopper-ordering-2026-10-06.md`).
-/// On Cortex-M each check also executes a `dmb`. In a
+/// on a Neoverse-N1, a compute-bound loop checking every 64 bytes measured
+/// 3–10% slower than with a Relaxed check (code placement alone moved the
+/// same loop by similar amounts), and under 1% at a check per KiB or in
+/// memory-bound loops (`benchmarks/stopper-ordering-2026-10-06.md`). On
+/// ARMv6-M and ARMv7-M each check also executes a `dmb`. In a
 /// [`StopToken`](crate::StopToken) it is checked through the vtable.
 #[derive(Debug, Clone)]
 pub struct SyncStopper {
@@ -119,13 +120,15 @@ impl SyncStopper {
         }
     }
 
-    /// Cancel with Release ordering.
+    /// Cancel with a Release swap.
     ///
-    /// All memory writes before this call are guaranteed to be visible
-    /// to any clone that subsequently observes `should_stop() == true`.
+    /// All memory writes before a `cancel()` are visible to any clone that
+    /// observes `should_stop() == true` after it, even when several threads
+    /// cancel.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::Release);
+        // A swap: see `Stopper::cancel`.
+        self.inner.cancelled.swap(true, Ordering::Release);
     }
 
     /// Check if cancelled with Acquire ordering.

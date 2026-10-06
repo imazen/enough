@@ -177,7 +177,7 @@ jobs:
         run: cargo semver-checks -p almost-enough
 
   # ==========================================================================
-  # Miri — check unsafe code soundness (enough-ffi)
+  # Miri — unsafe code soundness (enough-ffi) and the cancel handoff
   # ==========================================================================
   miri:
     name: Miri
@@ -197,12 +197,15 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
-      # Miri emulates weak memory: with a Relaxed is_cancelled() or a Relaxed
-      # cancel(), these handoff tests fail on most seeds.
+      # Miri emulates weak memory, so these handoff tests can catch a weakened
+      # ordering; each seed is another interleaving. The grep fails the step
+      # if the filter stops matching.
       - name: Run Miri (cancel/is_cancelled handoff, many seeds)
         run: |
-          cargo +nightly miri test -p almost-enough --lib -- is_cancelled_after_the_stop_sees_writes_made_before_cancel
-          cargo +nightly miri test -p enough-ffi --lib -- is_cancelled_after_the_stop_sees_writes_made_before_cancel
+          set -o pipefail
+          cargo +nightly miri test -p almost-enough --lib -- _cancellers_writes is_cancelled_after_the_stop 2>&1 | tee miri-handoff.log
+          cargo +nightly miri test -p enough-ffi --lib -- _cancellers_writes is_cancelled_after_the_stop 2>&1 | tee -a miri-handoff.log
+          test "$(grep -c '_cancellers_writes ... ok\|is_cancelled_after_the_stop_sees_writes_made_before_cancel ... ok' miri-handoff.log)" -ge 8
         env:
           MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-many-seeds=0..8
 

@@ -103,10 +103,11 @@ impl CancellationState {
         }
     }
 
-    /// A Release store: see [`FfiCancellationSource::is_cancelled`].
+    /// A Release swap (see `Stopper::cancel` in almost-enough): see
+    /// [`FfiCancellationSource::is_cancelled`].
     #[inline]
     fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.cancelled.swap(true, Ordering::Release);
     }
 
     /// The tokens' check: a Relaxed load.
@@ -318,7 +319,7 @@ pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
 /// Cancel a cancellation source.
 ///
 /// After this call, any tokens created from this source will report
-/// as cancelled. A Release store: writes made before it are visible to a
+/// as cancelled. A Release swap: writes made before it are visible to a
 /// thread whose [`enough_cancellation_is_cancelled`] then returns `true`.
 ///
 /// # Safety
@@ -458,6 +459,34 @@ mod tests {
                     }
                     assert!(source.is_cancelled());
                     data.load(Relaxed)
+                });
+                data.store(42, Relaxed);
+                source.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
+
+    #[test]
+    fn is_cancelled_after_a_second_cancel_sees_the_first_cancellers_writes() {
+        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let source = FfiCancellationSource::new();
+            let token = source.create_token();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    while !token.should_stop() {
+                        std::hint::spin_loop();
+                    }
+                    assert!(source.is_cancelled());
+                    data.load(Relaxed)
+                });
+                scope.spawn(|| {
+                    while !token.should_stop() {
+                        std::hint::spin_loop();
+                    }
+                    source.cancel();
                 });
                 data.store(42, Relaxed);
                 source.cancel();
