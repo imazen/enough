@@ -222,10 +222,9 @@ two match, show the fenced check's extra branch.
 
 Measured against the first 0.4.5 draft, whose `Stopper` checked with
 Acquire: `StopToken::relax(stopper)` would give one token a Relaxed load while
-the `Stopper` and its other clones keep Acquire. The prototype is on the
-`investigate/stoptoken-relax` branch. Its bench compares a relaxed token
-with `StopToken::from(stopper)`; both run the same `StopToken::check`, so
-code placement can't move their gap.
+the `Stopper` and its other clones keep Acquire. A prototype, not kept,
+benched a relaxed token against `StopToken::from(stopper)`; both run the
+same `StopToken::check`, so code placement can't move their gap.
 
 On N1 with default codegen, the relaxed token was slower:
 
