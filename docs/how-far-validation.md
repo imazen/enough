@@ -50,9 +50,12 @@ depend on machine load. `dev/how-far-checkpoint-cost` counts, with perf, what
 each observer costs in each library scenario around the same
 `#[inline(never)]` defilter.
 
-[The 2026-10-06 record](../benchmarks/how-far-2026-10-06.md) has both at commit `2bcc73a`: 79 / 18,382 / 29,703
-IR lines on Rust 1.99 and 88 / 19,986 / 31,228 on 1.88. Its overhead matrix
-crosses nine observers with eight library scenarios: `step` into a
+[The 2026-10-06 record](../benchmarks/how-far-2026-10-06.md) has the build cost
+at commit `2bcc73a`: 79 / 18,382 / 29,703 IR lines on Rust 1.99, and 88 / 19,986
+/ 31,228 on 1.88. After the allocation, counter and diagnostics changes the
+guard reads 79 / 19,309 / 31,088 on 1.99 and 88 / 20,484 / 32,808 on 1.88. The
+record's overhead matrix, measured at `cb49a7f5`, crosses nine observers with
+eight library scenarios: `step` into a
 `PulseTree` costs 65 to 77 instructions per checkpoint, `StopOnly` 28 and an
 `FnPulse` callback 106, while pacing keeps every observer except
 `DiagnosticPulse` under 0.3% of a 256 KiB defilter. A second table, on x86-64

@@ -429,7 +429,7 @@ impl Phase {
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Phase>, PlanError> {
         let mut children = Vec::with_capacity(parts.len());
-        self.split_each(execution, parts, |child| children.push(child))?;
+        self.split_each(execution, parts, &mut |child| children.push(child))?;
         Ok(children)
     }
     /// [`split_vec`](Self::split_vec), handing each child to `each` in order
@@ -439,7 +439,7 @@ impl Phase {
         &mut self,
         execution: Execution,
         parts: &[PhaseSpec<'_>],
-        mut each: impl FnMut(Phase),
+        each: &mut dyn FnMut(Phase),
     ) -> Result<(), PlanError> {
         self.ensure_unused()?;
         PhaseSpec::validate_split(parts)?;

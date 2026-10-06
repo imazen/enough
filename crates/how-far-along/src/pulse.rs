@@ -154,7 +154,7 @@ impl State {
             })?;
         let mut children = Vec::with_capacity(parts.len());
         let split = self.with_owner(|phase| {
-            phase.split_each(execution, parts, |phase| {
+            phase.split_each(execution, parts, &mut |phase| {
                 children.push(Child::new(TreePulse::new(
                     phase,
                     Arc::clone(&self.stop),
