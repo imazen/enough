@@ -3,24 +3,11 @@
 //! This module provides [`BoxedStop`], a heap-allocated wrapper that enables
 //! dynamic dispatch without monomorphization bloat.
 //!
-//! # When to Use
+//! # Deprecated
 //!
-//! **Prefer [`StopToken`](crate::StopToken)**, which is `Clone`. `BoxedStop`
-//! is a `StopToken` that can't be cloned, for when unique ownership is
-//! wanted; it checks through the same fast paths.
-//!
-//! Generic functions like `fn process(stop: impl Stop)` are monomorphized
-//! for each concrete type, increasing binary size. `BoxedStop` provides a
-//! single concrete type for dynamic dispatch:
-//!
-//! ```rust
-//! use almost_enough::{BoxedStop, Stop};
-//!
-//! // Single implementation - no monomorphization bloat
-//! fn process_boxed(stop: BoxedStop) {
-//!     // ...
-//! }
-//! ```
+//! Use [`StopToken`](crate::StopToken): it checks through the same fast
+//! paths and is `Clone`. `BoxedStop` wraps one; it adds nothing but the
+//! absence of `Clone`.
 //!
 //! # Alternatives
 //!
@@ -40,12 +27,14 @@
 //! process(&source);
 //! ```
 
+#![allow(deprecated)] // This module defines and tests the deprecated type.
+
 use crate::{Stop, StopReason, StopToken};
 
-/// A type-erased [`Stop`] with unique ownership.
+/// A type-erased [`Stop`] with unique ownership. Deprecated: use
+/// [`StopToken`], which checks the same way and is `Clone`.
 ///
-/// **Prefer [`StopToken`]**, which is `Clone`. `BoxedStop` wraps one and
-/// checks the same way: no-op stops (like `Unstoppable`) are stored as
+/// `BoxedStop` wraps a `StopToken`: no-op stops (like `Unstoppable`) are stored as
 /// nothing and never dispatched, a `Stopper` or `SyncStopper` is checked as
 /// a direct atomic load without a vtable, and wrapping a `StopToken` or
 /// another `BoxedStop` reuses it instead of nesting. Anything else is
@@ -70,6 +59,10 @@ use crate::{Stop, StopReason, StopToken};
 /// process(BoxedStop::new(StopSource::new()));
 /// process(BoxedStop::new(Stopper::new()));
 /// ```
+#[deprecated(
+    since = "0.4.5",
+    note = "use `StopToken`, which checks the same way and is `Clone`"
+)]
 pub struct BoxedStop(pub(crate) StopToken);
 
 impl BoxedStop {

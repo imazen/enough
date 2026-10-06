@@ -75,11 +75,6 @@ fn main() {
                 b.iter(|| black_box(&stop).check())
             });
 
-            group.bench("boxed_stopper", |b| {
-                let stop = Stopper::new().into_boxed();
-                b.iter(|| black_box(&stop).check())
-            });
-
             group.bench("dyn_stopper", |b| {
                 let stop = Stopper::new().into_token();
                 b.iter(|| black_box(&stop).check())
