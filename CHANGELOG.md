@@ -34,6 +34,12 @@
 
 ### Added
 
+- `almost-enough`: `RelaxedStopper`, a `Stopper` whose flag is stored and
+  checked with Relaxed ordering, as `Stopper` was before 0.4.5: no
+  visibility guarantee for data written before `cancel()`. For loops that
+  check every few dozen bytes on aarch64 targets without RCpc, where it
+  measured 3–10% faster than `Stopper` at a check every 64 B on
+  Neoverse-N1. In a `StopToken` it reuses its `Arc` behind the vtable.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100

@@ -142,6 +142,7 @@ run_dyn(&stop).unwrap();
 | [`FnStop`] | core | Wrap any closure |
 | [`OrStop`] | core | Combine multiple stops |
 | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
+| [`RelaxedStopper`] | alloc | A `Stopper` without that guarantee, for hot loops on ARM Linux |
 | [`SyncStopper`] | alloc | Deprecated: `Stopper` has the same ordering |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
@@ -156,6 +157,7 @@ run_dyn(&stop).unwrap();
 [`OrStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.OrStop.html
 [`Stopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Stopper.html
 [`SyncStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.SyncStopper.html
+[`RelaxedStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.RelaxedStopper.html
 [`ChildStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.ChildStopper.html
 [`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html

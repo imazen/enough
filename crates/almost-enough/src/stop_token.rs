@@ -108,6 +108,15 @@ impl StopToken {
                 inner: StopTokenInner::Flag(Arc::clone(&stopper.inner)),
             };
         }
+        // RelaxedStopper: reuse its Arc behind the vtable. No arm of its own:
+        // a fourth arm turns `check` into a jump table.
+        if TypeId::of::<T>() == TypeId::of::<crate::RelaxedStopper>() {
+            let any_ref: &dyn Any = &stop;
+            let stopper = any_ref.downcast_ref::<crate::RelaxedStopper>().unwrap();
+            return Self {
+                inner: StopTokenInner::Dyn(stopper.inner.clone()),
+            };
+        }
         Self {
             inner: StopTokenInner::Dyn(Arc::new(stop)),
         }
@@ -219,6 +228,16 @@ impl From<crate::SyncStopper> for StopToken {
     #[inline]
     fn from(stopper: crate::SyncStopper) -> Self {
         Self::from(stopper.0)
+    }
+}
+
+/// Reuses the RelaxedStopper's Arc (no allocation); checks go through the vtable.
+impl From<crate::RelaxedStopper> for StopToken {
+    #[inline]
+    fn from(stopper: crate::RelaxedStopper) -> Self {
+        Self {
+            inner: StopTokenInner::Dyn(stopper.inner),
+        }
     }
 }
 
@@ -505,6 +524,28 @@ mod tests {
         let stop = crate::SyncStopper::new();
         let debug = alloc::format!("{:?}", stop);
         assert!(debug.contains("cancelled"));
+    }
+
+    #[test]
+    fn relaxed_stopper_reuses_its_arc_behind_the_vtable() {
+        let stopper = crate::RelaxedStopper::new();
+        for stop in [
+            StopToken::from(stopper.clone()),
+            StopToken::new(stopper.clone()),
+        ] {
+            assert_eq!(direct(&stop), "dyn");
+            let StopTokenInner::Dyn(inner) = &stop.inner else {
+                unreachable!()
+            };
+            assert_eq!(
+                Arc::as_ptr(inner).cast::<()>(),
+                Arc::as_ptr(&stopper.inner).cast::<()>()
+            );
+            assert!(!stop.should_stop());
+        }
+        let stop = StopToken::from(stopper.clone());
+        stopper.cancel();
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
     }
 
     #[test]

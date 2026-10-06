@@ -72,6 +72,7 @@
 //! | [`FnStop`] | core | Wrap any closure |
 //! | [`OrStop`] | core | Combine multiple stops |
 //! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share; whoever sees the stop sees what was written before `cancel()` |
+//! | [`RelaxedStopper`] | alloc | A `Stopper` without that guarantee, for hot loops on ARM Linux |
 //! | [`SyncStopper`] | alloc | Deprecated: `Stopper` has the same ordering |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
@@ -247,6 +248,8 @@ pub use source::{StopRef, StopSource};
 #[cfg(feature = "alloc")]
 mod boxed;
 #[cfg(feature = "alloc")]
+mod relaxed_stopper;
+#[cfg(feature = "alloc")]
 mod stopper;
 #[cfg(feature = "alloc")]
 mod sync_stopper;
@@ -257,6 +260,8 @@ mod tree;
 pub use boxed::BoxedStop;
 #[cfg(feature = "alloc")]
 mod stop_token;
+#[cfg(feature = "alloc")]
+pub use relaxed_stopper::RelaxedStopper;
 #[cfg(feature = "alloc")]
 pub use stop_token::StopToken;
 #[cfg(feature = "alloc")]
