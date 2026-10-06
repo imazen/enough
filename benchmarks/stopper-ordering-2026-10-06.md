@@ -161,6 +161,33 @@ flag, "aligned" meaning `-C llvm-args=-align-all-functions=6`:
 so these rows move with code placement alone. The generic rows, where those
 two match, show the fenced check's extra branch.
 
+## Measured: a Relaxed arm in `StopToken`
+
+`StopToken::relax(stopper)` would give one token a Relaxed load while the
+`Stopper` and its other clones keep Acquire. The prototype is on the
+`investigate/stoptoken-relax` branch. Its bench compares a relaxed token
+with `StopToken::from(stopper)`; both run the same `StopToken::check`, so
+code placement can't move their gap.
+
+On N1 with default codegen, the relaxed token was slower:
+
+| | relaxed token against Acquire token |
+| --- | ---: |
+| check, generic | [+24.5%, +25.9%] |
+| check through `&dyn Stop` | [+0.6%, +1.9%] |
+| defilter, check every 64 B | [+2.3%, +4.1%] |
+| defilter, check every 1 KiB | [−0.9%, −0.5%] |
+
+Reaching a fourth arm takes another compare and a taken branch, which costs
+as much as `ldar` saves. On x86-64 the two tokens matched within 0.5%, but
+four arms compile the `match` to a jump table, so every check, Acquire
+tokens included, becomes an indirect jump instead of two conditional
+branches. `StopToken` compiled that way before 0.4.5, when it had four arms.
+
+A build can get `ldapr` without any API: `-C target-feature=+rcpc` makes an
+aarch64 Linux build emit it. The binary then runs only on cores with RCpc,
+such as Neoverse-N1 and later; older ones, such as Cortex-A72, fault on it.
+
 ## Other targets
 
 The ordering changes only the instructions emitted, never which targets
