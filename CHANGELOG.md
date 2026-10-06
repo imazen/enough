@@ -28,6 +28,10 @@
 
 - `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
 
+### Deprecated
+
+- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` now holds its parent as a `StopToken`.
+
 ### Changed
 
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
