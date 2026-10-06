@@ -25,6 +25,17 @@
 
 ### Changed
 
+- `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
+  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
+  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
+  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
+  each other. Still not `Clone`; auto traits unchanged.
+- `almost-enough`: `PollMeter` looks call sites up by the address of their
+  `Location` instead of hashing the file path on every poll, with a shortcut
+  when a poll comes from the same site as the previous one: 693 → 308
+  instructions per poll (the clock read is now half of it), and the loop it
+  perturbed went from +42% to about +25–34% cycles at 1 KiB per poll. Reports
+  merge sites by `file:line:column` as before.
 - `enough-tokio`: a `TokioStop` checked more than 32 times registers a waker
   with its token and from then on checks an atomic flag instead of locking
   the token's mutex: 47 → 15 instructions per check through `&dyn Stop`, and

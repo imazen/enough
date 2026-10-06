@@ -8,7 +8,7 @@
 //! | | `StopToken` | `BoxedStop` |
 //! |---|-----------|-------------|
 //! | Clone | Yes (Arc increment) | No |
-//! | Storage | `Arc<dyn Stop>` | `Box<dyn Stop>` |
+//! | Dispatch | Direct for `Stopper`/`SyncStopper`, else vtable | Same (wraps a `StopToken`) |
 //! | Send to threads | Clone and move | Must wrap in Arc yourself |
 //! | Use case | Default choice | When Clone is unwanted |
 //!
@@ -38,9 +38,11 @@ use crate::{Stop, StopReason};
 ///
 /// # Indirection Collapsing
 ///
-/// `StopToken::new()` detects when you pass another `StopToken` and unwraps
-/// it instead of double-wrapping. No-op stops (`Unstoppable`) are stored
-/// as `None` — `check()` short-circuits without any vtable dispatch.
+/// `StopToken::new()` detects when you pass another `StopToken` (or a
+/// [`BoxedStop`](crate::BoxedStop), which wraps one) and reuses it instead of
+/// double-wrapping. No-op stops (`Unstoppable`) are stored as `None` —
+/// `check()` short-circuits without any vtable dispatch. A `Stopper` or
+/// `SyncStopper` is checked as a direct atomic load, without a vtable.
 ///
 /// # Example
 ///
@@ -89,6 +91,14 @@ impl StopToken {
             let any_ref: &dyn Any = &stop;
             let inner = any_ref.downcast_ref::<StopToken>().unwrap();
             let result = inner.clone();
+            drop(stop);
+            return result;
+        }
+        // A BoxedStop is a StopToken that can't be cloned: reuse it
+        if TypeId::of::<T>() == TypeId::of::<crate::BoxedStop>() {
+            let any_ref: &dyn Any = &stop;
+            let inner = any_ref.downcast_ref::<crate::BoxedStop>().unwrap();
+            let result = inner.0.clone();
             drop(stop);
             return result;
         }
@@ -230,6 +240,66 @@ impl core::fmt::Debug for StopToken {
 mod tests {
     use super::*;
     use crate::{FnStop, StopSource, Stopper, Unstoppable};
+
+    fn direct(stop: &StopToken) -> &'static str {
+        match &stop.inner {
+            StopTokenInner::None => "none",
+            StopTokenInner::Relaxed(_) => "relaxed",
+            StopTokenInner::Acquire(_) => "acquire",
+            StopTokenInner::Dyn(_) => "dyn",
+        }
+    }
+
+    #[test]
+    fn boxed_stop_takes_the_same_fast_paths() {
+        use crate::{BoxedStop, SyncStopper};
+        assert_eq!(direct(&BoxedStop::new(Unstoppable).0), "none");
+        let stopper = Stopper::new();
+        let boxed = BoxedStop::new(stopper.clone());
+        assert_eq!(direct(&boxed.0), "relaxed");
+        let StopTokenInner::Relaxed(inner) = &boxed.0.inner else {
+            unreachable!()
+        };
+        assert!(
+            Arc::ptr_eq(inner, &stopper.inner),
+            "reuses the Stopper's Arc"
+        );
+        assert_eq!(direct(&BoxedStop::new(SyncStopper::new()).0), "acquire");
+        assert_eq!(direct(&BoxedStop::new(StopSource::new()).0), "dyn");
+    }
+
+    #[test]
+    fn boxed_stop_and_stop_token_nest_without_wrapping() {
+        use crate::BoxedStop;
+        let token = StopToken::new(FnStop::new(|| false));
+        let StopTokenInner::Dyn(original) = &token.inner else {
+            unreachable!()
+        };
+        let boxed = BoxedStop::new(token.clone());
+        let again = BoxedStop::new(boxed);
+        let back = StopToken::new(again);
+        let StopTokenInner::Dyn(inner) = &back.inner else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(inner, original));
+    }
+
+    #[test]
+    fn boxed_stop_sees_cancellation_through_every_path() {
+        use crate::{BoxedStop, SyncStopper};
+        let stopper = Stopper::new();
+        let sync = SyncStopper::new();
+        let boxed = [
+            BoxedStop::new(stopper.clone()),
+            BoxedStop::new(sync.clone()),
+            BoxedStop::new(BoxedStop::new(StopToken::new(stopper.clone()))),
+        ];
+        assert!(boxed.iter().all(|stop| stop.check().is_ok()));
+        stopper.cancel();
+        sync.cancel();
+        assert!(boxed.iter().all(|stop| stop.should_stop()));
+        assert_eq!(boxed[0].check(), Err(StopReason::Cancelled));
+    }
 
     #[test]
     fn from_unstoppable() {
