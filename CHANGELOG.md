@@ -30,6 +30,12 @@
   instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
   is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
   each other. Still not `Clone`; auto traits unchanged.
+- `almost-enough`: `PollMeter` looks call sites up by the address of their
+  `Location` instead of hashing the file path on every poll, with a shortcut
+  when a poll comes from the same site as the previous one: 693 → 308
+  instructions per poll (the clock read is now half of it), and the loop it
+  perturbed went from +42% to about +25–34% cycles at 1 KiB per poll. Reports
+  merge sites by `file:line:column` as before.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
