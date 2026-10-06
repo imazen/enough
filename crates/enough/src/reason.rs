@@ -24,6 +24,9 @@ use core::fmt;
 ///     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 /// }
 /// ```
+///
+/// Implement [`AsStopReason`] too, so code holding your error can tell a
+/// cancellation or timeout from a failure without knowing your error type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StopReason {
@@ -62,6 +65,61 @@ impl StopReason {
     #[inline]
     pub fn is_timed_out(&self) -> bool {
         matches!(self, Self::TimedOut)
+    }
+}
+
+/// The [`StopReason`] an error represents, if it represents one.
+///
+/// An operation that was cancelled or timed out usually returns an error
+/// that wraps the [`StopReason`] it got from [`Stop::check`](crate::Stop::check).
+/// Callers use this trait to tell that apart from a real failure without
+/// knowing the error type: to skip a retry, log quietly, or record a progress
+/// phase as cancelled. [`StopReason`] implements it; an error type with a
+/// variant that wraps a `StopReason` implements it next to its
+/// `From<StopReason>`:
+///
+/// ```rust
+/// use enough::{AsStopReason, StopReason};
+///
+/// enum MyError {
+///     Corrupt,
+///     Stopped(StopReason),
+/// }
+/// impl From<StopReason> for MyError {
+///     fn from(reason: StopReason) -> Self {
+///         Self::Stopped(reason)
+///     }
+/// }
+/// impl AsStopReason for MyError {
+///     fn as_stop_reason(&self) -> Option<StopReason> {
+///         match self {
+///             Self::Stopped(reason) => Some(*reason),
+///             _ => None,
+///         }
+///     }
+/// }
+/// assert_eq!(
+///     MyError::Stopped(StopReason::TimedOut).as_stop_reason(),
+///     Some(StopReason::TimedOut)
+/// );
+/// assert!(MyError::Corrupt.as_stop_reason().is_none());
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` doesn't say whether it represents a cancellation or timeout",
+    label = "needs `enough::AsStopReason`",
+    note = "implement `enough::AsStopReason for {Self}`, returning `Some(reason)` for the variant that wraps a `StopReason`",
+    note = "for an error type you cannot implement it for, map it to a `StopReason` where it is handled"
+)]
+pub trait AsStopReason {
+    /// The [`StopReason`] this error represents, or `None` for any other
+    /// failure.
+    fn as_stop_reason(&self) -> Option<StopReason>;
+}
+
+impl AsStopReason for StopReason {
+    #[inline]
+    fn as_stop_reason(&self) -> Option<StopReason> {
+        Some(*self)
     }
 }
 

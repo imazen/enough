@@ -97,12 +97,8 @@ impl StopToken {
             return result;
         }
         // A BoxedStop is a StopToken that can't be cloned: reuse it
-        if TypeId::of::<T>() == TypeId::of::<crate::BoxedStop>() {
-            let any_ref: &dyn Any = &stop;
-            let inner = any_ref.downcast_ref::<crate::BoxedStop>().unwrap();
-            let result = inner.0.clone();
-            drop(stop);
-            return result;
+        if let Some(token) = boxed_token(&stop) {
+            return token;
         }
         // Stopper: direct atomic, no vtable dispatch
         if TypeId::of::<T>() == TypeId::of::<crate::Stopper>() {
@@ -160,6 +156,16 @@ impl StopToken {
             inner: StopTokenInner::Dyn(arc as Arc<dyn Stop + Send + Sync>),
         }
     }
+}
+
+/// The token inside `stop` if it is a (deprecated) `BoxedStop`.
+#[allow(deprecated)]
+#[inline]
+fn boxed_token<T: Stop + 'static>(stop: &T) -> Option<StopToken> {
+    let any_ref: &dyn Any = stop;
+    any_ref
+        .downcast_ref::<crate::BoxedStop>()
+        .map(|boxed| boxed.0.clone())
 }
 
 impl Clone for StopTokenInner {
@@ -249,6 +255,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn boxed_stop_takes_the_same_fast_paths() {
         use crate::{BoxedStop, SyncStopper};
         assert_eq!(direct(&BoxedStop::new(Unstoppable).0), "none");
@@ -277,6 +284,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn boxed_stop_and_stop_token_nest_without_wrapping() {
         use crate::BoxedStop;
         let token = StopToken::new(FnStop::new(|| false));
@@ -293,6 +301,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn boxed_stop_sees_cancellation_through_every_path() {
         use crate::{BoxedStop, SyncStopper};
         let stopper = Stopper::new();

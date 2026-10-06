@@ -75,7 +75,7 @@
 //! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
-//! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
+//! | [`BoxedStop`] | alloc | Deprecated: use `StopToken` |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 //! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
 //!
@@ -193,7 +193,7 @@
 //! ## Feature Flags
 //!
 //! - **`std`** (default) - Full functionality including timeouts
-//! - **`alloc`** - Arc-based types, `into_boxed()`, `child()`, `StopDropRoll`
+//! - **`alloc`** - Arc-based types, `into_token()`, `child()`, `StopDropRoll`
 //! - **None** - Core trait and stack-based types only
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -255,6 +255,7 @@ mod sync_stopper;
 mod tree;
 
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use boxed::BoxedStop;
 #[cfg(feature = "alloc")]
 mod stop_token;
@@ -350,43 +351,15 @@ pub trait StopExt: Stop + Sized {
         OrStop::new(self, other)
     }
 
-    /// Convert this stop into a boxed trait object.
-    ///
-    /// This is useful for preventing monomorphization at API boundaries.
-    /// Instead of generating a new function for each `impl Stop` type,
-    /// you can erase the type to `BoxedStop` and have a single implementation.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "alloc")]
-    /// # fn main() {
-    /// use almost_enough::{Stopper, BoxedStop, Stop, StopExt};
-    ///
-    /// // This function is monomorphized for each Stop type
-    /// fn process_generic(stop: impl Stop + 'static) {
-    ///     // Erase type at boundary
-    ///     process_concrete(stop.into_boxed());
-    /// }
-    ///
-    /// // This function has only one implementation
-    /// fn process_concrete(stop: BoxedStop) {
-    ///     while !stop.should_stop() {
-    ///         break;
-    ///     }
-    /// }
-    ///
-    /// let stop = Stopper::new();
-    /// process_generic(stop);
-    /// # }
-    /// # #[cfg(not(feature = "alloc"))]
-    /// # fn main() {}
-    /// ```
-    /// Convert this stop into a boxed trait object.
-    ///
-    /// **Prefer [`into_token()`](StopExt::into_token)** which returns a [`StopToken`]
-    /// that is `Clone` and supports indirection collapsing.
+    /// Convert this stop into a [`BoxedStop`]. Deprecated: use
+    /// [`into_token()`](StopExt::into_token), whose [`StopToken`] checks the
+    /// same way and is `Clone`.
     #[cfg(feature = "alloc")]
+    #[deprecated(
+        since = "0.4.5",
+        note = "use `into_token()`, whose `StopToken` checks the same way and is `Clone`"
+    )]
+    #[allow(deprecated)]
     #[inline]
     fn into_boxed(self) -> BoxedStop
     where
@@ -545,6 +518,7 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn alloc_reexports_work() {
         let stop = Stopper::new();
         let _ = stop.clone();
@@ -553,6 +527,7 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn into_boxed_works() {
         let stop = Stopper::new();
         let boxed: BoxedStop = stop.clone().into_boxed();
@@ -565,6 +540,7 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn into_boxed_with_unstoppable() {
         let boxed: BoxedStop = Unstoppable.into_boxed();
         assert!(!boxed.should_stop());
@@ -572,6 +548,7 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
     fn into_boxed_prevents_monomorphization() {
         // This test verifies the pattern compiles correctly
         fn outer(stop: impl Stop + 'static) {

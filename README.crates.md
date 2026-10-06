@@ -95,7 +95,7 @@ pub trait Stop: Send + Sync {
     fn should_stop(&self) -> bool { self.check().is_err() }
 
     /// Returns true if this stop can ever fire (provided).
-    /// Unstoppable returns false. Used by StopToken/BoxedStop to
+    /// Unstoppable returns false. Used by StopToken to
     /// optimize away no-op stops at construction time.
     fn may_stop(&self) -> bool { true }
 }
