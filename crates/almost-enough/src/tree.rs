@@ -63,21 +63,21 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{BoxedStop, Stop, StopReason};
+use crate::{Stop, StopReason, StopToken};
 
 /// Inner state for a tree node.
 struct TreeInner {
     /// This node's own cancellation flag.
     self_cancelled: AtomicBool,
     /// Parent to check for inherited cancellation (None for root).
-    parent: Option<BoxedStop>,
+    parent: Option<StopToken>,
 }
 
 impl core::fmt::Debug for TreeInner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("TreeInner")
             .field("self_cancelled", &self.self_cancelled)
-            .field("parent", &self.parent.as_ref().map(|_| "<BoxedStop>"))
+            .field("parent", &self.parent.as_ref().map(|_| "<StopToken>"))
             .finish()
     }
 }
@@ -165,7 +165,7 @@ impl ChildStopper {
         Self {
             inner: Arc::new(TreeInner {
                 self_cancelled: AtomicBool::new(false),
-                parent: Some(BoxedStop::new(parent)),
+                parent: Some(StopToken::new(parent)),
             }),
         }
     }
