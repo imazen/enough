@@ -13,7 +13,10 @@
 //!
 //! See [`DebouncedTimeout`]'s docs for how late it can stop.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{Relaxed, SeqCst},
+};
 use std::time::{Duration, Instant};
 
 use crate::{Stop, StopReason};
@@ -28,10 +31,11 @@ const DEFAULT_TARGET_NANOS: u64 = 100_000;
 /// The most checks between clock reads, however fast checks arrive.
 ///
 /// A clock read costs about 100 instructions, so reading it every 64 checks
-/// adds one or two cycles per check, while bounding how late a stop can come
+/// adds about 2 cycles per check, while bounding how late a timeout can come
 /// after checks slow down: at most this many of the slower checks. Without
-/// the bound, a timeout calibrated on 2ns checks read the clock every 94,000
-/// checks, and stopped over a minute late once checks took 1ms.
+/// the bound, a timeout calibrated on back-to-back checks read the clock every
+/// 94,093 checks, and was still running 59.9 s past its deadline once checks
+/// took 1 ms (`benchmarks/debounced-timeout-2026-10-06.md`).
 const MAX_CHECKS_PER_CLOCK_READ: u32 = 64;
 
 /// Convert a Duration to nanoseconds as u64, clamping at u64::MAX.
@@ -57,7 +61,8 @@ fn duration_to_nanos(d: Duration) -> u64 {
 ///
 /// It reads the clock about once per target interval (default 100μs), and
 /// at least every 64 checks. While checks arrive at a steady rate it stops at
-/// most about one target interval late. It learns that checks have slowed
+/// most about one target interval late, or one check late when checks come
+/// further apart than that. It learns that checks have slowed
 /// down only at its next clock read, so after a sudden slowdown (a library
 /// moving on to a slower stage, say) it can stop up to 64 of the slower
 /// checks late: 64 ms if they then come once a millisecond. [`WithTimeout`](super::WithTimeout)
@@ -118,6 +123,8 @@ struct Schedule {
     skip_mod: AtomicU32,
     /// Nanoseconds since `created` at the last clock read.
     last_measured_nanos: AtomicU64,
+    /// Set once a clock read finds the deadline passed.
+    timed_out: AtomicBool,
 }
 
 impl Schedule {
@@ -127,6 +134,7 @@ impl Schedule {
             countdown: AtomicU32::new(1),
             skip_mod: AtomicU32::new(1),
             last_measured_nanos: AtomicU64::new(0),
+            timed_out: AtomicBool::new(false),
         }
     }
 
@@ -231,7 +239,8 @@ impl<T: Stop> DebouncedTimeout<T> {
         let elapsed_nanos = self.created.elapsed().as_nanos() as u64;
         if elapsed_nanos >= self.deadline_nanos {
             // Every later check reads the clock too, and stops.
-            schedule.countdown.store(1, Relaxed);
+            schedule.timed_out.store(true, SeqCst);
+            schedule.countdown.store(1, SeqCst);
             return true; // timed out
         }
 
@@ -254,7 +263,13 @@ impl<T: Stop> DebouncedTimeout<T> {
             };
             schedule.skip_mod.store(skip, Relaxed);
         }
-        schedule.countdown.store(skip, Relaxed);
+        // A thread that read the clock just before another timed out must not
+        // undo that thread's `countdown = 1`: SeqCst makes it see the flag
+        // whenever its store lands after that one.
+        schedule.countdown.store(skip, SeqCst);
+        if schedule.timed_out.load(SeqCst) {
+            schedule.countdown.store(1, Relaxed);
+        }
         false // not timed out
     }
 }
@@ -687,16 +702,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_slowdown_after_calibration_stops_within_64_slow_checks() {
-        // Calibrate on fast checks, then make every check take 1ms. Without
-        // the bound, a release build calibrated to one clock read per ~94,000
-        // checks and stopped over a minute late.
-        let stop = DebouncedTimeout::new(Unstoppable, Duration::from_millis(40));
+    /// Check back to back for 20 ms with a deadline far away, as a library's
+    /// fast stage would, so the schedule calibrates to the cap.
+    fn calibrated_on_fast_checks() -> DebouncedTimeout<Unstoppable> {
+        let stop = DebouncedTimeout::new(Unstoppable, Duration::from_secs(3600));
         let fast_until = Instant::now() + Duration::from_millis(20);
         while Instant::now() < fast_until {
             stop.check().unwrap();
         }
+        stop
+    }
+
+    #[test]
+    fn a_passed_deadline_stops_within_64_checks() {
+        let mut stop = calibrated_on_fast_checks();
+        stop.deadline_nanos = 0;
+        let mut ok_checks = 0;
+        while stop.check().is_ok() {
+            ok_checks += 1;
+            assert!(ok_checks < MAX_CHECKS_PER_CLOCK_READ, "{ok_checks} checks");
+        }
+    }
+
+    #[test]
+    fn a_slowdown_after_calibration_stops_within_64_slow_checks() {
+        // Calibrate on fast checks, then make every check take 1ms with the
+        // deadline 20ms away. Without the bound, a release build calibrated
+        // to one clock read per ~94,000 checks and ran a minute past it.
+        let mut stop = calibrated_on_fast_checks();
+        stop.deadline_nanos = duration_to_nanos(stop.created.elapsed()) + 20_000_000;
         let mut slow_checks = 0;
         while stop.check().is_ok() {
             slow_checks += 1;
@@ -707,6 +741,17 @@ mod tests {
         // after the slowdown comes within 64 checks, the next within a few
         // (it recalibrates on the slow ones), and then every check.
         assert!(slow_checks <= 20 + 64 + 8, "{slow_checks} slow checks");
+    }
+
+    #[test]
+    fn a_clock_read_just_before_another_threads_timeout_keeps_it_stopped() {
+        // Thread A timed out (the flag, then `countdown = 1`); thread B read
+        // the clock just before the deadline and recalibrates afterwards.
+        let stop = calibrated_on_fast_checks();
+        stop.schedule.timed_out.store(true, SeqCst);
+        stop.schedule.countdown.store(1, SeqCst);
+        assert!(!stop.measure_and_recalibrate());
+        assert_eq!(stop.schedule.countdown.load(Relaxed), 1);
     }
 
     #[test]
