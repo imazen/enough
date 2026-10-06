@@ -22,7 +22,7 @@ The default `std` feature pulls in everything (Arc-based stoppers, timeouts, gua
 
 ## Start Here: `SyncStopper`
 
-The [type table below](#type-overview) lists several stops (`SyncStopper`, `Stopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`SyncStopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. A thread that sees the stop also sees everything the cancelling thread wrote before `cancel()`. [`Stopper`] is the same flag with Relaxed ordering, for a bare "stop" signal: it costs the same on x86-64 and one instruction less per check on aarch64. Everything else is a specialization you can adopt later.
+The [type table below](#type-overview) lists several stops (`SyncStopper`, `Stopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`SyncStopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. A thread that sees the stop also sees everything the cancelling thread wrote before `cancel()`. [`Stopper`] is the same flag with Relaxed ordering, for a bare "stop" signal; on ARM a thread can see its stop before the writes that preceded `cancel()` (in 21% of rounds of a litmus test on a Neoverse-N1), and measured on x86-64 and an Apple M4 Pro, it is no faster. Everything else is a specialization you can adopt later.
 
 ## Quick Start
 

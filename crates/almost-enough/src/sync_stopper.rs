@@ -30,10 +30,9 @@
 //!
 //! # When NOT to Use
 //!
-//! It costs the same as [`Stopper`](crate::Stopper) on x86-64 and one
-//! instruction more per check on aarch64, so it is the default choice; use
-//! `Stopper` only when the flag carries nothing but "stop" and that
-//! instruction matters.
+//! It costs no more than [`Stopper`](crate::Stopper) measurably, so it is
+//! the default choice; see the type's docs. Use `Stopper` only when the flag
+//! carries nothing but "stop".
 //!
 //! # Memory Ordering
 //!
@@ -84,13 +83,25 @@ impl Stop for SyncStopperInner {
 /// This is the default choice: if you're not sure which stop to use, use
 /// this one.
 ///
+/// # When the ordering matters
+///
+/// When the cancelling thread hands over data through Relaxed atomics, such
+/// as a reason code stored just before `cancel()`. Data behind a `Mutex`,
+/// sent on a channel, or read after a `join` is synchronized anyway. On ARM
+/// the difference is real: in a litmus test (`examples/stop_ordering.rs`), a
+/// reader that had seen a [`Stopper`](crate::Stopper)'s stop still read the
+/// old value in 21% of rounds on a Neoverse-N1 and in 1 of 10,500 on an Apple
+/// M4 Pro. With `SyncStopper` it never did, on either. x86-64 can't reorder
+/// that way, so neither type ever read stale there.
+///
 /// # Performance
 ///
-/// Measured with perf through `&dyn Stop`, a check costs the same as
-/// [`Stopper`](crate::Stopper)'s on x86-64, where an Acquire load is an
-/// ordinary load, and one instruction more on aarch64 (Neoverse-N1), with
-/// cycles within noise. Use `Stopper` only when the flag carries nothing but
-/// "stop" and that instruction matters.
+/// On x86-64 a check compiles to the same instructions as `Stopper`'s (an
+/// Acquire load is an ordinary load). On aarch64 it is one more instruction
+/// (`ldaprb` takes no address offset). zenbench measured no difference on an
+/// Apple M4 Pro, isolated or in a loop that checks every 64 bytes. On a
+/// Neoverse-N1 it measured none in isolation and +2–3% in that 64-byte loop.
+/// Use `Stopper` only when the flag carries nothing but "stop".
 #[derive(Debug, Clone)]
 pub struct SyncStopper {
     pub(crate) inner: Arc<SyncStopperInner>,

@@ -71,10 +71,11 @@ impl Stop for StopperInner {
 /// # Memory Ordering
 ///
 /// `Stopper` uses Relaxed ordering: a thread that sees the stop is not
-/// guaranteed to see other writes made before `cancel()`.
-/// [`SyncStopper`](crate::SyncStopper) guarantees that, and costs the same on
-/// x86-64 and one instruction more per check on aarch64 (measured through
-/// `&dyn Stop`), so prefer it unless the flag carries nothing but "stop".
+/// guaranteed to see other writes made before `cancel()`, and on ARM it
+/// often doesn't (21% of rounds of a litmus test on a Neoverse-N1).
+/// [`SyncStopper`](crate::SyncStopper) guarantees it, at no measurable cost on
+/// x86-64 or an Apple M4 Pro, so prefer it unless the flag carries nothing
+/// but "stop"; see its docs for the measurements.
 ///
 /// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
 /// overhead — the existing `Arc` is reused, not double-wrapped.

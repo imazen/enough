@@ -100,12 +100,15 @@ for FFI).
 
 `Stopper` uses `Ordering::Relaxed`, sufficient for "just stop."
 `SyncStopper` uses Release/Acquire, so a thread that sees the stop also
-sees writes made before `cancel()`. Measured with perf in 2026-10
-(through `&dyn Stop`, 1 KiB of work per check), `SyncStopper` costs the
-same as `Stopper` on x86-64 and one instruction more per check on
-Neoverse-N1, with cycles within noise, so the docs recommend
-`SyncStopper` by default and keep `Stopper` for bare signals. SeqCst
-rejected as overkill for cancellation.
+sees writes made before `cancel()`. In a litmus test (2026-10,
+`benchmarks/stopper-ordering-2026-10-06.md`), a reader that had seen a
+`Stopper`'s stop still read the old value in 21% of rounds on Neoverse-N1
+and in 1 of 10,500 on an Apple M4 Pro; never with `SyncStopper`, and
+never with either on x86-64. Its cost: the same instructions on x86-64,
+one more per check on aarch64, no measurable difference on an M4 Pro, and
++2–3% at most on Neoverse-N1 in a loop checking every 64 bytes. So the docs
+recommend `SyncStopper` by default and keep `Stopper` for bare signals.
+SeqCst rejected as overkill for cancellation.
 
 ### 9. `Clone` is NOT on `Stop`
 
