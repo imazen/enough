@@ -71,13 +71,12 @@
 //! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
 //! | [`FnStop`] | core | Wrap any closure |
 //! | [`OrStop`] | core | Combine multiple stops |
-//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share; whoever sees the stop sees what was written before `cancel()` |
-//! | [`RelaxedStopper`] | alloc | A `Stopper` without that guarantee, for hot loops on ARM Linux |
-//! | [`SyncStopper`] | alloc | Deprecated: `Stopper` has the same ordering |
+//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
+//! | [`SyncStopper`] | alloc | Like Stopper, but every check is an Acquire load |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
-//! | [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
+//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
 //! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
 //!
 //! ## StopExt Extension Trait
@@ -101,9 +100,9 @@
 //! ## Type Erasure with `StopToken`
 //!
 //! [`StopToken`] wraps `Arc<dyn Stop>` — it's `Clone` (cheap Arc increment),
-//! type-erased, and can be sent across threads. A [`Stopper`] converts to
-//! `StopToken` at zero cost via `From`/`Into` (the existing Arc is reused, no
-//! double-wrapping).
+//! type-erased, and can be sent across threads. [`Stopper`] and
+//! [`SyncStopper`] convert to `StopToken` at zero cost via `From`/`Into`
+//! (the existing Arc is reused, no double-wrapping).
 //!
 //! Use [`CloneStop`] (a trait alias for `Stop + Clone + 'static`) to accept
 //! any clonable stop, then erase with `into_token()` at the boundary:
@@ -248,8 +247,6 @@ pub use source::{StopRef, StopSource};
 #[cfg(feature = "alloc")]
 mod boxed;
 #[cfg(feature = "alloc")]
-mod relaxed_stopper;
-#[cfg(feature = "alloc")]
 mod stopper;
 #[cfg(feature = "alloc")]
 mod sync_stopper;
@@ -261,13 +258,10 @@ pub use boxed::BoxedStop;
 #[cfg(feature = "alloc")]
 mod stop_token;
 #[cfg(feature = "alloc")]
-pub use relaxed_stopper::RelaxedStopper;
-#[cfg(feature = "alloc")]
 pub use stop_token::StopToken;
 #[cfg(feature = "alloc")]
 pub use stopper::Stopper;
 #[cfg(feature = "alloc")]
-#[allow(deprecated)]
 pub use sync_stopper::SyncStopper;
 #[cfg(feature = "alloc")]
 pub use tree::ChildStopper;

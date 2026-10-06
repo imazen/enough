@@ -196,18 +196,34 @@ impl ChildStopper {
 
     /// Cancel this node (and all its children).
     ///
-    /// This does NOT affect the parent or siblings. A Release store, and
-    /// checks are Acquire loads, as with [`Stopper`](crate::Stopper): whoever
-    /// sees the stop also sees what was written before this call.
+    /// This does NOT affect the parent or siblings. A Release store: writes
+    /// made before it are visible to a thread whose
+    /// [`is_cancelled`](Self::is_cancelled) then returns `true`.
     #[inline]
     pub fn cancel(&self) {
         self.inner.self_cancelled.store(true, Ordering::Release);
     }
 
     /// Check if this node is cancelled (either directly or via ancestor).
+    ///
+    /// When it returns `true`, an Acquire fence follows, so this thread also
+    /// sees the writes made before whichever `cancel()` it observed (for a
+    /// parent that isn't a `ChildStopper`, if that parent's cancel is a
+    /// Release store, as every stop in this crate's is). Checks are Relaxed.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        if self.inner.self_cancelled.load(Ordering::Acquire) {
+        let cancelled = self.stopped();
+        if cancelled {
+            core::sync::atomic::fence(Ordering::Acquire);
+        }
+        cancelled
+    }
+
+    /// This node or an ancestor is cancelled: Relaxed loads only, for checks.
+    #[inline]
+    #[track_caller]
+    fn stopped(&self) -> bool {
+        if self.inner.self_cancelled.load(Ordering::Relaxed) {
             return true;
         }
         if let Some(ref parent) = self.inner.parent {
@@ -228,7 +244,7 @@ impl Stop for ChildStopper {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.inner.self_cancelled.load(Ordering::Acquire) {
+        if self.inner.self_cancelled.load(Ordering::Relaxed) {
             return Err(StopReason::Cancelled);
         }
         if let Some(ref parent) = self.inner.parent {
@@ -241,7 +257,7 @@ impl Stop for ChildStopper {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.is_cancelled()
+        self.stopped()
     }
 }
 
@@ -249,6 +265,43 @@ impl Stop for ChildStopper {
 mod tests {
     use super::*;
     use crate::Stopper;
+
+    /// See `stopper::tests`: the child's checks are Relaxed; its
+    /// `is_cancelled()` fences, whichever ancestor was cancelled.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for parent_is_stopper in [false, true] {
+            for _ in 0..if cfg!(miri) { 15 } else { 500 } {
+                let stopper = Stopper::new();
+                let root = if parent_is_stopper {
+                    ChildStopper::with_parent(stopper.clone())
+                } else {
+                    ChildStopper::new()
+                };
+                let leaf = root.child();
+                let data = Arc::new(AtomicU32::new(0));
+                let reader = {
+                    let (leaf, data) = (leaf.clone(), Arc::clone(&data));
+                    std::thread::spawn(move || {
+                        while !leaf.should_stop() {
+                            core::hint::spin_loop();
+                        }
+                        assert!(leaf.is_cancelled());
+                        data.load(Relaxed)
+                    })
+                };
+                data.store(42, Relaxed);
+                if parent_is_stopper {
+                    stopper.cancel();
+                } else {
+                    root.cancel();
+                }
+                assert_eq!(reader.join().unwrap(), 42);
+            }
+        }
+    }
 
     #[test]
     fn tree_root_basic() {

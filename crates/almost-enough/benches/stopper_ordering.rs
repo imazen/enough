@@ -1,9 +1,9 @@
-//! What Release/Acquire ordering costs. `Stopper` (an Acquire load per
-//! check) against three flags laid out as it is, an `Arc` holding an
-//! `AtomicBool`, that differ only in the check:
-//! - `relaxed_flag`: a Relaxed load, what `Stopper` was before 0.4.5;
-//! - `acquire_flag`: an Acquire load, the same instructions as `Stopper`,
-//!   so its gap to `stopper` shows how much code placement alone moves a row;
+//! What an ordered check would cost, against `Stopper`'s Relaxed one. Three
+//! flags laid out as `Stopper` is, an `Arc` holding an `AtomicBool`, differ
+//! only in the check:
+//! - `relaxed_flag`: a Relaxed load, the same instructions as `stopper`, so
+//!   the gap between those two rows is code placement alone;
+//! - `acquire_flag`: an Acquire load on every check, as `SyncStopper` does;
 //! - `fenced_flag`: a Relaxed load and an Acquire fence once it reads
 //!   `true`, an alternative that was measured and rejected.
 //!
@@ -50,7 +50,7 @@ impl Stop for RelaxedFlag {
     }
 }
 
-/// A flag checked with an Acquire load, as `Stopper` is.
+/// A flag checked with an Acquire load, as `SyncStopper` is.
 #[derive(Clone)]
 struct AcquireFlag(Arc<AtomicBool>);
 
@@ -72,9 +72,8 @@ impl Stop for AcquireFlag {
 }
 
 /// A flag checked with a Relaxed load and an Acquire fence once it reads
-/// `true`. Same guarantee as an Acquire load, and a plain load until the
-/// stop; measured no cheaper than `ldar` on Neoverse-N1, and a branch more
-/// than an Acquire load on x86-64, where that load is free.
+/// `true`. Same guarantee as an Acquire load; inlined, the same instructions
+/// as a Relaxed check, but through `&dyn Stop` a branch more.
 #[derive(Clone)]
 struct FencedFlag(Arc<AtomicBool>);
 

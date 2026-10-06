@@ -30,7 +30,11 @@
 //!
 //! # Memory Ordering
 //!
-//! Release on `cancel()`, Acquire on every check: see the type's docs.
+//! `cancel()` is a Release store and checks are Relaxed loads, so a check
+//! costs one plain load. To read what the cancelling thread wrote before
+//! `cancel()`, call [`Stopper::is_cancelled`], an Acquire load, after the
+//! work reports the stop. [`SyncStopper`](crate::SyncStopper) makes every
+//! check an Acquire load instead.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -47,7 +51,7 @@ impl Stop for StopperInner {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -57,7 +61,7 @@ impl Stop for StopperInner {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Relaxed)
     }
 }
 
@@ -68,28 +72,6 @@ impl Stop for StopperInner {
 ///
 /// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
 /// overhead — the existing `Arc` is reused, not double-wrapped.
-///
-/// # Memory ordering
-///
-/// `cancel()` is a Release store and every check an Acquire load, so a
-/// thread that sees the stop also sees everything the cancelling thread wrote
-/// before `cancel()`, such as a reason code or a request kept in an atomic.
-/// A relaxed flag doesn't promise that, and on ARM it often fails: in a
-/// litmus test (`examples/stop_ordering.rs`), a reader that saw a relaxed
-/// flag's stop still read the old data in 21% of rounds on a Neoverse-N1 and
-/// in 1 of 10,500 on an Apple M4 Pro. With `Stopper` it never did.
-///
-/// The ordering is free on x86-64, where an Acquire load is an ordinary
-/// load, and on wasm, where both orderings compile to the same code. On
-/// aarch64 it is one-way ordering on the flag's own load and store, not a
-/// fence: `ldapr` where the target enables RCpc (macOS builds), the stronger
-/// `ldar` where it doesn't (Linux, Windows, Android and iOS builds). The
-/// `stopper_ordering` bench measured no difference with `ldapr` on an Apple
-/// M4 Pro or a Neoverse-N1. With `ldar` on the N1, a compute-bound loop
-/// that checked every 64 bytes ran 3–10% slower, and one that checked every
-/// KiB, or any loop bound by memory latency, showed nothing. On Cortex-M and
-/// 32-bit RISC-V each check also executes a full barrier (`dmb sy`,
-/// `fence r,rw`), a cost not measured.
 ///
 /// # Example
 ///
@@ -114,7 +96,7 @@ impl Stop for StopperInner {
 /// # Performance
 ///
 /// - Size: 8 bytes (one pointer)
-/// - `check()`: ~1-2ns (single atomic load with Acquire ordering)
+/// - `check()`: ~1-2ns (single atomic load with Relaxed ordering)
 /// - `clone()`: atomic increment
 /// - `cancel()`: atomic store
 /// - `into() -> StopToken`: zero-cost (Arc pointer widening)
@@ -148,14 +130,22 @@ impl Stopper {
 
     /// Signal all clones to stop.
     ///
-    /// A Release store: a clone that then sees the stop also sees every write
-    /// made before this call. Idempotent: calling it again has no effect.
+    /// A Release store: writes made before it are visible to a thread whose
+    /// [`is_cancelled`](Self::is_cancelled) then returns `true`. Idempotent:
+    /// calling it again has no effect.
     #[inline]
     pub fn cancel(&self) {
         self.inner.cancelled.store(true, Ordering::Release);
     }
 
-    /// Check if cancellation has been requested, with Acquire ordering.
+    /// Whether cancellation has been requested, as an Acquire load.
+    ///
+    /// When it returns `true`, this thread also sees every write the
+    /// cancelling thread made before [`cancel`](Self::cancel), such as a
+    /// reason code kept in an atomic. Call it after the work reports the
+    /// stop. In a loop, use [`check`](Stop::check) or
+    /// [`should_stop`](Stop::should_stop): one Relaxed load each, which see
+    /// the stop just as soon but promise nothing about other writes.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)
@@ -193,6 +183,33 @@ impl core::fmt::Debug for StopperInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writer cancels after a Relaxed store; the reader waits with
+    /// Relaxed checks, then calls `is_cancelled()`. Miri's weak-memory
+    /// emulation fails this if `cancel()` isn't Release or `is_cancelled()`
+    /// isn't Acquire; CI runs it over many seeds.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let stop = Stopper::new();
+            let data = Arc::new(AtomicU32::new(0));
+            let reader = {
+                let (stop, data) = (stop.clone(), Arc::clone(&data));
+                std::thread::spawn(move || {
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(stop.is_cancelled());
+                    data.load(Relaxed)
+                })
+            };
+            data.store(42, Relaxed);
+            stop.cancel();
+            assert_eq!(reader.join().unwrap(), 42);
+        }
+    }
 
     #[test]
     fn stopper_basic() {
@@ -250,30 +267,6 @@ mod tests {
         };
         // Original is dropped, but clone still works
         assert!(!stop2.should_stop());
-    }
-
-    /// The Release/Acquire guarantee. x86-64 can't show a stale read; Miri's
-    /// weak-memory emulation and ARM hardware can, if the ordering is relaxed.
-    #[cfg(feature = "std")]
-    #[test]
-    fn a_clone_that_sees_the_stop_sees_writes_made_before_cancel() {
-        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
-        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
-            let stop = Stopper::new();
-            let data = Arc::new(AtomicU32::new(0));
-            let reader = {
-                let (stop, data) = (stop.clone(), Arc::clone(&data));
-                std::thread::spawn(move || {
-                    while !stop.should_stop() {
-                        core::hint::spin_loop();
-                    }
-                    data.load(Relaxed)
-                })
-            };
-            data.store(42, Relaxed);
-            stop.cancel();
-            assert_eq!(reader.join().unwrap(), 42);
-        }
     }
 
     #[test]

@@ -2,44 +2,8 @@
 
 ## [Unreleased]
 
-### QUEUED BREAKING CHANGES
-
-- `almost-enough`: `SyncStopper` becomes `pub type SyncStopper = Stopper` (or
-  is removed). Since 0.4.5 it is a deprecated wrapper around `Stopper`; the
-  alias breaks code that implements a trait, or a `From`, for both types.
-
-### Changed
-
-- `almost-enough`: `Stopper::cancel` is a Release store and every check an
-  Acquire load, so a clone that sees the stop also sees what was written
-  before `cancel()` (e66c0d55). `StopSource`/`StopRef`, `ChildStopper` and
-  `enough-ffi`'s flag do the same (af21bbb7). A litmus test
-  (`examples/stop_ordering.rs`) read data stale after a relaxed flag's stop
-  in 23% of rounds on Neoverse-N1 and 1 in 13,300 on an Apple M4 Pro, never
-  with Release/Acquire. The `stopper_ordering` bench measured no cost on
-  x86-64, or on aarch64 targets with RCpc (`ldapr`: the M4 Pro, and
-  Neoverse-N1 built for it). Default aarch64 Linux builds emit `ldar`: on
-  N1 a compute-bound loop checking every 64 bytes ran 3–10% slower, one
-  checking every KiB and memory-latency-bound loops showed nothing. See
-  `benchmarks/stopper-ordering-2026-10-06.md`.
-- Docs: `WithTimeout` states its cost (a clock read per check, about 110
-  instructions; +22% cycles on a 1 KiB-per-check loop on x86-64) and points
-  to `DebouncedTimeout`. The root README's cancel example now imports `Stop`
-  (it did not compile); TRADEOFFS lists `StopToken` at its real 24 bytes.
-
-### Deprecated
-
-- `almost-enough`: `SyncStopper`, now a wrapper around `Stopper`, which has
-  the same Release/Acquire ordering (e66c0d55).
-
 ### Added
 
-- `almost-enough`: `RelaxedStopper`, a `Stopper` whose flag is stored and
-  checked with Relaxed ordering, as `Stopper` was before 0.4.5: no
-  visibility guarantee for data written before `cancel()`. For loops that
-  check every few dozen bytes on aarch64 targets without RCpc, where it
-  measured 3–10% faster than `Stopper` at a check every 64 B on
-  Neoverse-N1. In a `StopToken` it reuses its `Arc` behind the vtable.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
@@ -65,6 +29,16 @@
 
 ### Changed
 
+- `almost-enough`, `enough-ffi`: `cancel()` is a Release store on `Stopper`,
+  `StopSource`, `ChildStopper` and the FFI source, and their `is_cancelled()`
+  (and the C function `enough_cancellation_is_cancelled`) an Acquire load;
+  `ChildStopper::is_cancelled` fences after its walk. Code that reads what
+  the canceller wrote before `cancel()` calls `is_cancelled()` after the work
+  reports the stop. Checks are unchanged: one Relaxed load, the same
+  instructions as before on x86-64 and aarch64. `SyncStopper` still acquires
+  on every check. `examples/stop_ordering.rs`, `examples/cross_core_latency.rs`
+  and `benches/stopper_ordering.rs` measure it; see
+  `benchmarks/stopper-ordering-2026-10-06.md`.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
   instructions per check in generic code, 16 → 14 through `&dyn Stop`) and

@@ -14,7 +14,7 @@
 //!
 //! Run with: cargo bench --bench stop_check_zen
 
-use almost_enough::{FnStop, Stop, StopReason, StopToken, Stopper, Unstoppable};
+use almost_enough::{FnStop, Stop, StopReason, StopToken, Stopper, SyncStopper, Unstoppable};
 
 /// 256KB — fits L2, realistic for one image tile/row batch.
 const BUF: usize = 256 * 1024;
@@ -127,6 +127,15 @@ fn main() {
                 })
             });
 
+            group.bench("SyncStopper", |b| {
+                let stop = SyncStopper::new();
+                let mut work = make_buf();
+                b.iter(|| {
+                    let _ = decode(&mut work, &stop);
+                    zenbench::black_box(&work);
+                })
+            });
+
             group.bench("FnStop(|| false)", |b| {
                 let stop = FnStop::new(|| false);
                 let mut work = make_buf();
@@ -149,8 +158,8 @@ fn main() {
         // ═══════════════════════════════════════════════════════════
         // 2. StopToken vs &dyn Stop: does the wrapper matter?
         //
-        // StopToken has a specialized enum path for Stopper. This group
-        // tests whether that specialization
+        // StopToken has specialized enum paths for Stopper and
+        // SyncStopper. This group tests whether that specialization
         // is visible through real work. Uses decode_token() which
         // is a separate function — layout may differ from decode(),
         // so compare within this group, not across groups.
@@ -163,6 +172,15 @@ fn main() {
 
             group.bench("token(Stopper)", |b| {
                 let stop: StopToken = Stopper::new().into();
+                let mut work = make_buf();
+                b.iter(|| {
+                    let _ = decode_token(&mut work, &stop);
+                    zenbench::black_box(&work);
+                })
+            });
+
+            group.bench("token(SyncStopper)", |b| {
+                let stop: StopToken = SyncStopper::new().into();
                 let mut work = make_buf();
                 b.iter(|| {
                     let _ = decode_token(&mut work, &stop);
@@ -213,6 +231,10 @@ fn main() {
             });
             group.bench("token(Stopper)", |b| {
                 let stop: StopToken = Stopper::new().into();
+                b.iter(|| check_10k_token(&stop))
+            });
+            group.bench("token(SyncStopper)", |b| {
+                let stop: StopToken = SyncStopper::new().into();
                 b.iter(|| check_10k_token(&stop))
             });
 

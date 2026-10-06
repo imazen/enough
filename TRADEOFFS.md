@@ -15,7 +15,7 @@ enough (core, no_std, zero deps)
 
 almost-enough (batteries, re-exports enough)
 ├── StopToken: Arc-based, Clone, automatic Unstoppable optimization
-├── Stopper: Arc<StopperInner>, zero-cost From<> → StopToken (SyncStopper: deprecated wrapper)
+├── Stopper / SyncStopper: Arc<StopperInner>, zero-cost From<> → StopToken
 ├── StopSource / StopRef: stack-based, zero-alloc, borrowed
 ├── ChildStopper: hierarchical parent-child cancellation
 ├── BoxedStop: legacy, prefer StopToken
@@ -102,43 +102,36 @@ to `enough`, downstream code changes one import path. No renames.
 No manual unsafe impls needed. `enough-ffi` retains unsafe (necessary
 for FFI).
 
-### 8. Release/Acquire for every flag
+### 8. Release `cancel()`, Relaxed checks, Acquire `is_cancelled()`
 
-`cancel()` is a Release store and every check an Acquire load, for
-`Stopper`, `StopSource`/`StopRef`, `ChildStopper` and the FFI flag. So
-a thread that sees the stop also sees what the cancelling thread wrote
-before `cancel()`.
+A check is one Relaxed load, on every stop type: the default `.check()?`
+must not gain instructions, because it runs millions of times and is inlined
+at thousands of sites. `cancel()` is a Release store (`Stopper`,
+`StopSource`, `ChildStopper`, the FFI source) and `is_cancelled()` an Acquire
+load (`ChildStopper`: a fence after its walk). So code that reads what the
+canceller wrote before `cancel()` calls `is_cancelled()` after the work
+reports the stop, and gets the guarantee for one load on a cold path.
+`SyncStopper` keeps an Acquire load on every check, for code that only sees
+the stop through `check()`.
 
-Until 0.4.5 `Stopper` was Relaxed ("fastest on ARM"), and a separate
-`SyncStopper` offered Release/Acquire. Measured in 2026-10
-(`benchmarks/stopper-ordering-2026-10-06.md`):
-- **The guarantee matters.** In a litmus test, a reader that had seen a
-  relaxed flag's stop still read the old data in 21% of rounds on
-  Neoverse-N1, and 1 in 10,500 on an Apple M4 Pro. With Release/Acquire
-  it never did. On x86-64 neither ordering ever read stale.
-- **It costs little, and only on aarch64 without RCpc.** x86-64 compiles
-  both orderings to the same instructions. On aarch64 an Acquire load is
-  one-way ordering, not a fence, and one instruction more through
-  `&dyn Stop`. Where the target enables RCpc (`ldapr`: macOS builds, or a
-  `-C target-cpu` that has it), neither an Apple M4 Pro nor a Neoverse-N1
-  showed a difference. Default Linux, Windows, Android and iOS builds emit
-  `ldar`: on N1 a compute-bound loop checking every 64 bytes ran 3–10%
-  slower, while checking every 1 KiB, or loops bound by memory latency
-  (with the flag's cache line contended too), showed nothing. A Relaxed
-  load with an Acquire fence on stop was no cheaper there and costs a
-  branch on x86-64. A Relaxed opt-out arm in `StopToken` was slower than
-  the Acquire arm on N1 and turns its dispatch into a jump table on x86-64.
-- **It doesn't change how soon the stop is seen.** A store reached a load
-  on another core just as fast at Relaxed, Release/Acquire and SeqCst:
-  about 39 ns within a CCD and 219 ns across CCDs on Zen 3, 140 ns on
-  Neoverse-N1, 37 ns on an M4 Pro. How often the work checks dominates.
-- **Except on microcontrollers, where it is unmeasured.** Cortex-M and
-  32-bit RISC-V put a full barrier (`dmb sy`, `fence r,rw`) after each
-  Acquire check and before each Release store. Wasm compiles both
-  orderings to the same instructions. Which targets build is unchanged.
+Measured in 2026-10 (`benchmarks/stopper-ordering-2026-10-06.md`):
+- **Relaxed readers do read stale data on ARM.** In a litmus test a reader
+  that had seen a relaxed flag's stop still read the old value in 27% of
+  rounds on Neoverse-N1 and about 1 in 15,000 on an Apple M4 Pro; after
+  `is_cancelled()`, never. On x86-64 nothing reads stale.
+- **A Release `cancel()` alone doesn't fix it.** It changed the stale-read
+  rate of Relaxed readers in both directions (5× fewer on N1, 9× more on the
+  M4 Pro in one harness, 29× fewer in another).
+- **An Acquire on every check costs on ARM Linux.** `ldar` (targets without
+  RCpc) made a loop checking every 64 bytes 3–10% slower on N1; macOS
+  (`ldapr`) and x86-64 showed nothing. An Acquire fence only on the stop path
+  is free inlined but costs a branch through `&dyn Stop`; a Relaxed opt-out
+  arm in `StopToken` compiles its `match` to a jump table on x86-64.
+- **Ordering doesn't change how soon the stop is seen.** A store reached a
+  load on another core equally fast at Relaxed, Release/Acquire and SeqCst.
 
-So every flag takes the guarantee, and `SyncStopper` became a deprecated
-wrapper around `Stopper`. SeqCst rejected as overkill for cancellation.
+SeqCst rejected: a SeqCst `cancel()` behaves like Release for this handoff
+(Miri) and adds a barrier on x86-64.
 
 ### 9. `Clone` is NOT on `Stop`
 
@@ -206,9 +199,9 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `Unstoppable` | 0 | 0ns | Copy | none | Optimized away everywhere |
 | `StopSource` | 1 byte | ~0.4ns | no | stack | Owns AtomicBool |
 | `StopRef<'a>` | 8 bytes | ~0.4ns | Copy | none | Borrowed from StopSource |
-| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice; Release/Acquire |
-| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Deprecated wrapper around `Stopper` |
-| `StopToken` | 24 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
+| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice |
+| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Acquire/Release |
+| `StopToken` | 16 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
 | `BoxedStop` | 16 bytes | 0ns/~1ns | no | Box/None | Legacy, prefer StopToken |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
 | `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |

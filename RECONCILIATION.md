@@ -20,9 +20,9 @@
 
 ### 1. Memory Ordering - SHOULD FIX
 
-**Status:** done in 0.4.5: `Stopper`, `StopSource`/`StopRef`,
-`ChildStopper` and the FFI flag use Release/Acquire; see TRADEOFFS
-decision 8. (The file paths below are from an earlier layout.)
+> **Status (0.4.5):** `cancel()` is a Release store on every stop type and
+> `is_cancelled()` the Acquire query; checks stay Relaxed, one plain load.
+> See TRADEOFFS.md decision 8.
 
 Currently uses `Ordering::Relaxed` everywhere:
 

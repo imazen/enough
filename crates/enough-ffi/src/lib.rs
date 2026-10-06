@@ -103,13 +103,21 @@ impl CancellationState {
         }
     }
 
+    /// A Release store: see [`FfiCancellationSource::is_cancelled`].
     #[inline]
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 
+    /// The tokens' check: a Relaxed load.
     #[inline]
     fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
+    /// The source's query: an Acquire load.
+    #[inline]
+    fn is_cancelled_acquire(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
 }
@@ -147,10 +155,11 @@ impl FfiCancellationSource {
         self.inner.cancel();
     }
 
-    /// Check if cancelled.
+    /// Check if cancelled, as an Acquire load: when it returns `true`, this
+    /// thread also sees every write made before [`cancel`](Self::cancel).
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.inner.is_cancelled()
+        self.inner.is_cancelled_acquire()
     }
 
     /// Create a token from this source.
@@ -309,9 +318,8 @@ pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
 /// Cancel a cancellation source.
 ///
 /// After this call, any tokens created from this source will report
-/// as cancelled. The cancel is a Release store and every check an Acquire
-/// load, so a thread that sees the cancellation also sees what was written
-/// before this call.
+/// as cancelled. A Release store: writes made before it are visible to a
+/// thread whose [`enough_cancellation_is_cancelled`] then returns `true`.
 ///
 /// # Safety
 ///
@@ -325,6 +333,9 @@ pub unsafe extern "C" fn enough_cancellation_cancel(ptr: *const FfiCancellationS
 }
 
 /// Check if a cancellation source is cancelled.
+///
+/// An Acquire load: when it returns `true`, this thread also sees every
+/// write made before [`enough_cancellation_cancel`].
 ///
 /// # Safety
 ///
@@ -393,6 +404,10 @@ pub extern "C" fn enough_token_create_never() -> *mut FfiCancellationToken {
 
 /// Check if a token is cancelled.
 ///
+/// A Relaxed load, like a token's checks: it promises nothing about writes
+/// made before the cancel. [`enough_cancellation_is_cancelled`] on the source
+/// is the Acquire query.
+///
 /// # Safety
 ///
 /// `token` must be a valid pointer returned by [`enough_token_create`],
@@ -425,6 +440,31 @@ pub unsafe extern "C" fn enough_token_destroy(token: *mut FfiCancellationToken) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See almost-enough's `stopper::tests`: tokens check with Relaxed loads;
+    /// the source's `is_cancelled()` (and `enough_cancellation_is_cancelled`)
+    /// is the Acquire query.
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let source = FfiCancellationSource::new();
+            let token = source.create_token();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    while !token.should_stop() {
+                        std::hint::spin_loop();
+                    }
+                    assert!(source.is_cancelled());
+                    data.load(Relaxed)
+                });
+                data.store(42, Relaxed);
+                source.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
 
     /// Wrapper to send raw pointers across threads in tests.
     /// Sound because `FfiCancellationToken` is backed by `Arc` and is thread-safe.

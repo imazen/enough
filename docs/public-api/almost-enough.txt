@@ -6,25 +6,25 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: almost-enough.txt 137 lines (supported surface) | almost-enough.features.txt 48 added (features: alloc,poll-meter,std) | almost-enough.internal.txt 1 lines (1 hidden + 0 excluded-feature)
+# files: almost-enough.txt 131 lines (supported surface) | almost-enough.features.txt 48 added (features: alloc,poll-meter,std) | almost-enough.internal.txt 1 lines (1 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)        23
+#   pub types (struct/enum/trait/alias)        22
 #   pub consts/statics                          2
-#   inherent methods                           83
+#   inherent methods                           79
 #   re-exports                                  4
-#   trait roster entries (type × trait)        53
+#   trait roster entries (type × trait)        48
 #   conditional trait impls (verbatim)          1
-#   auto-trait-complete types                   4
+#   auto-trait-complete types                   3
 #   auto-trait exceptions                       9
 #
 # per-module pub lines:
-#   (root)                           90
+#   (root)                           85
 #   time                             24
 
-## items (110 lines)
+## items (105 lines)
 
 pub mod almost_enough
 pub use Never
@@ -85,11 +85,6 @@ pub fn OrStop<A, B>::first(&self) -> &A
 pub fn OrStop<A, B>::into_inner(self) -> (A, B)
 pub fn OrStop<A, B>::new(A, B) -> Self
 pub fn OrStop<A, B>::second(&self) -> &B
-pub struct RelaxedStopper
-pub fn RelaxedStopper::cancel(&self)
-pub fn RelaxedStopper::cancelled() -> Self
-pub fn RelaxedStopper::is_cancelled(&self) -> bool
-pub fn RelaxedStopper::new() -> Self
 pub struct StopRef<'a>
 pub struct StopSource
 pub fn StopSource::as_ref(&self) -> StopRef<'_>
@@ -106,7 +101,7 @@ pub fn Stopper::cancel(&self)
 pub fn Stopper::cancelled() -> Self
 pub fn Stopper::is_cancelled(&self) -> bool
 pub fn Stopper::new() -> Self
-pub struct SyncStopper(_)
+pub struct SyncStopper
 pub fn SyncStopper::cancel(&self)
 pub fn SyncStopper::cancelled() -> Self
 pub fn SyncStopper::is_cancelled(&self) -> bool
@@ -137,7 +132,7 @@ pub trait TimeoutExt: enough::Stop + core::marker::Sized [also: time]
 pub fn TimeoutExt::with_deadline(self, std::time::Instant) -> time::WithTimeout<Self>
 pub fn TimeoutExt::with_timeout(self, core::time::Duration) -> time::WithTimeout<Self>
 
-## trait impls (16 types)
+## trait impls (15 types)
 
 BoxedStop: Debug, enough::Stop
 C: StopDropRoll
@@ -146,11 +141,10 @@ ChildStopper: Cancellable, Clone, Debug, Default, enough::Stop
 DebouncedTimeout<T>: Clone, Debug, enough::Stop
 FnStop<F>: Clone, Copy, Debug
 OrStop<A, B>: Clone, Copy, Debug, enough::Stop
-RelaxedStopper: Clone, Debug, Default, enough::Stop
 StopRef<'_>: enough::Stop
 StopRef<'a>: Clone, Copy, Debug
 StopSource: Debug, Default, enough::Stop
-StopToken: Clone, Debug, From<RelaxedStopper>, From<Stopper>, From<SyncStopper>, enough::Stop
+StopToken: Clone, Debug, From<Stopper>, From<SyncStopper>, enough::Stop
 Stopper: Cancellable, Clone, Debug, Default, enough::Stop
 SyncStopper: Clone, Debug, Default, enough::Stop
 T: CloneStop, DebouncedTimeoutExt, StopExt, time::TimeoutExt
@@ -159,7 +153,7 @@ impl<F> enough::Stop for FnStop<F> where F: core::ops::function::Fn() -> bool + 
 
 ## auto traits
 
-4 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+3 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 BoxedStop: !RefUnwindSafe !UnwindSafe
 CancelGuard<C>: !Freeze !RefUnwindSafe !Sync !Unpin !UnwindSafe
 ChildStopper: !RefUnwindSafe !UnwindSafe

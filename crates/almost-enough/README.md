@@ -22,7 +22,7 @@ The default `std` feature pulls in everything (Arc-based stoppers, timeouts, gua
 
 ## Start Here: `Stopper`
 
-The [type table below](#type-overview) lists several stops (`Stopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. A worker that sees the stop also sees everything written before `cancel()`. Everything else is a specialization you can adopt later.
+The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
 
 ## Quick Start
 
@@ -142,13 +142,11 @@ run_dyn(&stop).unwrap();
 | [`FnStop`] | core | Wrap any closure |
 | [`OrStop`] | core | Combine multiple stops |
 | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
-| [`RelaxedStopper`] | alloc | A `Stopper` without that guarantee, for hot loops on ARM Linux |
-| [`SyncStopper`] | alloc | Deprecated: `Stopper` has the same ordering |
+| [`SyncStopper`] | alloc | Like Stopper, but every check is an Acquire load |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 | [`BoxedStop`] | alloc | Type-erased dynamic dispatch (prefer `StopToken`) |
-| [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
-| [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N checks |
+| [`WithTimeout`] | std | Add deadline to any `Stop` |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
 [`StopSource`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopSource.html
@@ -157,12 +155,10 @@ run_dyn(&stop).unwrap();
 [`OrStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.OrStop.html
 [`Stopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Stopper.html
 [`SyncStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.SyncStopper.html
-[`RelaxedStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.RelaxedStopper.html
 [`ChildStopper`]: https://docs.rs/almost-enough/latest/almost_enough/struct.ChildStopper.html
 [`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html
 [`WithTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.WithTimeout.html
-[`DebouncedTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.DebouncedTimeout.html
 
 ## Features
 
@@ -230,7 +226,7 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
 ## Type Erasure
 
 Prevent monomorphization explosion at API boundaries with [`StopToken`].
-[`Stopper`] converts to `StopToken` at zero cost via
+[`Stopper`] and [`SyncStopper`] convert to `StopToken` at zero cost via
 `Into` — the existing Arc is reused, no double-wrapping:
 
 ```rust

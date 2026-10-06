@@ -1,47 +1,146 @@
-//! [`SyncStopper`], deprecated: [`Stopper`](crate::Stopper) now has the same
-//! Release/Acquire ordering, so `SyncStopper` wraps one.
+//! Synchronized cancellation with memory ordering guarantees.
+//!
+//! [`SyncStopper`] uses Release/Acquire ordering to ensure memory synchronization
+//! between the cancelling thread and threads that observe the cancellation.
+//!
+//! # When to Use
+//!
+//! Use `SyncStopper` when you need to ensure that writes made before `cancel()`
+//! are visible to readers after they see `should_stop() == true`.
+//!
+//! ```rust
+//! use almost_enough::{SyncStopper, Stop};
+//! use std::sync::atomic::{AtomicUsize, Ordering};
+//!
+//! static SHARED_DATA: AtomicUsize = AtomicUsize::new(0);
+//!
+//! let stop = SyncStopper::new();
+//!
+//! // Thread A: producer
+//! SHARED_DATA.store(42, Ordering::Relaxed);
+//! stop.cancel();  // Release: flushes SHARED_DATA write
+//!
+//! // Thread B: consumer (same thread here for demo)
+//! if stop.should_stop() {  // Acquire: syncs with Release
+//!     // GUARANTEED to see SHARED_DATA == 42
+//!     let value = SHARED_DATA.load(Ordering::Relaxed);
+//!     assert_eq!(value, 42);
+//! }
+//! ```
+//!
+//! # When NOT to Use
+//!
+//! [`Stopper`](crate::Stopper) gives the same guarantee without an Acquire
+//! load on every check: its `cancel()` is also a Release store, and its
+//! [`is_cancelled()`](crate::Stopper::is_cancelled) is the Acquire query to
+//! call after the work reports the stop. Use `SyncStopper` when the code that
+//! reads the handed-over data only sees the stop through `check()` or
+//! `should_stop()`.
+//!
+//! # Memory Ordering
+//!
+//! | Operation | Ordering | Effect |
+//! |-----------|----------|--------|
+//! | `cancel()` | Release | Flushes prior writes |
+//! | `is_cancelled()` | Acquire | Syncs with Release |
+//! | `should_stop()` | Acquire | Syncs with Release |
+//! | `check()` | Acquire | Syncs with Release |
 
-#![allow(deprecated)] // This module defines and tests the deprecated type.
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{Stop, StopReason, Stopper};
+use crate::{Stop, StopReason};
 
-/// A [`Stopper`]. Deprecated: `Stopper` now has the same Release/Acquire
-/// ordering that set `SyncStopper` apart, so `SyncStopper` wraps one and
-/// behaves identically.
+/// Inner state for [`SyncStopper`] — implements [`Stop`] with Acquire ordering.
+pub(crate) struct SyncStopperInner {
+    cancelled: AtomicBool,
+}
+
+impl Stop for SyncStopperInner {
+    #[inline]
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        if self.cancelled.load(Ordering::Acquire) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    #[track_caller]
+    fn should_stop(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+/// A cancellation primitive with Release/Acquire memory ordering.
 ///
-/// A thread that sees the stop also sees every write made before `cancel()`;
-/// see [`Stopper`]'s docs.
-#[deprecated(
-    since = "0.4.5",
-    note = "`Stopper` now has the same Release/Acquire ordering; use it"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct SyncStopper(pub(crate) Stopper);
+/// Unlike [`Stopper`](crate::Stopper) which uses Relaxed ordering,
+/// `SyncStopper` guarantees that all writes before `cancel()` are visible
+/// to any clone that subsequently observes `should_stop() == true`.
+///
+/// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
+/// overhead — the existing `Arc` is reused, not double-wrapped.
+///
+/// # Performance
+///
+/// On x86-64 an Acquire load is an ordinary load, so a check costs what a
+/// [`Stopper`](crate::Stopper)'s does. On aarch64 it is `ldar` on targets
+/// without RCpc (Linux, Windows, Android, iOS) and `ldapr` with it (macOS):
+/// on a Neoverse-N1, a compute-bound loop checking every 64 bytes ran 3–10%
+/// slower than with a Relaxed check, and nothing measurable at a check per
+/// KiB or in memory-bound loops (`benchmarks/stopper-ordering-2026-10-06.md`).
+/// On Cortex-M each check also executes a `dmb`. In a
+/// [`StopToken`](crate::StopToken) it is checked through the vtable.
+#[derive(Debug, Clone)]
+pub struct SyncStopper {
+    pub(crate) inner: Arc<SyncStopperInner>,
+}
 
 impl SyncStopper {
-    /// Create a new stopper.
+    /// Create a new synchronized stopper.
     #[inline]
     pub fn new() -> Self {
-        Self(Stopper::new())
+        Self {
+            inner: Arc::new(SyncStopperInner {
+                cancelled: AtomicBool::new(false),
+            }),
+        }
     }
 
     /// Create a stopper that is already cancelled.
     #[inline]
     pub fn cancelled() -> Self {
-        Self(Stopper::cancelled())
+        Self {
+            inner: Arc::new(SyncStopperInner {
+                cancelled: AtomicBool::new(true),
+            }),
+        }
     }
 
-    /// Cancel, with Release ordering: see [`Stopper::cancel`].
+    /// Cancel with Release ordering.
+    ///
+    /// All memory writes before this call are guaranteed to be visible
+    /// to any clone that subsequently observes `should_stop() == true`.
     #[inline]
     pub fn cancel(&self) {
-        self.0.cancel();
+        self.inner.cancelled.store(true, Ordering::Release);
     }
 
-    /// Whether it was cancelled, with Acquire ordering: see
-    /// [`Stopper::is_cancelled`].
+    /// Check if cancelled with Acquire ordering.
+    ///
+    /// If this returns `true`, all memory writes that happened before
+    /// the corresponding `cancel()` call are guaranteed to be visible.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.0.is_cancelled()
+        self.inner.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl Default for SyncStopper {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -49,13 +148,21 @@ impl Stop for SyncStopper {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        self.0.check()
+        self.inner.check()
     }
 
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.0.should_stop()
+        self.inner.should_stop()
+    }
+}
+
+impl core::fmt::Debug for SyncStopperInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SyncStopperInner")
+            .field("cancelled", &self.cancelled.load(Ordering::Relaxed))
+            .finish()
     }
 }
 

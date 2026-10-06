@@ -1,17 +1,20 @@
-//! Does seeing a stop also show the writes made before `cancel()`? A litmus
-//! test for a relaxed flag (what `Stopper` was before 0.4.5) against
-//! `Stopper` (Release/Acquire).
+//! What does a reader see of the writes made before `cancel()`? A litmus
+//! test for `Stopper`: `cancel()` is a Release store, checks are Relaxed
+//! loads, and `is_cancelled()` is an Acquire load.
 //!
 //! In each round a writer stores a value and then cancels a fresh stop. A
 //! reader first reads the value (so its cache holds the old one), then waits
-//! until it sees the stop and reads the value again. Seeing the old value
-//! after the stop is a stale read. The memory model allows it for the relaxed
-//! flag and forbids it for `Stopper`. This counts how often the hardware
-//! actually does it. Writer and reader advance in lockstep, so every read
-//! races its write.
+//! until a check sees the stop and reads the value again. Seeing the old
+//! value is a stale read. Three readers:
+//! - a relaxed flag on both sides (`Stopper` before 0.4.5): may read stale;
+//! - `Stopper`, reading right after the check: the Release store keeps the
+//!   writer's stores in order, but the reader's loads may still pass each
+//!   other, so the memory model allows stale reads;
+//! - `Stopper`, calling `is_cancelled()` before reading: forbidden.
 //!
-//! On x86-64 neither can read stale (stores and loads stay in order there).
-//! A weakly ordered CPU, such as an ARM core, may reorder either side.
+//! Writer and reader advance in lockstep, so every read races its write. On
+//! x86-64 none can read stale (stores and loads stay in order there); a
+//! weakly ordered CPU, such as an ARM core, may reorder either side.
 //!
 //! ```text
 //! cargo run --release -p almost-enough --example stop_ordering -- [MILLION_ROUNDS]
@@ -49,8 +52,14 @@ impl Stop for RelaxedFlag {
 /// Rounds per batch; each batch allocates its stops before the race starts.
 const BATCH: usize = 1 << 16;
 
-/// Run `rounds` rounds and return how many reads were stale.
-fn litmus<S: Stop>(rounds: usize, make: impl Fn() -> S, cancel: impl Fn(&S) + Sync) -> u64 {
+/// Run `rounds` rounds and return how many reads were stale. `before_read`
+/// runs on the reader after its check sees the stop.
+fn litmus<S: Stop>(
+    rounds: usize,
+    make: impl Fn() -> S,
+    cancel: impl Fn(&S) + Sync,
+    before_read: impl Fn(&S) + Sync,
+) -> u64 {
     let mut stale = 0;
     for _ in 0..rounds.div_ceil(BATCH) {
         let stops: Vec<S> = (0..BATCH).map(|_| make()).collect();
@@ -79,6 +88,7 @@ fn litmus<S: Stop>(rounds: usize, make: impl Fn() -> S, cancel: impl Fn(&S) + Sy
                     while !stop.should_stop() {
                         spin_loop();
                     }
+                    before_read(stop);
                     if value.load(Relaxed) == 0 {
                         stale += 1;
                     }
@@ -109,9 +119,14 @@ fn main() {
     let rounds = millions * 1_000_000;
     println!("{} {}", std::env::consts::ARCH, std::env::consts::OS);
     report("relaxed flag (Stopper before 0.4.5)", rounds, || {
-        litmus(rounds, RelaxedFlag::new, RelaxedFlag::cancel)
+        litmus(rounds, RelaxedFlag::new, RelaxedFlag::cancel, |_| {})
     });
-    report("Stopper (Release/Acquire)", rounds, || {
-        litmus(rounds, Stopper::new, Stopper::cancel)
+    report("Stopper, reading right after the check", rounds, || {
+        litmus(rounds, Stopper::new, Stopper::cancel, |_| {})
+    });
+    report("Stopper, reading after is_cancelled()", rounds, || {
+        litmus(rounds, Stopper::new, Stopper::cancel, |stop| {
+            assert!(stop.is_cancelled());
+        })
     });
 }

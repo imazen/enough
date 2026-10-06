@@ -93,15 +93,19 @@ impl StopSource {
 
     /// Signal all references to stop.
     ///
-    /// A Release store, and checks are Acquire loads, as with
-    /// [`Stopper`](crate::Stopper): whoever sees the stop also sees what was
-    /// written before this call. Idempotent: calling it again has no effect.
+    /// A Release store: writes made before it are visible to a thread whose
+    /// [`is_cancelled`](Self::is_cancelled) then returns `true`. Idempotent:
+    /// calling it again has no effect.
     #[inline]
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    /// Check if this source has been cancelled.
+    /// Whether this source has been cancelled, as an Acquire load.
+    ///
+    /// When it returns `true`, this thread also sees every write made before
+    /// [`cancel`](Self::cancel). Checks through a [`StopRef`] are Relaxed
+    /// loads, which promise nothing about other writes.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
@@ -136,7 +140,7 @@ impl Stop for StopSource {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -146,7 +150,7 @@ impl Stop for StopSource {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Relaxed)
     }
 }
 
@@ -199,7 +203,7 @@ impl Stop for StopRef<'_> {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Relaxed) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -209,13 +213,38 @@ impl Stop for StopRef<'_> {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Relaxed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `stopper::tests`: a `StopRef`'s checks are Relaxed, the source's
+    /// `is_cancelled()` is the Acquire query.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let source = StopSource::new();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    let stop = source.as_ref();
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(source.is_cancelled());
+                    data.load(Relaxed)
+                });
+                data.store(42, Relaxed);
+                source.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
 
     #[test]
     fn stop_source_basic() {
