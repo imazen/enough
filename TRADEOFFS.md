@@ -15,7 +15,7 @@ enough (core, no_std, zero deps)
 
 almost-enough (batteries, re-exports enough)
 ├── StopToken: Arc-based, Clone, automatic Unstoppable optimization
-├── Stopper / SyncStopper: Arc<StopperInner>, zero-cost From<> → StopToken
+├── Stopper: Arc<StopperInner>, zero-cost From<> → StopToken (SyncStopper: deprecated wrapper)
 ├── StopSource / StopRef: stack-based, zero-alloc, borrowed
 ├── ChildStopper: hierarchical parent-child cancellation
 ├── BoxedStop: legacy, prefer StopToken
@@ -102,11 +102,28 @@ to `enough`, downstream code changes one import path. No renames.
 No manual unsafe impls needed. `enough-ffi` retains unsafe (necessary
 for FFI).
 
-### 8. Relaxed ordering default, Acquire/Release opt-in
+### 8. Release/Acquire for every flag
 
-`Stopper` uses `Ordering::Relaxed` — fastest on ARM, sufficient for
-"just stop." `SyncStopper` uses Release/Acquire for data-handoff
-scenarios. SeqCst rejected as overkill for cancellation.
+`cancel()` is a Release store and every check an Acquire load, for
+`Stopper`, `StopSource`/`StopRef`, `ChildStopper` and the FFI flag. So
+a thread that sees the stop also sees what the cancelling thread wrote
+before `cancel()`.
+
+Until 0.4.5 `Stopper` was Relaxed ("fastest on ARM"), and a separate
+`SyncStopper` offered Release/Acquire. Measured in 2026-10
+(`benchmarks/stopper-ordering-2026-10-06.md`):
+- **The guarantee matters.** In a litmus test, a reader that had seen a
+  relaxed flag's stop still read the old data in 21% of rounds on
+  Neoverse-N1, and 1 in 10,500 on an Apple M4 Pro. With Release/Acquire
+  it never did. On x86-64 neither ordering ever read stale.
+- **It costs nothing measurable.** x86-64 compiles both orderings to the
+  same instructions. On aarch64 the load is one instruction more (`ldapr`
+  takes no offset) and one-way ordering, not a fence. Neither core showed a
+  difference, even in loops bound by memory latency or with the flag's
+  cache line contended.
+
+So every flag takes the guarantee, and `SyncStopper` became a deprecated
+wrapper around `Stopper`. SeqCst rejected as overkill for cancellation.
 
 ### 9. `Clone` is NOT on `Stop`
 
@@ -174,9 +191,9 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `Unstoppable` | 0 | 0ns | Copy | none | Optimized away everywhere |
 | `StopSource` | 1 byte | ~0.4ns | no | stack | Owns AtomicBool |
 | `StopRef<'a>` | 8 bytes | ~0.4ns | Copy | none | Borrowed from StopSource |
-| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice |
-| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Acquire/Release |
-| `StopToken` | 16 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
+| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice; Release/Acquire |
+| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Deprecated wrapper around `Stopper` |
+| `StopToken` | 24 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
 | `BoxedStop` | 16 bytes | 0ns/~1ns | no | Box/None | Legacy, prefer StopToken |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
 | `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |

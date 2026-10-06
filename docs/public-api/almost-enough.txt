@@ -101,7 +101,7 @@ pub fn Stopper::cancel(&self)
 pub fn Stopper::cancelled() -> Self
 pub fn Stopper::is_cancelled(&self) -> bool
 pub fn Stopper::new() -> Self
-pub struct SyncStopper
+pub struct SyncStopper(_)
 pub fn SyncStopper::cancel(&self)
 pub fn SyncStopper::cancelled() -> Self
 pub fn SyncStopper::is_cancelled(&self) -> bool

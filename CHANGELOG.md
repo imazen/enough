@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+- `almost-enough`: `SyncStopper` becomes `pub type SyncStopper = Stopper` (or
+  is removed). Since 0.4.5 it is a deprecated wrapper around `Stopper`; the
+  alias breaks code that implements a trait, or a `From`, for both types.
+
+### Changed
+
+- `almost-enough`: `Stopper::cancel` is a Release store and every check an
+  Acquire load, so a clone that sees the stop also sees what was written
+  before `cancel()` (e66c0d55). `StopSource`/`StopRef`, `ChildStopper` and
+  `enough-ffi`'s flag do the same (af21bbb7). A litmus test
+  (`examples/stop_ordering.rs`) read data stale after a relaxed flag's stop
+  in 23% of rounds on Neoverse-N1 and 1 in 13,300 on an Apple M4 Pro, never
+  with Release/Acquire. The `stopper_ordering` bench measured no cost on
+  x86-64, Neoverse-N1 or the M4 Pro, including memory-latency-bound loops.
+  See `benchmarks/stopper-ordering-2026-10-06.md`.
+- Docs: `WithTimeout` states its cost (a clock read per check, about 110
+  instructions; +22% cycles on a 1 KiB-per-check loop on x86-64) and points
+  to `DebouncedTimeout`. The root README's cancel example now imports `Stop`
+  (it did not compile); TRADEOFFS lists `StopToken` at its real 24 bytes.
+
+### Deprecated
+
+- `almost-enough`: `SyncStopper`, now a wrapper around `Stopper`, which has
+  the same Release/Acquire ordering (e66c0d55).
+
 ### Added
 
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the

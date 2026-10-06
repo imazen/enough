@@ -20,6 +20,10 @@
 
 ### 1. Memory Ordering - SHOULD FIX
 
+**Status:** done in 0.4.5: `Stopper`, `StopSource`/`StopRef`,
+`ChildStopper` and the FFI flag use Release/Acquire; see TRADEOFFS
+decision 8. (The file paths below are from an earlier layout.)
+
 Currently uses `Ordering::Relaxed` everywhere:
 
 ```rust
