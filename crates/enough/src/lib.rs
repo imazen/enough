@@ -73,7 +73,7 @@ extern crate alloc;
 
 mod reason;
 
-pub use reason::StopReason;
+pub use reason::{IsStop, StopReason};
 
 /// Cooperative cancellation check.
 ///

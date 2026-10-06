@@ -6,22 +6,22 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: enough.txt 22 lines (supported surface) | enough.features.txt 2 added (features: alloc,std) | enough.internal.txt 4 lines (4 hidden + 0 excluded-feature)
+# files: enough.txt 24 lines (supported surface) | enough.features.txt 2 added (features: alloc,std) | enough.internal.txt 4 lines (4 hidden + 0 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 1
-#   pub types (struct/enum/trait/alias)         4
+#   pub types (struct/enum/trait/alias)         5
 #   free functions                              3
-#   inherent methods                            6
+#   inherent methods                            7
 #   enum variants                               2
-#   trait roster entries (type × trait)        18
+#   trait roster entries (type × trait)        19
 #   auto-trait-complete types                   2
 #
 # per-module pub lines:
-#   (root)                           16
+#   (root)                           18
 
-## items (16 lines)
+## items (18 lines)
 
 pub mod enough
 #[non_exhaustive] pub enum StopReason
@@ -31,6 +31,8 @@ pub fn StopReason::is_cancelled(&self) -> bool
 pub fn StopReason::is_timed_out(&self) -> bool
 pub fn StopReason::is_transient(&self) -> bool
 pub struct Unstoppable
+pub trait IsStop
+pub fn IsStop::stop_reason(&self) -> core::option::Option<StopReason>
 pub trait Stop: core::marker::Send + core::marker::Sync
 pub fn Stop::check(&self) -> core::result::Result<(), StopReason>
 pub fn Stop::may_stop(&self) -> bool
@@ -44,7 +46,7 @@ pub type Never = Unstoppable
 
 &T: Stop
 &mut T: Stop
-StopReason: Clone, Copy, Debug, Display, Eq, Hash, PartialEq
+StopReason: Clone, Copy, Debug, Display, Eq, Hash, IsStop, PartialEq
 Unstoppable: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Stop
 core::option::Option<T>: Stop
 
