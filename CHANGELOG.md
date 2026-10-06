@@ -49,15 +49,7 @@
 
 ### Fixed
 
-- `almost-enough`: `DebouncedTimeout` reads the clock at least every 64
-  checks. Calibrated on fast checks it used to read it only every ~94,000,
-  so when checks then slowed down it stopped seconds to minutes late (60 s+
-  at 1 ms per check). Now it is at most 64 of the slower checks late. A
-  countdown replaces the per-check division, so a check costs fewer
-  instructions (23 → 18); at 64 bytes of work per check the extra clock
-  reads cost about 2 cycles per check. The docs' claim that overshoot
-  never exceeds the target interval is corrected. See
-  `benchmarks/debounced-timeout-2026-10-06.md`.
+- `almost-enough`: `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to minutes late; a check is 18 instructions instead of 23.
 - TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
   the zenbench migration (PR #8) contradicted — the "StopToken(Stopper) 25%
   faster than generic" / "2.57µs beats 3.41µs" / "impl Stop is the slowest
