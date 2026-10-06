@@ -76,8 +76,8 @@ const ABOVE: u8 = 2;
 /// Inner state for a tree node.
 ///
 /// A check walks the chain with two tests per node, the state byte and the
-/// parent pointer, and no vtable call: a root costs what it did when the
-/// parent was a `BoxedStop`, and each level above adds a load and a test.
+/// parent pointer, and no vtable call: each level above a root adds a load
+/// and a test.
 struct TreeInner {
     /// `RUNNING`, `CANCELLED`, or `ABOVE`, which `cancel()` also overwrites.
     state: AtomicU8,

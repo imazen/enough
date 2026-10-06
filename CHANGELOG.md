@@ -4,6 +4,7 @@
 
 ### Added
 
+- `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
@@ -26,6 +27,10 @@
 ### Added
 
 - `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
+
+### Deprecated
+
+- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` now holds its parent as a `StopToken`.
 
 ### Changed
 

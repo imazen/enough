@@ -18,9 +18,9 @@ almost-enough (batteries, re-exports enough)
 ├── Stopper / SyncStopper: Arc<StopperInner>, zero-cost From<> → StopToken
 ├── StopSource / StopRef: stack-based, zero-alloc, borrowed
 ├── ChildStopper: hierarchical parent-child cancellation
-├── BoxedStop: legacy, prefer StopToken
+├── BoxedStop: deprecated, use StopToken
 ├── FnStop, OrStop, WithTimeout, CancelGuard
-├── StopExt: .or(), .into_token(), .into_boxed(), .child()
+├── StopExt: .or(), .into_token(), .child() (.into_boxed() deprecated)
 └── ClonableStop: trait alias for Stop + Clone + 'static
 ```
 
@@ -177,7 +177,7 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice |
 | `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Acquire/Release |
 | `StopToken` | 16 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
-| `BoxedStop` | 16 bytes | 0ns/~1ns | no | Box/None | Legacy, prefer StopToken |
+| `BoxedStop` | 24 bytes | 0ns/~1ns | no | Arc/None | Deprecated: a `StopToken` without `Clone` |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
 | `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |
 
