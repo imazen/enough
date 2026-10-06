@@ -128,6 +128,10 @@ Until 0.4.5 `Stopper` was Relaxed ("fastest on ARM"), and a separate
   load with an Acquire fence on stop was no cheaper there and costs a
   branch on x86-64. A Relaxed opt-out arm in `StopToken` was slower than
   the Acquire arm on N1 and turns its dispatch into a jump table on x86-64.
+- **It doesn't change how soon the stop is seen.** A store reached a load
+  on another core just as fast at Relaxed, Release/Acquire and SeqCst:
+  about 39 ns within a CCD and 219 ns across CCDs on Zen 3, 140 ns on
+  Neoverse-N1, 37 ns on an M4 Pro. How often the work checks dominates.
 - **Except on microcontrollers, where it is unmeasured.** Cortex-M and
   32-bit RISC-V put a full barrier (`dmb sy`, `fence r,rw`) after each
   Acquire check and before each Release store. Wasm compiles both

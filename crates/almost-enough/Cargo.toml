@@ -35,6 +35,10 @@ harness = false
 name = "stop_ordering"
 required-features = ["std"]
 
+[[example]]
+name = "cross_core_latency"
+required-features = ["std"]
+
 [[bench]]
 name = "stop_check_zen"
 harness = false

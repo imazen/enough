@@ -137,6 +137,33 @@ Not measured:
 - in-order cores, such as Cortex-A55;
 - microcontrollers, where each check now executes a full barrier (below).
 
+## How soon another core sees the stop
+
+The ordering doesn't change it. Cache coherence carries a store to other
+cores the same way at any ordering; the ordering only decides what else is
+visible along with it. And at any ordering, a thread that has seen the stop
+never reads the flag as unset again.
+
+`crates/almost-enough/examples/cross_core_latency.rs` measures it: one
+thread stores a sequence number, another spins until it loads it and
+replies the same way, and half a round trip is the time from a store to the
+load that sees it. Medians of 15 interleaved repetitions of 200,000 round
+trips each:
+
+| host | cores | Relaxed | Release/Acquire | SeqCst |
+| --- | --- | ---: | ---: | ---: |
+| x86-64 (Zen 3) | same CCD (0, 1) | 39.3 ns | 39.2 ns | 39.2 ns |
+| x86-64 (Zen 3) | across CCDs (0, 8) | 219.0 ns | 219.8 ns | 219.3 ns |
+| Neoverse-N1, default | 2, 3 | 147.8 ns | 145.2 ns | 145.1 ns |
+| Neoverse-N1, default | 2, 14 | 138.1 ns | 137.4 ns | 137.5 ns |
+| Apple M4 Pro | unpinned | 37.3 ns | 36.9 ns | 36.9 ns |
+
+How often the work checks decides how soon it stops. `dev/cancel-latency`
+measured gaps between checks of up to 45 µs in a 2048² PNG decode (one check
+per row) and up to 269 µs in a 4K progressive JPEG encode.
+
+The x86 runs waited for the host's load average to fall below 4.
+
 ## Rejected: a Relaxed load and a fence on stop
 
 A Relaxed load followed by an Acquire fence only when it reads `true` gives
