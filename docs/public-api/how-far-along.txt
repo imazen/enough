@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: how-far-along.txt 131 lines (supported surface) | how-far-along.features.txt 16 added (features: adapters,callback,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
+# files: how-far-along.txt 131 lines (supported surface) | how-far-along.features.txt 21 added (features: adapters,callback,interpolate,json,std) | how-far-along.internal.txt 7 lines (7 hidden + 0 excluded-feature)
 
 ## summary
 #

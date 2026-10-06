@@ -148,8 +148,8 @@ jobs:
           cargo build -p how-far --target wasm32-unknown-unknown
           cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features
           cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features
-          cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features --features callback,adapters,json
-          cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features --features callback,adapters,json
+          cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features --features callback,adapters,json,interpolate
+          cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features --features callback,adapters,json,interpolate
           # The example libraries adopt how-far as no_std + alloc codecs do.
           cargo build -p how-far-example-codec -p how-far-example-pipeline --target thumbv7em-none-eabihf --no-default-features --features how-far-example-pipeline/adapters
 

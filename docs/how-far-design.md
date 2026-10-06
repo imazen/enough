@@ -130,6 +130,15 @@ observes once after finishing the root. `LocalPoller` drives thread-affine UI
 callbacks from the host. `Paced::finish` flushes the final batch and checks;
 its Drop only counts.
 
+Smoothness is the display's concern, not the library's. A library reports at
+the granularity its own loop has. The optional `interpolate` feature adds
+`Interpolator`, which a display holds per operation. It watches each running
+leaf's counts at poll time, using the caller's clock (the tracker reads none),
+and between reports advances the leaf at that leaf's own average pace. The
+estimate is capped at one expected report ahead and at the total, and never
+goes backwards. Pacing stays per stage and costs the library nothing; a
+library that already paces is not paced again.
+
 ## Synchronization and portability
 
 Counters use saturating relaxed atomics. They carry no application data and

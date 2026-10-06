@@ -1,5 +1,5 @@
 # how-far-along public API — additions from non-default features
-# features: adapters,callback,json,std
+# features: adapters,callback,interpolate,json,std
 # (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
 # Encodings: crate-name prefix stripped; auto traits collapse to a
 # count + exceptions; trait impls collapse to one roster line per
@@ -9,19 +9,25 @@
 
 ## summary
 #
-#   pub types (struct/enum/trait/alias)         2
-#   inherent methods                           10
+#   pub modules                                 1
+#   pub types (struct/enum/trait/alias)         3
+#   inherent methods                           12
 #   re-exports                                  1
-#   trait roster entries (type × trait)         5
-#   auto-trait-complete types                   1
+#   trait roster entries (type × trait)         7
+#   auto-trait-complete types                   2
 #   auto-trait exceptions                       1
 #
 # per-module pub lines:
-#   (root)                           13
+#   (root)                           14
+#   interpolate                       3
 
-## items (13 lines)
+## items (17 lines)
 
 pub use WithStop
+pub mod interpolate
+pub struct interpolate::Interpolator
+pub fn interpolate::Interpolator::fraction(&mut self, &Snapshot, core::time::Duration) -> core::option::Option<f64>
+pub fn interpolate::Interpolator::new() -> Self
 pub struct Checkpoint<'a>
 pub fn Checkpoint<'_>::phase_id(&self) -> NodeId
 pub fn Checkpoint<'_>::phase_name(&self) -> &str
@@ -35,11 +41,12 @@ pub fn FnPulse::new(&str, impl core::ops::function::Fn(&Checkpoint<'_>) -> core:
 pub fn FnPulse::observer(&self) -> Observer
 pub fn FnPulse::with_phase(Phase, impl core::ops::function::Fn(&Checkpoint<'_>) -> core::result::Result<(), enough::reason::StopReason> + core::marker::Send + core::marker::Sync + 'static) -> Self
 
-## trait impls (1 types)
+## trait impls (2 types)
 
 FnPulse: Debug, enough::Stop, how_far::completion::Complete, how_far::pulse::Pulse, how_far::report::Report
+interpolate::Interpolator: Debug, Default
 
 ## auto traits
 
-1 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+2 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
 FnPulse: !RefUnwindSafe !UnwindSafe

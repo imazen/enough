@@ -16,6 +16,8 @@ std = ["enough/std"]
 callback = []
 adapters = ["how-far/adapters"]
 json = []
+# Observer-side smoothing of the fraction between reports, for displays.
+interpolate = []
 
 [dependencies]
 enough = { workspace = true, features = ["alloc"] }
