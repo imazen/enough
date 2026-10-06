@@ -11,7 +11,12 @@ children). Every cell runs the same `#[inline(never)]` PNG Sub defilter over a
 ```sh
 python3 dev/how-far-checkpoint-cost/measure.py        # 1024 bytes per checkpoint
 python3 dev/how-far-checkpoint-cost/measure.py 256    # another granularity
+python3 dev/how-far-checkpoint-cost/measure.py stop   # enough stop policies alone
 ```
+
+`stop` crosses every `enough`, `almost-enough` and `enough-tokio` stop policy
+with six ways a loop checks it: through `&dyn Stop`, generic, `should_stop()`,
+`may_stop()` asked once, every 16th chunk, and four workers sharing it.
 
 Instructions are deterministic for serial work; thread spawn and join make the
 parallel columns vary by a few thousand instructions per buffer. Cycles also

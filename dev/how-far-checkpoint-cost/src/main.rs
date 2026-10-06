@@ -3,7 +3,11 @@
 //! `perf stat -e instructions:u,cycles:u` by `measure.py`.
 //!
 //! usage: how-far-checkpoint-cost OBSERVER SCENARIO CHUNK ITERATIONS
-//! (256 KiB buffer; `none` as the observer runs the same work without how-far)
+//! (256 KiB buffer; `none` as the observer runs the same work without how-far),
+//! or `how-far-checkpoint-cost stop POLICY PATTERN CHUNK ITERATIONS` for the
+//! `enough` stop policies alone (see `stop.rs`).
+mod stop;
+
 use almost_enough::{FnStop, Stopper};
 use how_far::{
     Execution, NoPulse, Outcome, PhaseSpec, Stages, StopOnly, StopReason, Total, Unstoppable,
@@ -16,12 +20,12 @@ use std::hint::black_box;
 const BUF: usize = 256 * 1024;
 /// Units per reach of a `Paced`, as a library might choose for a 256 KiB row band.
 const EVERY: u64 = 64 * 1024;
-const WORKERS: usize = 4;
+pub(crate) const WORKERS: usize = 4;
 
 /// Shared by every variant, so they all run the same hot loop at the same
 /// address and differ only in how they reach how-far.
 #[inline(never)]
-fn sub_defilter(buf: &mut [u8]) {
+pub(crate) fn sub_defilter(buf: &mut [u8]) {
     for i in 4..buf.len() {
         buf[i] = buf[i].wrapping_add(buf[i - 4]);
     }
@@ -239,14 +243,22 @@ fn observe(name: &str, work: impl FnOnce(&dyn Pulse)) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (observer, scenario_name) = (args[1].as_str(), args[2].as_str());
-    let chunk: usize = args[3].parse().unwrap();
-    let iterations: u64 = args[4].parse().unwrap();
     let mut buf: Vec<u8> = (0..BUF)
         .map(|i| (i.wrapping_mul(0x9E37_79B9) >> 24) as u8)
         .collect();
+    if args[1] == "stop" && args[2] != "none" {
+        let (chunk, iterations) = (args[4].parse().unwrap(), args[5].parse().unwrap());
+        stop::main(&args[2], &args[3], &mut buf, chunk, iterations);
+        black_box(&buf);
+        return;
+    }
+    // `stop none PATTERN` is the bare baseline for the stop table.
+    let skip = usize::from(args[1] == "stop");
+    let (observer, scenario_name) = (args[1 + skip].as_str(), args[2 + skip].as_str());
+    let chunk: usize = args[3 + skip].parse().unwrap();
+    let iterations: u64 = args[4 + skip].parse().unwrap();
     if observer == "none" {
-        let parallel = matches!(scenario_name, "pool-step" | "pool-paced" | "fork-join");
+        let parallel = matches!(scenario_name, "pool" | "pool-step" | "pool-paced" | "fork-join");
         for _ in 0..iterations {
             bare(black_box(&mut buf), black_box(chunk), parallel);
         }

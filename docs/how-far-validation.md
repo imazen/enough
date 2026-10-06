@@ -55,5 +55,6 @@ IR lines on Rust 1.99 and 88 / 19,986 / 31,228 on 1.88. Its overhead matrix
 crosses nine observers with eight library scenarios: `step` into a
 `PulseTree` costs 65 to 77 instructions per checkpoint, `StopOnly` 28 and an
 `FnPulse` callback 106, while pacing keeps every observer except
-`DiagnosticPulse` under 0.3% of a 256 KiB defilter. It also records the zenpng
+`DiagnosticPulse` under 0.3% of a 256 KiB defilter. A second table, on x86-64
+and aarch64, does the same for every `enough` stop policy and check pattern. It also records the zenpng
 adoption tests.
