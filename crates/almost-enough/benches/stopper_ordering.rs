@@ -68,8 +68,8 @@ impl Stop for AcquireFlag {
 }
 
 /// A flag checked with a Relaxed load and an Acquire fence once it reads
-/// `true`. Same guarantee as an Acquire load; inlined, the same instructions
-/// as a Relaxed check, but through `&dyn Stop` a branch more.
+/// `true`. Same guarantee as an Acquire load; until the stop, each check is a
+/// Relaxed load and a branch, and the fence runs only once it reads `true`.
 #[derive(Clone)]
 struct FencedFlag(Arc<AtomicBool>);
 
@@ -136,7 +136,8 @@ fn chase(next: &[u32], at: &mut u32, every: usize, stop: &dyn Stop) -> Result<()
 }
 
 /// One random cycle through all `n` entries, and three nodes a third of the
-/// cycle apart, so three walks of up to `n / 3` hops never share a cache line.
+/// cycle apart, so three walks of up to `n / 3` hops never visit the same
+/// entry.
 fn random_cycle(n: usize) -> (Vec<u32>, [u32; 3]) {
     let mut order: Vec<u32> = (0..n as u32).collect();
     let mut x = 0x2545_F491_4F6C_DD1Du64;

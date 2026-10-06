@@ -81,7 +81,7 @@ a worker when the cancel comes.
 
 ## Check cost, steady state
 
-Method: the stop half of `dev/how-far-checkpoint-cost` from PR #27
+Method: the stop half of imazen/how-far's `dev/how-far-checkpoint-cost` (then on PR #27)
 (`measure.py stop CHUNK`), built against this branch, with `main`'s version
 added as a second row. Each cell runs an `#[inline(never)]` PNG Sub defilter
 over a 256 KiB buffer with a check after every CHUNK bytes, against the same

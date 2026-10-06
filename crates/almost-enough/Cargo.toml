@@ -43,6 +43,10 @@ required-features = ["std"]
 name = "cross_core_latency"
 required-features = ["std"]
 
+[[example]]
+name = "debounced_lateness"
+required-features = ["std"]
+
 [[bench]]
 name = "stop_check_zen"
 harness = false

@@ -1,19 +1,29 @@
 # `Stopper`'s memory ordering: Release `cancel()`, Acquire `is_cancelled()` (2026-10-06)
 
 Until 0.4.5 every stop in these crates used Relaxed ordering, except
-`SyncStopper` (Release/Acquire on everything). 0.4.5 makes `cancel()` a
-Release store on `Stopper`, `StopSource`, `ChildStopper` and the FFI source,
+`SyncStopper` (Release/Acquire on everything) and `TokioStop` (a Release store
+from its waker, an Acquire load). 0.4.5 makes `cancel()` a
+Release swap on `Stopper`, `StopSource`, `ChildStopper` and the FFI source,
 and their `is_cancelled()` the Acquire query (`ChildStopper`: an Acquire fence
 after its walk). Checks (`check()`, `should_stop()`, `StopRef`, `StopToken`,
 the FFI tokens) stay one Relaxed load: the default check must not gain
 instructions. `SyncStopper` is unchanged, an Acquire load on every check, for
 code that wants the guarantee from the check itself. This record is the
-evidence, including what the designs not taken would cost.
+evidence, including what the designs not taken would cost. The measurements
+below ran on #30's branch while `cancel()` was a Release store; it became a
+swap afterwards (see "Several cancellers"), which changes no check.
+
+Earlier numbers in this record come from #30's drafts (3273d62, 7b8d65d,
+e66c0d5) and the relaxed-token prototype (4228904); the record doesn't pin
+each number to the commit it was built from.
 
 On aarch64 an Acquire load compiles to `ldapr` when the target enables RCpc
-and to the stronger `ldar` when it doesn't. Of the aarch64 targets, only
-`aarch64-apple-darwin` enables RCpc by default; the Linux, Windows, Android
-and iOS targets don't, so their builds use `ldar` on every core, RCpc or not.
+and to the stronger `ldar` when it doesn't. Of the aarch64 targets, the
+Apple Mac ones enable RCpc by default (`aarch64-apple-darwin`,
+`arm64e-apple-darwin`, `aarch64-apple-ios-macabi`), as do
+`aarch64-apple-ios-sim` and `arm64e-apple-ios` (`rustc 1.99.0 --print cfg`);
+the Linux, Windows, Android, `aarch64-apple-ios`, tvOS and visionOS targets
+don't, so their builds use `ldar` on every core, RCpc or not.
 `-C target-cpu` changes this, so the N1 results below say which they used.
 
 Hosts:
@@ -36,13 +46,17 @@ test:
   waits until a check sees the stop and reads the value again.
 - Seeing the old value after the stop is a stale read.
 
-Writer and reader advance in lockstep, so every read races its write. Three
-readers: a relaxed flag (`Stopper` before 0.4.5), `Stopper` read right after
+Writer and reader advance in lockstep, so every read races its write. The
+threads are not pinned, and each batch of 65,536 rounds spawns them anew, so
+the cores they share vary between batches. Three readers: a relaxed flag (`Stopper` before 0.4.5), `Stopper` read right after
 the check, and `Stopper` read after `is_cancelled()`.
 
 ```text
-cargo run --release -p almost-enough --example stop_ordering -- 50
+cargo run --release -p almost-enough --example stop_ordering -- 50   # 20 on x86-64
+CARGO_ENCODED_RUSTFLAGS=-Ctarget-cpu=generic cargo run ...           # N1, default
 ```
+
+Each run rounds its count up to a multiple of 65,536 rounds.
 
 | host | relaxed flag | `Stopper`, read after the check | `Stopper`, read after `is_cancelled()` |
 | --- | ---: | ---: | ---: |
@@ -50,7 +64,7 @@ cargo run --release -p almost-enough --example stop_ordering -- 50
 | Neoverse-N1, default, 2 × 50M | 13,440,740 / 13,399,714 (27%) | 2,501,919 / 2,653,479 (5%) | 0 / 0 |
 | Apple M4 Pro, 4 × 50M | 2,789 to 3,819 | 26,385 to 31,501 | 0 in all four |
 
-**The Release store alone is not a mitigation.** It keeps the writer's
+**A Release `cancel()` alone is not a mitigation.** It keeps the writer's
 stores in order, but a Relaxed reader's loads may still pass each other, and
 how often that happens depends on timing. Here `cancel()`'s Release cut stale
 reads about 5× on N1 and raised them about 9× on the M4 Pro. In a separate
@@ -68,6 +82,25 @@ the value after the flag loop with a plain `ldrb`, and the acquire load as
 `ldaprb` (RCpc) or `ldarb` (default). So the stale reads are the hardware's,
 not the compiler's.
 
+### Control: is it the Acquire, or the extra load?
+
+`is_cancelled()` also adds a load and a branch before the read, which could
+by itself let the value arrive. So the example has a fourth reader: it calls
+`should_stop()` again (Relaxed, the same extra load and branch) before
+reading. Run after review on #30's branch at `a015f09`, where `cancel()` is
+already a swap, 50M rounds each:
+
+| host | relaxed flag | `Stopper`, after the check | after another `should_stop()` | after `is_cancelled()` |
+| --- | ---: | ---: | ---: | ---: |
+| Neoverse-N1, default (load average about 9) | 8,884,026 | 1,686,341 | 1,476,509 | 0 |
+| Apple M4 Pro, 3 runs | 3,564 / 5,939 / 14,545 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+
+On N1 the Relaxed control read stale as often as reading right after the
+check, so the extra load doesn't explain the zero; the Acquire does. On the
+M4 Pro, with `cancel()` a swap instead of a store, no `Stopper` reader read
+stale in these runs, so they can't separate the two; the memory model still
+allows the Relaxed readers to read stale there.
+
 In safe Rust this matters only when the cancelling thread hands over data
 through something that does not synchronize on its own: Relaxed atomics, in
 practice. Examples: a cancel reason, or a request to save progress, stored
@@ -81,6 +114,31 @@ pass under Miri's weak-memory emulation over 16 seeds; with `Stopper`'s
 `is_cancelled()` made Relaxed, or `ChildStopper`'s fence removed, Miri fails
 them. CI's Miri job runs them over 8 seeds.
 
+## Several cancellers: why `cancel()` swaps
+
+A plain Release store from a second canceller ends the first canceller's
+release sequence. A reader whose `is_cancelled()` reads the second store
+synchronizes with the second canceller only, and can miss what the first
+wrote. That happens when the second canceller (a guard dropping, a watchdog)
+cancels after seeing the first cancel through a Relaxed check. A swap is a
+read-modify-write, which continues the release sequence.
+
+`is_cancelled_after_a_second_cancel_sees_the_first_cancellers_writes`, in
+`stopper`, `source`, `tree` and `enough-ffi`, runs that case. Under Miri over
+16 seeds (`-Zmiri-many-seeds=0..16`), with `cancel()` a Release store the
+reader read stale data on 7 seeds for `Stopper`, 5 for `StopSource`, 8 for
+`ChildStopper` and 8 for the FFI source; with the swap, on none.
+
+`SyncStopper` swaps too, but has no such test: its checks are Acquire, so a
+canceller that saw the cancel through one already synchronizes with it.
+
+The swap, compiled with rustc 1.99.0 and `-O`: `xchgb` on x86-64; a call to
+`__aarch64_swp1_rel` (outline atomics, `swplb` where the core has LSE) on
+aarch64 Linux, or `swplb` itself with `-C target-cpu=neoverse-n1`; `dmb sy`
+and an `ldrexb`/`strexb` loop on `thumbv7em`. `thumbv6m` and `riscv32imc`
+have no atomic swap, and `StopSource`, the only stop available there,
+keeps the store. Once per cancellation.
+
 ## What it costs
 
 **Checks: nothing.** Every check path was compiled with `--emit asm` for
@@ -91,8 +149,7 @@ instructions, except `ChildStopper::should_stop`, which now forwards its
 caller's `#[track_caller]` location to its parent instead of loading a
 constant one: one instruction fewer on x86-64, two on aarch64.
 
-**`cancel()`:** `stlrb` instead of `strb` on aarch64, the same `mov` on
-x86-64, a `dmb sy` on Cortex-M; once per cancellation.
+**`cancel()`:** a swap (above); once per cancellation.
 
 **`is_cancelled()`:** an Acquire load (`ldarb` or `ldaprb` on aarch64, a plain
 `mov` on x86-64), called after the work, not in loops. No zen crate calls
@@ -103,8 +160,9 @@ these `is_cancelled()` methods at all.
 That is `SyncStopper`'s design, and the first 0.4.5 draft's for `Stopper`.
 
 `cargo bench -p almost-enough --bench stopper_ordering` (zenbench 0.1.9,
-paired and interleaved, gate disabled). Each cell is a 95% CI of an Acquire
-check's difference from the relaxed flag's. The x86-64, N1 RCpc and M4 Pro
+paired and interleaved). Each cell is a 95% CI of an Acquire check's
+difference from the relaxed flag's, except the x86-64 cells marked \*, which
+are point estimates. The x86-64, N1 RCpc and M4 Pro
 columns measured the first 0.4.5 draft, whose `Stopper` loaded with Acquire;
 the N1 default column measured `acquire_flag`, which compiles the same.
 
@@ -121,8 +179,8 @@ by memory latency:
 - **chase:** a pointer chase around one random cycle, where each load waits
   for the last.
 
-The walks carry their position across rounds and differ between variants:
-each round reaches new lines, and no variant warms another's. Hops cost
+The walks carry their position across rounds, so each round reaches new
+lines. Hops cost
 135–155 ns on N1, 108 ns on the M4 Pro and 106 ns on x86-64.
 
 | | x86-64 | N1, RCpc (`ldapr`) | N1, default (`ldar`) | Apple M4 Pro (`ldapr`) |
@@ -153,10 +211,12 @@ measured anywhere from no difference to +34%, moving with code placement.
 So an Acquire on every check would cost:
 - **x86-64:** nothing; both orderings are the same instructions.
 - **aarch64 with RCpc** (macOS builds, or `-C target-cpu` on a core that has
-  it): nothing measurable on the M4 Pro or N1, compute-bound or memory-bound.
+  it): intervals within ±1.5% on the M4 Pro and N1, compute-bound or
+  memory-bound, except the isolated `&dyn` check on N1, [−3.5%, +4.9%].
 - **aarch64 without RCpc** (default Linux, Windows, Android and iOS builds):
-  on N1, a compute-bound loop that checks every 64 bytes ran 3–10% slower;
-  checking every 1 KiB, or in loops bound by memory, nothing measurable.
+  on N1, a compute-bound loop that checks every 64 bytes measured 3–10%
+  slower, a range that code placement alone could produce (above); checking
+  every 1 KiB, under 1%; in loops bound by memory, within ±1.3%.
 
 Neither acquire load is a fence: each keeps the accesses after it from
 passing the flag's own load. Each is one instruction more per check through `&dyn Stop`,
@@ -256,6 +316,8 @@ before and after: they have no compare-and-swap, so no `alloc::sync`.
 
 A flag load and store, compiled with rustc 1.99.0 and `-O`:
 
+`cancel()` now swaps instead (see "Several cancellers").
+
 | target | Relaxed load | Acquire load | Relaxed store | Release store |
 | --- | --- | --- | --- | --- |
 | `wasm32-unknown-unknown` | `i32.load8_u` | `i32.load8_u` | `i32.store8` | `i32.store8` |
@@ -264,8 +326,9 @@ A flag load and store, compiled with rustc 1.99.0 and `-O`:
 | `riscv32imc` | `lb` | `lb`, `fence r,rw` | `sb` | `fence rw,w`, `sb` |
 
 Wasm has only sequentially consistent atomics, so both orderings emit the
-same instruction, with or without threads. On Cortex-M and 32-bit RISC-V,
-an Acquire load or a Release store carries a full barrier. With Release
+same instruction, with or without threads. On Cortex-M an Acquire load or a
+Release store carries a full barrier (`dmb sy`); on 32-bit RISC-V, a partial
+`fence`. With Release
 `cancel()` and Acquire `is_cancelled()`, that is once per cancellation and
 once per query, never per check (`SyncStopper`'s checks excepted). No
 microcontroller was available to measure the per-check cost.

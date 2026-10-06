@@ -1,15 +1,17 @@
 //! What does a reader see of the writes made before `cancel()`? A litmus
-//! test for `Stopper`: `cancel()` is a Release store, checks are Relaxed
+//! test for `Stopper`: `cancel()` is a Release swap, checks are Relaxed
 //! loads, and `is_cancelled()` is an Acquire load.
 //!
 //! In each round a writer stores a value and then cancels a fresh stop. A
 //! reader first reads the value (so its cache holds the old one), then waits
 //! until a check sees the stop and reads the value again. Seeing the old
-//! value is a stale read. Three readers:
+//! value is a stale read. Four readers:
 //! - a relaxed flag on both sides (`Stopper` before 0.4.5): may read stale;
-//! - `Stopper`, reading right after the check: the Release store keeps the
+//! - `Stopper`, reading right after the check: the Release swap keeps the
 //!   writer's stores in order, but the reader's loads may still pass each
 //!   other, so the memory model allows stale reads;
+//! - `Stopper`, calling `should_stop()` again before reading: a control with
+//!   the same extra load and branch as the next reader, but Relaxed;
 //! - `Stopper`, calling `is_cancelled()` before reading: forbidden.
 //!
 //! Writer and reader advance in lockstep, so every read races its write. On
@@ -124,6 +126,15 @@ fn main() {
     report("Stopper, reading right after the check", rounds, || {
         litmus(rounds, Stopper::new, Stopper::cancel, |_| {})
     });
+    report(
+        "Stopper, reading after another should_stop()",
+        rounds,
+        || {
+            litmus(rounds, Stopper::new, Stopper::cancel, |stop| {
+                assert!(stop.should_stop());
+            })
+        },
+    );
     report("Stopper, reading after is_cancelled()", rounds, || {
         litmus(rounds, Stopper::new, Stopper::cancel, |stop| {
             assert!(stop.is_cancelled());
