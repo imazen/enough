@@ -17,8 +17,11 @@
   (`examples/stop_ordering.rs`) read data stale after a relaxed flag's stop
   in 23% of rounds on Neoverse-N1 and 1 in 13,300 on an Apple M4 Pro, never
   with Release/Acquire. The `stopper_ordering` bench measured no cost on
-  x86-64, Neoverse-N1 or the M4 Pro, including memory-latency-bound loops.
-  See `benchmarks/stopper-ordering-2026-10-06.md`.
+  x86-64, or on aarch64 targets with RCpc (`ldapr`: the M4 Pro, and
+  Neoverse-N1 built for it). Default aarch64 Linux builds emit `ldar`: on
+  N1 a compute-bound loop checking every 64 bytes ran 3–10% slower, one
+  checking every KiB and memory-latency-bound loops showed nothing. See
+  `benchmarks/stopper-ordering-2026-10-06.md`.
 - Docs: `WithTimeout` states its cost (a clock read per check, about 110
   instructions; +22% cycles on a 1 KiB-per-check loop on x86-64) and points
   to `DebouncedTimeout`. The root README's cancel example now imports `Stop`

@@ -116,11 +116,17 @@ Until 0.4.5 `Stopper` was Relaxed ("fastest on ARM"), and a separate
   relaxed flag's stop still read the old data in 21% of rounds on
   Neoverse-N1, and 1 in 10,500 on an Apple M4 Pro. With Release/Acquire
   it never did. On x86-64 neither ordering ever read stale.
-- **It costs nothing measurable.** x86-64 compiles both orderings to the
-  same instructions. On aarch64 the load is one instruction more (`ldapr`
-  takes no offset) and one-way ordering, not a fence. Neither core showed a
-  difference, even in loops bound by memory latency or with the flag's
-  cache line contended.
+- **It costs little, and only on aarch64 without RCpc.** x86-64 compiles
+  both orderings to the same instructions. On aarch64 an Acquire load is
+  one-way ordering, not a fence, and one instruction more through
+  `&dyn Stop`. Where the target enables RCpc (`ldapr`: macOS builds, or a
+  `-C target-cpu` that has it), neither an Apple M4 Pro nor a Neoverse-N1
+  showed a difference. Default Linux, Windows, Android and iOS builds emit
+  `ldar`: on N1 a compute-bound loop checking every 64 bytes ran 3–10%
+  slower, while checking every 1 KiB, or loops bound by memory latency
+  (with the flag's cache line contended too), showed nothing. A Relaxed
+  load with an Acquire fence on stop was no cheaper there and costs a
+  branch on x86-64.
 - **Except on microcontrollers, where it is unmeasured.** Cortex-M and
   32-bit RISC-V put a full barrier (`dmb sy`, `fence r,rw`) after each
   Acquire check and before each Release store. Wasm compiles both

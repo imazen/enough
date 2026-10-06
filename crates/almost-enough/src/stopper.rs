@@ -80,12 +80,16 @@ impl Stop for StopperInner {
 /// in 1 of 10,500 on an Apple M4 Pro. With `Stopper` it never did.
 ///
 /// The ordering is free on x86-64, where an Acquire load is an ordinary
-/// load. On aarch64 it is one-way ordering on the flag's own load and store
-/// (`ldapr`/`stlr`), not a fence. The `stopper_ordering` bench measured no
-/// difference on those two cores, including in loops bound by memory
-/// latency and with the flag's cache line contended. On Cortex-M and 32-bit
-/// RISC-V each check also executes a full barrier (`dmb sy`, `fence r,rw`),
-/// a cost not measured; on wasm both orderings compile to the same code.
+/// load, and on wasm, where both orderings compile to the same code. On
+/// aarch64 it is one-way ordering on the flag's own load and store, not a
+/// fence: `ldapr` where the target enables RCpc (macOS builds), the stronger
+/// `ldar` where it doesn't (Linux, Windows, Android and iOS builds). The
+/// `stopper_ordering` bench measured no difference with `ldapr` on an Apple
+/// M4 Pro or a Neoverse-N1. With `ldar` on the N1, a compute-bound loop
+/// that checked every 64 bytes ran 3–10% slower, and one that checked every
+/// KiB, or any loop bound by memory latency, showed nothing. On Cortex-M and
+/// 32-bit RISC-V each check also executes a full barrier (`dmb sy`,
+/// `fence r,rw`), a cost not measured.
 ///
 /// # Example
 ///

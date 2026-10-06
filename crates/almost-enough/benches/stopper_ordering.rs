@@ -1,8 +1,18 @@
-//! What Release/Acquire ordering costs: `Stopper` against a relaxed flag
-//! laid out the same way (what `Stopper` was before 0.4.5), checked alone,
-//! from loops with real work between checks, and from loops bound by memory
-//! latency, where an acquire load could keep the loads after a check from
-//! overlapping it.
+//! What Release/Acquire ordering costs. `Stopper` (an Acquire load per
+//! check) against three flags laid out as it is, an `Arc` holding an
+//! `AtomicBool`, that differ only in the check:
+//! - `relaxed_flag`: a Relaxed load, what `Stopper` was before 0.4.5;
+//! - `acquire_flag`: an Acquire load, the same instructions as `Stopper`,
+//!   so its gap to `stopper` shows how much code placement alone moves a row;
+//! - `fenced_flag`: a Relaxed load and an Acquire fence once it reads
+//!   `true`, an alternative that was measured and rejected.
+//!
+//! Checked alone, from loops with real work between checks, and from loops
+//! bound by memory latency, where an acquire load could keep the loads after
+//! a check from overlapping it. On aarch64 the Acquire load is `ldapr` where
+//! the target enables RCpc (`aarch64-apple-darwin` does) and `ldar` where it
+//! doesn't (the Linux, Windows, Android and iOS targets); `-C target-cpu`
+//! can change which.
 //!
 //! Run with: cargo bench -p almost-enough --bench stopper_ordering
 //!
@@ -33,6 +43,52 @@ impl Stop for RelaxedFlag {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
         if self.0.load(Ordering::Relaxed) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A flag checked with an Acquire load, as `Stopper` is.
+#[derive(Clone)]
+struct AcquireFlag(Arc<AtomicBool>);
+
+impl AcquireFlag {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
+impl Stop for AcquireFlag {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        if self.0.load(Ordering::Acquire) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A flag checked with a Relaxed load and an Acquire fence once it reads
+/// `true`. Same guarantee as an Acquire load, and a plain load until the
+/// stop; measured no cheaper than `ldar` on Neoverse-N1, and a branch more
+/// than an Acquire load on x86-64, where that load is free.
+#[derive(Clone)]
+struct FencedFlag(Arc<AtomicBool>);
+
+impl FencedFlag {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
+impl Stop for FencedFlag {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        if self.0.load(Ordering::Relaxed) {
+            std::sync::atomic::fence(Ordering::Acquire);
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -84,9 +140,9 @@ fn chase(next: &[u32], at: &mut u32, every: usize, stop: &dyn Stop) -> Result<()
     Ok(())
 }
 
-/// One random cycle through all `n` entries, and two nodes half the cycle
-/// apart, so two walks of up to `n / 2` hops never share a cache line.
-fn random_cycle(n: usize) -> (Vec<u32>, [u32; 2]) {
+/// One random cycle through all `n` entries, and three nodes a third of the
+/// cycle apart, so three walks of up to `n / 3` hops never share a cache line.
+fn random_cycle(n: usize) -> (Vec<u32>, [u32; 3]) {
     let mut order: Vec<u32> = (0..n as u32).collect();
     let mut x = 0x2545_F491_4F6C_DD1Du64;
     for i in (1..n).rev() {
@@ -99,7 +155,7 @@ fn random_cycle(n: usize) -> (Vec<u32>, [u32; 2]) {
     for k in 0..n {
         next[order[k] as usize] = order[(k + 1) % n];
     }
-    (next, [order[0], order[n / 2]])
+    (next, [order[0], order[n / 3], order[2 * n / 3]])
 }
 
 /// A thread that clones and drops `stop` until told to finish: the `Arc`
@@ -133,7 +189,9 @@ fn add_gather<S: Stop + Clone + Send + 'static>(
 ) {
     // Each variant has its own address sequence, carried across rounds, so
     // rounds keep reaching new lines and neither variant warms the other's.
-    let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ (name.len() as u64).wrapping_mul(0x2545_F491);
+    let mut seed = name.bytes().fold(0x9E37_79B9_7F4A_7C15u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01B3)
+    });
     group.bench(name, move |b| {
         let stop = make();
         let contender = contended.then(|| Contender::start(&stop));
@@ -190,6 +248,14 @@ fn main() {
                 let stop = RelaxedFlag::new();
                 b.iter(|| check_dyn(black_box(&stop)))
             });
+            group.bench("acquire_flag", |b| {
+                let stop = AcquireFlag::new();
+                b.iter(|| check_dyn(black_box(&stop)))
+            });
+            group.bench("fenced_flag", |b| {
+                let stop = FencedFlag::new();
+                b.iter(|| check_dyn(black_box(&stop)))
+            });
             group.bench("stopper", |b| {
                 let stop = Stopper::new();
                 b.iter(|| check_dyn(black_box(&stop)))
@@ -201,6 +267,14 @@ fn main() {
             group.baseline("relaxed_flag");
             group.bench("relaxed_flag", |b| {
                 let stop = RelaxedFlag::new();
+                b.iter(|| check_generic(black_box(&stop)))
+            });
+            group.bench("acquire_flag", |b| {
+                let stop = AcquireFlag::new();
+                b.iter(|| check_generic(black_box(&stop)))
+            });
+            group.bench("fenced_flag", |b| {
+                let stop = FencedFlag::new();
                 b.iter(|| check_generic(black_box(&stop)))
             });
             group.bench("stopper", |b| {
@@ -216,6 +290,16 @@ fn main() {
                 group.throughput(zenbench::Throughput::Bytes(BUFFER as u64));
                 group.bench("relaxed_flag", move |b| {
                     let stop = RelaxedFlag::new();
+                    let mut buf = vec![7u8; BUFFER];
+                    b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
+                });
+                group.bench("acquire_flag", move |b| {
+                    let stop = AcquireFlag::new();
+                    let mut buf = vec![7u8; BUFFER];
+                    b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
+                });
+                group.bench("fenced_flag", move |b| {
+                    let stop = FencedFlag::new();
                     let mut buf = vec![7u8; BUFFER];
                     b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
                 });
@@ -251,6 +335,14 @@ fn main() {
                 );
                 add_gather(
                     group,
+                    "acquire_flag",
+                    AcquireFlag::new,
+                    Arc::clone(&data),
+                    every,
+                    contended,
+                );
+                add_gather(
+                    group,
                     "stopper",
                     Stopper::new,
                     Arc::clone(&data),
@@ -280,10 +372,18 @@ fn main() {
                     );
                     add_chase(
                         group,
+                        "acquire_flag",
+                        AcquireFlag::new,
+                        Arc::clone(&next),
+                        starts[1],
+                        every,
+                    );
+                    add_chase(
+                        group,
                         "stopper",
                         Stopper::new,
                         Arc::clone(&next),
-                        starts[1],
+                        starts[2],
                         every,
                     );
                 },
