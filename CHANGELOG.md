@@ -4,6 +4,7 @@
 
 ### Added
 
+- `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
@@ -27,14 +28,19 @@
 
 - `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
 
+### Deprecated
+
+- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` now holds its parent as a `StopToken`.
+
 ### Changed
 
 - `almost-enough`, `enough-ffi`: `cancel()` is a Release store and `is_cancelled()` an Acquire load, so `is_cancelled()` after a stop sees what the canceller wrote before `cancel()`. Checks are unchanged.
+- `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
-  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
-  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
-  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
-  each other. Still not `Clone`; auto traits unchanged.
+  a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
+  check in generic code, 16 → 14 through `&dyn Stop`), a `Stopper` or
+  `SyncStopper` is no longer allocated, and `BoxedStop`/`StopToken` nest
+  without wrapping each other. Still not `Clone`; auto traits unchanged.
 - `almost-enough`: `PollMeter` looks call sites up by the address of their
   `Location` instead of hashing the file path on every poll, with a shortcut
   when a poll comes from the same site as the previous one: 693 → 308

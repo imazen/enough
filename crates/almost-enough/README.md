@@ -22,7 +22,7 @@ The default `std` feature pulls in everything (Arc-based stoppers, timeouts, gua
 
 ## Start Here: `Stopper`
 
-The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
+The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
 
 ## Quick Start
 
@@ -145,7 +145,7 @@ run_dyn(&stop).unwrap();
 | [`SyncStopper`] | alloc | Like Stopper, but every check is an Acquire load |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
-| [`BoxedStop`] | alloc | Type-erased dynamic dispatch (prefer `StopToken`) |
+| [`BoxedStop`] | alloc | Deprecated: use `StopToken` |
 | [`WithTimeout`] | std | Add deadline to any `Stop` |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
@@ -163,7 +163,7 @@ run_dyn(&stop).unwrap();
 ## Features
 
 - **`std`** (default) - Full functionality including timeouts
-- **`alloc`** - Arc-based types, `into_boxed()`, `child()`, guards
+- **`alloc`** - Arc-based types, `into_token()`, `child()`, guards
 - **None** - Core trait and stack-based types only (`no_std` compatible)
 
 ## Extension Traits
@@ -226,8 +226,9 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
 ## Type Erasure
 
 Prevent monomorphization explosion at API boundaries with [`StopToken`].
-[`Stopper`] and [`SyncStopper`] convert to `StopToken` at zero cost via
-`Into` — the existing Arc is reused, no double-wrapping:
+[`Stopper`] and [`SyncStopper`] convert to `StopToken` via `Into` without
+allocating — the existing Arc is reused. A `Stopper` is then checked
+directly, a `SyncStopper` through the vtable:
 
 ```rust
 use almost_enough::{CloneStop, StopToken, Stopper, Stop, StopExt};
@@ -267,7 +268,7 @@ fn process(stop: &dyn Stop) -> Result<(), StopReason> {
 assert!(process(&Unstoppable).is_ok());
 ```
 
-`StopToken` and `BoxedStop` automatically optimize away no-op stops — when
+`StopToken` automatically optimizes away no-op stops — when
 wrapping `Unstoppable`, `check()` short-circuits without any vtable dispatch:
 
 ```rust
