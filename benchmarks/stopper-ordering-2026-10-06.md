@@ -110,9 +110,10 @@ channel, or read after a thread `join` is already synchronized.
 `is_cancelled_after_the_stop_sees_writes_made_before_cancel`, a unit test in
 `stopper`, `source`, `tree` and `enough-ffi`, guards it: the reader waits
 with Relaxed checks, then calls `is_cancelled()` before reading. All four
-pass under Miri's weak-memory emulation over 16 seeds; with `Stopper`'s
-`is_cancelled()` made Relaxed, or `ChildStopper`'s fence removed, Miri fails
-them. CI's Miri job runs them over 8 seeds.
+pass under Miri's weak-memory emulation over 16 seeds. On #30 at `a015f09`,
+with one type's `is_cancelled()` made Relaxed (`Stopper`, `StopSource`, the
+FFI source) or `ChildStopper`'s fence removed, both of that type's handoff
+tests failed on all 16 seeds. CI's Miri job runs them over 8 seeds.
 
 ## Several cancellers: why `cancel()` swaps
 
@@ -127,7 +128,9 @@ read-modify-write, which continues the release sequence.
 `stopper`, `source`, `tree` and `enough-ffi`, runs that case. Under Miri over
 16 seeds (`-Zmiri-many-seeds=0..16`), with `cancel()` a Release store the
 reader read stale data on 7 seeds for `Stopper`, 5 for `StopSource`, 8 for
-`ChildStopper` and 8 for the FFI source; with the swap, on none.
+`ChildStopper` and 8 for the FFI source; with the swap, on none. So CI's 8
+seeds catch a weakened `is_cancelled()` every time, but a swap turned back
+into a store only on some runs.
 
 `SyncStopper` swaps too, but has no such test: its checks are Acquire, so a
 canceller that saw the cancel through one already synchronizes with it.
