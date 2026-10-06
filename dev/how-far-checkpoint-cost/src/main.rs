@@ -1,22 +1,25 @@
-//! Checkpoint strategies over one PNG Sub defilter, for
-//! `perf stat -e instructions:u,cycles:u`; see `measure.py`.
+//! What how-far costs for each observer an application passes, crossed with
+//! each way a library uses it, around one PNG Sub defilter; counted with
+//! `perf stat -e instructions:u,cycles:u` by `measure.py`.
 //!
-//! usage: how-far-checkpoint-cost VARIANT CHUNK ITERATIONS (buffer size from
-//! `BUF`, 256 KiB by default)
+//! usage: how-far-checkpoint-cost OBSERVER SCENARIO CHUNK ITERATIONS
+//! (256 KiB buffer; `none` as the observer runs the same work without how-far)
 use almost_enough::{FnStop, Stopper};
-use how_far::prelude::*;
 use how_far::{
-    Child, Execution, NoPulse, NoReport, Outcome, PhaseSpec, PlanError, RunError,
-    StopReason, TryStages, Unstoppable,
+    Execution, NoPulse, Outcome, PhaseSpec, Stages, StopOnly, StopReason, Total, Unstoppable,
+    WithStop, prelude::*,
 };
-use how_far_along::{Checkpoint, FnPulse, Phase, PulseTree, Total};
+use how_far_along::{Checkpoint, FnPulse, Phase, PulseTree};
+use how_far_really::{diagnostics::DiagnosticPulse, profile::Profiler, profile::StdClock};
 use std::hint::black_box;
 
 const BUF: usize = 256 * 1024;
+/// Units per reach of a `Paced`, as a library might choose for a 256 KiB row band.
 const EVERY: u64 = 64 * 1024;
+const WORKERS: usize = 4;
 
 /// Shared by every variant, so they all run the same hot loop at the same
-/// address and differ only in their checkpoint code.
+/// address and differ only in how they reach how-far.
 #[inline(never)]
 fn sub_defilter(buf: &mut [u8]) {
     for i in 4..buf.len() {
@@ -24,11 +27,13 @@ fn sub_defilter(buf: &mut [u8]) {
     }
 }
 
+// ── Library scenarios ────────────────────────────────────────────────────────
+
 #[inline(never)]
-fn none(buf: &mut [u8], chunk: usize) -> Result<(), StopReason> {
+fn check(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
     for part in buf.chunks_mut(chunk) {
         sub_defilter(part);
-        black_box(part.len());
+        pulse.check()?;
     }
     Ok(())
 }
@@ -39,16 +44,6 @@ fn step(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReaso
     for part in buf.chunks_mut(chunk) {
         sub_defilter(part);
         pulse.step(part.len() as u64)?;
-    }
-    Ok(())
-}
-
-/// Checks for cancellation on every chunk and never reports.
-#[inline(never)]
-fn check(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
-    for part in buf.chunks_mut(chunk) {
-        sub_defilter(part);
-        pulse.check()?;
     }
     Ok(())
 }
@@ -75,104 +70,113 @@ fn paced(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReas
     pace.finish()
 }
 
-/// One operation in three stages, each paced over a third of the buffer, or
-/// stepped on every chunk when `paced` is false.
+/// One operation of three stages, each paced over a third of the buffer.
 #[inline(never)]
-fn operation(
-    buf: &mut [u8],
-    chunk: usize,
-    pulse: &dyn Pulse,
-    paced: bool,
-) -> Result<(), RunError<StopReason>> {
+fn stages(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
     let third = buf.len() / 3;
-    let mut stages = TryStages::new(
+    let total = Total::Exact(third as u64);
+    Stages::new(
         pulse,
         &[
-            PhaseSpec::new("decode", 1, how_far::Total::Exact(third as u64)),
-            PhaseSpec::new("filter", 1, how_far::Total::Exact(third as u64)),
-            PhaseSpec::new("encode", 1, how_far::Total::Exact(third as u64)),
+            PhaseSpec::new("decode", 1, total),
+            PhaseSpec::new("filter", 1, total),
+            PhaseSpec::new("encode", 1, total),
         ],
-    )?;
-    for part in buf.chunks_mut(third).take(3) {
-        stages.run_stoppable(|stage| {
-            if paced {
-                let mut pace = stage.paced(EVERY);
-                for piece in part.chunks_mut(chunk) {
-                    sub_defilter(piece);
-                    pace.step(piece.len() as u64)?;
-                }
-                pace.finish()?;
-            } else {
-                for piece in part.chunks_mut(chunk) {
-                    sub_defilter(piece);
-                    stage.step(piece.len() as u64)?;
-                }
-            }
-            Ok(())
-        })?;
-    }
-    stages.finish()?;
-    Ok(())
+    )
+    .complete_with(|stages| {
+        for part in buf.chunks_mut(third).take(3) {
+            stages.run(|stage| paced(part, chunk, stage))?;
+        }
+        Ok(())
+    })
 }
 
+/// Four scoped workers share one stage, each on a quarter of the buffer.
 #[inline(never)]
-fn operation_none(buf: &mut [u8], chunk: usize) {
-    let third = buf.len() / 3;
-    for part in buf.chunks_mut(third).take(3) {
+fn pool(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse, each: Shape) -> Result<(), StopReason> {
+    let quarter = buf.len() / WORKERS;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = buf
+            .chunks_mut(quarter)
+            .map(|part| scope.spawn(move || each(part, chunk, pulse)))
+            .collect();
+        workers.into_iter().try_for_each(|worker| worker.join().unwrap())
+    })
+}
+
+/// Four fork-join children, one per worker, each paced over its quarter.
+#[inline(never)]
+fn fork_join(buf: &mut [u8], chunk: usize, pulse: &dyn Pulse) -> Result<(), StopReason> {
+    let quarter = buf.len() / WORKERS;
+    let total = Total::Exact(quarter as u64);
+    let parts = [PhaseSpec::new("quarter", 1, total); WORKERS];
+    let children = pulse.plan(Execution::ForkJoin, &parts);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = buf
+            .chunks_mut(quarter)
+            .zip(children)
+            .map(|(part, child)| {
+                scope.spawn(move || child.complete_with(|child| paced(part, chunk, child)))
+            })
+            .collect();
+        workers.into_iter().try_for_each(|worker| worker.join().unwrap())
+    })
+}
+
+/// The same work without how-far: `parallel` splits it across four workers.
+#[inline(never)]
+fn bare(buf: &mut [u8], chunk: usize, parallel: bool) {
+    let work = |part: &mut [u8]| {
         for piece in part.chunks_mut(chunk) {
             sub_defilter(piece);
             black_box(piece.len());
         }
+    };
+    if parallel {
+        let quarter = buf.len() / WORKERS;
+        std::thread::scope(|scope| {
+            for part in buf.chunks_mut(quarter) {
+                scope.spawn(move || work(part));
+            }
+        });
+    } else {
+        work(buf);
     }
 }
 
-// ── Report × stop matrix ─────────────────────────────────────────────────────
+type Shape = fn(&mut [u8], usize, &dyn Pulse) -> Result<(), StopReason>;
 
-/// One stop policy and one report sink behind the same `&dyn Pulse` shell, so
-/// matrix variants differ only in what the stop and the report do.
-struct Combo<S, R> {
-    stop: S,
-    report: R,
-}
-impl<S: Stop, R: Report> Stop for Combo<S, R> {
-    #[inline]
-    fn check(&self) -> Result<(), StopReason> {
-        self.stop.check()
+/// A scenario's library code, and whether it plans phases, so that an
+/// operation needs a fresh observer, as one tracked operation would.
+fn scenario(name: &str) -> (Shape, bool) {
+    fn pool_step(b: &mut [u8], c: usize, p: &dyn Pulse) -> Result<(), StopReason> {
+        pool(b, c, p, step)
     }
-    #[inline]
-    fn may_stop(&self) -> bool {
-        self.stop.may_stop()
+    fn pool_paced(b: &mut [u8], c: usize, p: &dyn Pulse) -> Result<(), StopReason> {
+        pool(b, c, p, paced)
     }
-}
-impl<S: Stop, R: Report> Report for Combo<S, R> {
-    #[inline]
-    fn advance(&self, completed: u64) {
-        self.report.advance(completed);
-    }
-    #[inline]
-    fn may_report(&self) -> bool {
-        self.report.may_report()
-    }
-}
-impl<S: Stop, R: Report> Pulse for Combo<S, R> {
-    fn split(&self, _: Execution, _: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        Err(PlanError::Unsupported)
+    match name {
+        "check" => (check, false),
+        "step" => (step, false),
+        "live" => (live, false),
+        "paced" => (paced, false),
+        "stages" => (stages, true),
+        "pool-step" => (pool_step, false),
+        "pool-paced" => (pool_paced, false),
+        "fork-join" => (fork_join, true),
+        _ => panic!("unknown scenario {name}"),
     }
 }
 
-/// A report callback as an application installs one: boxed, so every report
-/// is an indirect call into user code (here a cold function doing nothing).
-struct CallbackReport(Box<dyn Fn(u64) + Send + Sync>);
-impl Report for CallbackReport {
-    fn advance(&self, completed: u64) {
-        (self.0)(completed);
-    }
-}
+// ── Observers ────────────────────────────────────────────────────────────────
 
+/// An `FnPulse` callback as an application installs one, cold and doing
+/// nothing, so the numbers are the cost of reaching it.
 #[cold]
 #[inline(never)]
-fn report_callback(completed: u64) {
-    black_box(completed);
+fn on_checkpoint(progress: &Checkpoint<'_>) -> Result<(), StopReason> {
+    black_box(progress);
+    Ok(())
 }
 
 #[cold]
@@ -181,171 +185,87 @@ fn stop_callback() -> bool {
     black_box(false)
 }
 
-type StopCallback = FnStop<Box<dyn Fn() -> bool + Send + Sync>>;
-fn callback_stop() -> StopCallback {
-    FnStop::new(Box::new(stop_callback))
+fn tree(stop: impl Stop + 'static) -> PulseTree {
+    PulseTree::new(Phase::new("bench", Total::Unknown), stop)
 }
 
-/// A live counter: the reporter of a tree phase that stays open.
-fn counter() -> how_far_along::Reporter {
-    let phase = Phase::new("bench", Total::Unknown);
-    let reporter = phase.reporter();
-    std::mem::forget(phase); // Finishing or dropping it would end the counting.
-    reporter
-}
-
-fn matrix_pulse(report: &str, stop: &str) -> Box<dyn Pulse> {
-    fn with<R: Report + 'static>(report: R, stop: &str) -> Box<dyn Pulse> {
-        match stop {
-            "none" => Box::new(Combo {
-                stop: Unstoppable,
-                report,
-            }),
-            "flag" => Box::new(Combo {
-                stop: Stopper::new(),
-                report,
-            }),
-            "call" => Box::new(Combo {
-                stop: callback_stop(),
-                report,
-            }),
-            _ => panic!("unknown stop {stop}"),
+/// Build the named observer, hand it to `work`, then finish it as an
+/// application would.
+fn observe(name: &str, work: impl FnOnce(&dyn Pulse)) {
+    match name {
+        "nopulse" => work(&NoPulse),
+        "stop-only" => work(&StopOnly::new(Stopper::new())),
+        "tree" => {
+            let tree = tree(Unstoppable);
+            work(&tree);
+            tree.finish(Outcome::Succeeded).unwrap();
         }
-    }
-    match report {
-        "none" => with(NoReport, stop),
-        "count" => with(counter(), stop),
-        "call" => with(CallbackReport(Box::new(report_callback)), stop),
-        _ => panic!("unknown report {report}"),
-    }
-}
-
-/// An `FnPulse` callback as an application installs one, cold and doing
-/// nothing, so the numbers are the cost of reaching it.
-#[cold]
-#[inline(never)]
-fn fn_callback(progress: &Checkpoint<'_>) -> Result<(), StopReason> {
-    black_box(progress);
-    Ok(())
-}
-
-fn tree_pulse(stop: &str) -> Box<dyn Pulse> {
-    let phase = Phase::new("bench", Total::Unknown);
-    match stop {
-        "none" => Box::new(PulseTree::new(phase, Unstoppable)),
-        "flag" => Box::new(PulseTree::new(phase, Stopper::new())),
-        "call" => Box::new(PulseTree::new(phase, callback_stop())),
-        _ => panic!("unknown stop {stop}"),
-    }
-}
-
-fn run_style(
-    style: &str,
-    buf: &mut [u8],
-    chunk: usize,
-    pulse: &dyn Pulse,
-) -> Result<(), StopReason> {
-    match style {
-        "step" => step(black_box(buf), black_box(chunk), black_box(pulse)),
-        "live" => live(black_box(buf), black_box(chunk), black_box(pulse)),
-        "paced" => paced(black_box(buf), black_box(chunk), black_box(pulse)),
-        "check" => check(black_box(buf), black_box(chunk), black_box(pulse)),
-        _ => panic!("unknown style {style}"),
-    }
-}
-
-/// `m-STYLE-REPORT-STOP` (the matrix shell), `t-STYLE-STOP` (a `PulseTree`),
-/// `n-STYLE` (`&NoPulse`, which `step` recognizes by address), `f-STYLE` (an
-/// `FnPulse` with no plan), or `fs-STYLE` (the stage of an `FnPulse` plan with
-/// an exact total, as `TryStages` hands it out, so each report also moves the
-/// fraction).
-fn run_matrix(variant: &str, buf: &mut [u8], chunk: usize, iters: u64) -> bool {
-    let parts: Vec<&str> = variant.split('-').collect();
-    let (style, pulse): (&str, &dyn Pulse) = match parts.as_slice() {
-        ["m", style, report, stop] => (*style, Box::leak(matrix_pulse(report, stop))),
-        ["t", style, stop] => (*style, Box::leak(tree_pulse(stop))),
-        ["n", style] => (*style, &NoPulse),
-        ["f", style] => (
-            *style,
-            Box::leak(Box::new(FnPulse::new("bench", fn_callback))),
-        ),
-        ["fs", style] => {
-            let pulse = FnPulse::new("bench", fn_callback);
-            let total = buf.len() as u64 * iters;
-            let mut stages =
-                TryStages::new(&pulse, &[PhaseSpec::new("buffers", 1, Total::Exact(total))])
-                    .unwrap();
-            stages
-                .run_stoppable(|stage| {
-                    for _ in 0..iters {
-                        run_style(style, buf, chunk, stage)?;
-                    }
-                    Ok::<(), StopReason>(())
-                })
-                .unwrap();
-            stages.finish().unwrap();
-            return true;
+        "tree-stop" => {
+            let tree = tree(Stopper::new());
+            work(&tree);
+            tree.finish(Outcome::Succeeded).unwrap();
         }
-        _ => return false,
-    };
-    for _ in 0..iters {
-        black_box(run_style(style, buf, chunk, pulse)).unwrap();
+        "tree-stop-callback" => {
+            let stop: Box<dyn Fn() -> bool + Send + Sync> = Box::new(stop_callback);
+            let tree = tree(FnStop::new(stop));
+            work(&tree);
+            tree.finish(Outcome::Succeeded).unwrap();
+        }
+        "callback" => {
+            let pulse = FnPulse::new("bench", on_checkpoint);
+            work(&pulse);
+            pulse.complete_as(Outcome::Succeeded);
+        }
+        "shared" => {
+            let tree = tree(Stopper::new());
+            work(&tree.share().unwrap());
+            tree.finish(Outcome::Succeeded).unwrap();
+        }
+        "with-stop" => {
+            let (tree, local) = (tree(Stopper::new()), Stopper::new());
+            work(&WithStop::borrowed(&tree, &local));
+            tree.finish(Outcome::Succeeded).unwrap();
+        }
+        "diagnostic" => {
+            let profiler = Profiler::new(StdClock::new(), 64);
+            let pulse = DiagnosticPulse::new(tree(Stopper::new()), &profiler);
+            work(&pulse);
+            pulse.finish(Outcome::Succeeded).unwrap();
+            black_box(profiler.snapshot());
+        }
+        _ => panic!("unknown observer {name}"),
     }
-    true
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (variant, chunk, iters) = (
-        args[1].as_str(),
-        args[2].parse().unwrap(),
-        args[3].parse::<u64>().unwrap(),
-    );
-    let size = std::env::var("BUF").map_or(BUF, |b| b.parse().unwrap());
-    let mut buf: Vec<u8> = (0..size)
+    let (observer, scenario_name) = (args[1].as_str(), args[2].as_str());
+    let chunk: usize = args[3].parse().unwrap();
+    let iterations: u64 = args[4].parse().unwrap();
+    let mut buf: Vec<u8> = (0..BUF)
         .map(|i| (i.wrapping_mul(0x9E37_79B9) >> 24) as u8)
         .collect();
-    if run_matrix(variant, &mut buf, chunk, iters) {
-        black_box(&buf);
-        return;
-    }
-    let tree = PulseTree::new(Phase::new("bench", Total::Unknown), Stopper::new());
-    let (kind, target) = variant.split_once('-').unwrap_or((variant, ""));
-    let pulse: &dyn Pulse = if target == "tree" { &tree } else { &NoPulse };
-    for _ in 0..iters {
-        let result = match kind {
-            "none" => none(black_box(&mut buf), black_box(chunk)),
-            "step" => step(black_box(&mut buf), black_box(chunk), black_box(pulse)),
-            "live" => live(black_box(&mut buf), black_box(chunk), black_box(pulse)),
-            "paced" => paced(black_box(&mut buf), black_box(chunk), black_box(pulse)),
-            "op" if target == "none" => {
-                operation_none(black_box(&mut buf), black_box(chunk));
-                Ok(())
-            }
-            "op" | "opstep" if target == "nopulse" => operation(
-                black_box(&mut buf),
-                black_box(chunk),
-                &NoPulse,
-                kind == "op",
-            )
-            .map_err(|_| StopReason::Cancelled),
-            "op" | "opstep" if target == "fn" => {
-                // An application watches each operation with its own callback.
-                let pulse = FnPulse::new("bench", fn_callback);
-                operation(black_box(&mut buf), black_box(chunk), &pulse, kind == "op")
-                    .map_err(|_| StopReason::Cancelled)
-            }
-            "op" | "opstep" => {
-                // An application tracks each operation with its own tree.
-                let tree = PulseTree::new(Phase::new("job", Total::Unknown), Stopper::new());
-                let result = operation(black_box(&mut buf), black_box(chunk), &tree, kind == "op");
-                tree.finish(Outcome::from_result(&result, |_| true))
-                    .unwrap();
-                result.map_err(|_| StopReason::Cancelled)
-            }
-            _ => panic!("unknown variant {variant}"),
+    if observer == "none" {
+        let parallel = matches!(scenario_name, "pool-step" | "pool-paced" | "fork-join");
+        for _ in 0..iterations {
+            bare(black_box(&mut buf), black_box(chunk), parallel);
+        }
+    } else {
+        let (work, per_operation) = scenario(scenario_name);
+        let mut run = |pulse: &dyn Pulse| {
+            black_box(work(black_box(&mut buf), black_box(chunk), black_box(pulse))).unwrap();
         };
-        black_box(result).unwrap();
+        if per_operation {
+            for _ in 0..iterations {
+                observe(observer, &mut run);
+            }
+        } else {
+            observe(observer, |pulse| {
+                for _ in 0..iterations {
+                    run(pulse);
+                }
+            });
+        }
     }
     black_box(&buf);
 }

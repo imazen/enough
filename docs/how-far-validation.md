@@ -47,11 +47,13 @@ and no build script. It caps `Stages::run` at 120 unoptimized LLVM IR lines per
 call site, tracker code at 22,000 and the `how-far-really` diagnostics crate at
 35,000. It also counts rustc's instructions, which unlike wall time do not
 depend on machine load. `dev/how-far-checkpoint-cost` counts, with perf, what
-each checkpoint style and a three-stage plan cost around the same
+each observer costs in each library scenario around the same
 `#[inline(never)]` defilter.
 
 [The 2026-10-06 record](../benchmarks/how-far-2026-10-06.md) has both at commit `2bcc73a`: 79 / 18,382 / 29,703
-IR lines on Rust 1.99 and 88 / 19,986 / 31,228 on 1.88; a `step` into a live
-tree at 41 to 77 extra instructions per checkpoint depending on its stop and
-sink, a `Paced` step at about 2, and no checkpoint code at all in a loop
-stepping into `&NoPulse`. It also records the zenpng adoption tests.
+IR lines on Rust 1.99 and 88 / 19,986 / 31,228 on 1.88. Its overhead matrix
+crosses nine observers with eight library scenarios: `step` into a
+`PulseTree` costs 65 to 77 instructions per checkpoint, `StopOnly` 28 and an
+`FnPulse` callback 106, while pacing keeps every observer except
+`DiagnosticPulse` under 0.3% of a 256 KiB defilter. It also records the zenpng
+adoption tests.
