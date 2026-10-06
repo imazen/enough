@@ -102,9 +102,7 @@ fn check_10k_jittery(stop: &dyn Stop) -> Result<u64, StopReason> {
 }
 
 fn main() {
-    // The resource gate is disabled: zenbench 0.1.9 counts its own lock
-    // thread as a competing benchmark on Linux and waits 30 s per round.
-    let result = zenbench::run_gated(zenbench::GateConfig::disabled(), |suite| {
+    let result = zenbench::run(|suite| {
         // ═══════════════════════════════════════════════════════════
         // 1. Tight loop: no work between checks
         //
