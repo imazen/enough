@@ -29,16 +29,7 @@
 
 ### Changed
 
-- `almost-enough`, `enough-ffi`: `cancel()` is a Release store on `Stopper`,
-  `StopSource`, `ChildStopper` and the FFI source, and their `is_cancelled()`
-  (and the C function `enough_cancellation_is_cancelled`) an Acquire load;
-  `ChildStopper::is_cancelled` fences after its walk. Code that reads what
-  the canceller wrote before `cancel()` calls `is_cancelled()` after the work
-  reports the stop. Checks are unchanged: one Relaxed load, the same
-  instructions as before on x86-64 and aarch64. `SyncStopper` still acquires
-  on every check. `examples/stop_ordering.rs`, `examples/cross_core_latency.rs`
-  and `benches/stopper_ordering.rs` measure it; see
-  `benchmarks/stopper-ordering-2026-10-06.md`.
+- `almost-enough`, `enough-ffi`: `cancel()` is a Release store and `is_cancelled()` an Acquire load, so `is_cancelled()` after a stop sees what the canceller wrote before `cancel()`. Checks are unchanged.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
   instructions per check in generic code, 16 → 14 through `&dyn Stop`) and

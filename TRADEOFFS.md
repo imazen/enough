@@ -104,34 +104,14 @@ for FFI).
 
 ### 8. Release `cancel()`, Relaxed checks, Acquire `is_cancelled()`
 
-A check is one Relaxed load, on every stop type: the default `.check()?`
-must not gain instructions, because it runs millions of times and is inlined
-at thousands of sites. `cancel()` is a Release store (`Stopper`,
-`StopSource`, `ChildStopper`, the FFI source) and `is_cancelled()` an Acquire
-load (`ChildStopper`: a fence after its walk). So code that reads what the
-canceller wrote before `cancel()` calls `is_cancelled()` after the work
-reports the stop, and gets the guarantee for one load on a cold path.
-`SyncStopper` keeps an Acquire load on every check, for code that only sees
-the stop through `check()`.
-
-Measured in 2026-10 (`benchmarks/stopper-ordering-2026-10-06.md`):
-- **Relaxed readers do read stale data on ARM.** In a litmus test a reader
-  that had seen a relaxed flag's stop still read the old value in 27% of
-  rounds on Neoverse-N1 and about 1 in 15,000 on an Apple M4 Pro; after
-  `is_cancelled()`, never. On x86-64 nothing reads stale.
-- **A Release `cancel()` alone doesn't fix it.** It changed the stale-read
-  rate of Relaxed readers in both directions (5× fewer on N1, 9× more on the
-  M4 Pro in one harness, 29× fewer in another).
-- **An Acquire on every check costs on ARM Linux.** `ldar` (targets without
-  RCpc) made a loop checking every 64 bytes 3–10% slower on N1; macOS
-  (`ldapr`) and x86-64 showed nothing. An Acquire fence only on the stop path
-  is free inlined but costs a branch through `&dyn Stop`; a Relaxed opt-out
-  arm in `StopToken` compiles its `match` to a jump table on x86-64.
-- **Ordering doesn't change how soon the stop is seen.** A store reached a
-  load on another core equally fast at Relaxed, Release/Acquire and SeqCst.
-
-SeqCst rejected: a SeqCst `cancel()` behaves like Release for this handoff
-(Miri) and adds a barrier on x86-64.
+A check is one Relaxed load on every stop type: the default `.check()?`
+must not gain instructions. `cancel()` is a Release store and
+`is_cancelled()` an Acquire load (`ChildStopper`: a fence after its walk),
+so code that reads what the canceller wrote before `cancel()` calls
+`is_cancelled()` after the work stops. `SyncStopper` keeps an Acquire load
+on every check. A Release `cancel()` alone doesn't stop a Relaxed reader on
+ARM from reading stale data; only the reader's Acquire does. SeqCst adds
+nothing here. Evidence: `benchmarks/stopper-ordering-2026-10-06.md`.
 
 ### 9. `Clone` is NOT on `Stop`
 
