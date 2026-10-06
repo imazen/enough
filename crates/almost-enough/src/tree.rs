@@ -61,23 +61,76 @@
 //! ```
 
 use alloc::sync::Arc;
+use core::any::{Any, TypeId};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{BoxedStop, Stop, StopReason};
+use crate::{Stop, StopReason, StopToken, Unstoppable};
 
 /// Inner state for a tree node.
 struct TreeInner {
     /// This node's own cancellation flag.
     self_cancelled: AtomicBool,
-    /// Parent to check for inherited cancellation (None for root).
-    parent: Option<BoxedStop>,
+    /// The parent node, if it is another `ChildStopper`: checked directly, so
+    /// a chain of them is a loop of atomic loads with no vtable call per level.
+    parent: Option<Arc<TreeInner>>,
+    /// Any other stop above the top of the chain, checked once there.
+    /// `Unstoppable` (stored as nothing) when there is none.
+    above: StopToken,
+}
+
+impl TreeInner {
+    fn root(above: StopToken) -> Self {
+        Self {
+            self_cancelled: AtomicBool::new(false),
+            parent: None,
+            above,
+        }
+    }
+
+    /// Walk this node and its ancestors, stopping at the first cancelled one.
+    #[inline]
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        let mut node = self;
+        loop {
+            if node.self_cancelled.load(Ordering::Relaxed) {
+                return Err(StopReason::Cancelled);
+            }
+            match &node.parent {
+                Some(parent) => node = parent,
+                None => return node.above.check(),
+            }
+        }
+    }
+
+    #[inline]
+    #[track_caller]
+    fn should_stop(&self) -> bool {
+        let mut node = self;
+        loop {
+            if node.self_cancelled.load(Ordering::Relaxed) {
+                return true;
+            }
+            match &node.parent {
+                Some(parent) => node = parent,
+                None => return node.above.should_stop(),
+            }
+        }
+    }
 }
 
 impl core::fmt::Debug for TreeInner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let parent = if self.parent.is_some() {
+            Some("<ChildStopper>")
+        } else if self.above.may_stop() {
+            Some("<StopToken>")
+        } else {
+            None
+        };
         f.debug_struct("TreeInner")
             .field("self_cancelled", &self.self_cancelled)
-            .field("parent", &self.parent.as_ref().map(|_| "<BoxedStop>"))
+            .field("parent", &parent)
             .finish()
     }
 }
@@ -110,7 +163,9 @@ impl core::fmt::Debug for TreeInner {
 /// # Performance
 ///
 /// - Size: 8 bytes (one pointer)
-/// - `check()`: ~5-20ns depending on tree depth (walks parent chain)
+/// - `check()`: one atomic load per level of the tree. A parent that is
+///   another `ChildStopper` is checked directly; any other parent is checked
+///   once, at the top of the chain, as a [`StopToken`] would check it.
 /// - Root nodes: no parent check, similar to `Stopper`
 #[derive(Debug, Clone)]
 pub struct ChildStopper {
@@ -136,10 +191,7 @@ impl ChildStopper {
     #[inline]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(TreeInner {
-                self_cancelled: AtomicBool::new(false),
-                parent: None,
-            }),
+            inner: Arc::new(TreeInner::root(StopToken::new(Unstoppable))),
         }
     }
 
@@ -162,11 +214,12 @@ impl ChildStopper {
     /// ```
     #[inline]
     pub fn with_parent<T: Stop + 'static>(parent: T) -> Self {
+        if TypeId::of::<T>() == TypeId::of::<ChildStopper>() {
+            let any_ref: &dyn Any = &parent;
+            return any_ref.downcast_ref::<ChildStopper>().unwrap().child();
+        }
         Self {
-            inner: Arc::new(TreeInner {
-                self_cancelled: AtomicBool::new(false),
-                parent: Some(BoxedStop::new(parent)),
-            }),
+            inner: Arc::new(TreeInner::root(StopToken::new(parent))),
         }
     }
 
@@ -191,7 +244,13 @@ impl ChildStopper {
     /// ```
     #[inline]
     pub fn child(&self) -> ChildStopper {
-        ChildStopper::with_parent(self.clone())
+        Self {
+            inner: Arc::new(TreeInner {
+                self_cancelled: AtomicBool::new(false),
+                parent: Some(Arc::clone(&self.inner)),
+                above: StopToken::new(Unstoppable),
+            }),
+        }
     }
 
     /// Cancel this node (and all its children).
@@ -205,14 +264,7 @@ impl ChildStopper {
     /// Check if this node is cancelled (either directly or via ancestor).
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        if self.inner.self_cancelled.load(Ordering::Relaxed) {
-            return true;
-        }
-        if let Some(ref parent) = self.inner.parent {
-            parent.should_stop()
-        } else {
-            false
-        }
+        self.inner.should_stop()
     }
 }
 
@@ -226,20 +278,13 @@ impl Stop for ChildStopper {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.inner.self_cancelled.load(Ordering::Relaxed) {
-            return Err(StopReason::Cancelled);
-        }
-        if let Some(ref parent) = self.inner.parent {
-            parent.check()
-        } else {
-            Ok(())
-        }
+        self.inner.check()
     }
 
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.is_cancelled()
+        self.inner.should_stop()
     }
 }
 
@@ -361,5 +406,78 @@ mod tests {
     fn tree_is_default() {
         let t: ChildStopper = Default::default();
         assert!(!t.is_cancelled());
+    }
+
+    #[test]
+    fn child_stopper_parents_are_walked_directly() {
+        let root = ChildStopper::new();
+        assert!(root.inner.parent.is_none() && !root.inner.above.may_stop());
+        let child = root.child();
+        assert!(Arc::ptr_eq(
+            child.inner.parent.as_ref().unwrap(),
+            &root.inner
+        ));
+        let adopted = ChildStopper::with_parent(child.clone());
+        assert!(Arc::ptr_eq(
+            adopted.inner.parent.as_ref().unwrap(),
+            &child.inner
+        ));
+        assert!(!adopted.inner.above.may_stop());
+        let other = ChildStopper::with_parent(Stopper::new());
+        assert!(other.inner.parent.is_none() && other.inner.above.may_stop());
+    }
+
+    #[test]
+    fn a_deep_chain_stops_below_the_cancelled_node_only() {
+        let root = ChildStopper::with_parent(Stopper::new());
+        let mut chain = alloc::vec![root];
+        for _ in 0..100 {
+            let next = chain.last().unwrap().child();
+            chain.push(next);
+        }
+        assert!(chain.iter().all(|node| node.check().is_ok()));
+        chain[40].cancel();
+        for (depth, node) in chain.iter().enumerate() {
+            assert_eq!(node.should_stop(), depth >= 40, "depth {depth}");
+            assert_eq!(node.is_cancelled(), depth >= 40, "depth {depth}");
+            let expected = if depth >= 40 {
+                Err(StopReason::Cancelled)
+            } else {
+                Ok(())
+            };
+            assert_eq!(node.check(), expected, "depth {depth}");
+        }
+    }
+
+    #[test]
+    fn a_stopper_at_the_top_stops_the_whole_chain() {
+        let stopper = Stopper::new();
+        let leaf = ChildStopper::with_parent(stopper.clone()).child().child();
+        assert!(!leaf.should_stop());
+        stopper.cancel();
+        assert!(leaf.should_stop());
+        assert_eq!(leaf.check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn the_top_stops_reason_reaches_the_leaf() {
+        struct TimedOut;
+        impl Stop for TimedOut {
+            fn check(&self) -> Result<(), StopReason> {
+                Err(StopReason::TimedOut)
+            }
+        }
+        let leaf = ChildStopper::with_parent(TimedOut).child().child();
+        assert_eq!(leaf.check(), Err(StopReason::TimedOut));
+        assert!(leaf.should_stop());
+    }
+
+    #[test]
+    fn debug_names_the_parent_kind() {
+        let root = ChildStopper::new();
+        assert!(alloc::format!("{root:?}").contains("parent: None"));
+        assert!(alloc::format!("{:?}", root.child()).contains("<ChildStopper>"));
+        let adopted = ChildStopper::with_parent(Stopper::new());
+        assert!(alloc::format!("{adopted:?}").contains("<StopToken>"));
     }
 }
