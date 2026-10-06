@@ -25,6 +25,11 @@
 
 ### Changed
 
+- `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
+  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
+  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
+  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
+  each other. Still not `Clone`; auto traits unchanged.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
