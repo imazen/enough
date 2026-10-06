@@ -31,8 +31,8 @@ pub fn StopReason::is_cancelled(&self) -> bool
 pub fn StopReason::is_timed_out(&self) -> bool
 pub fn StopReason::is_transient(&self) -> bool
 pub struct Unstoppable
-pub trait IsStop
-pub fn IsStop::stop_reason(&self) -> core::option::Option<StopReason>
+pub trait AsStopReason
+pub fn AsStopReason::as_stop_reason(&self) -> core::option::Option<StopReason>
 pub trait Stop: core::marker::Send + core::marker::Sync
 pub fn Stop::check(&self) -> core::result::Result<(), StopReason>
 pub fn Stop::may_stop(&self) -> bool
@@ -46,7 +46,7 @@ pub type Never = Unstoppable
 
 &T: Stop
 &mut T: Stop
-StopReason: Clone, Copy, Debug, Display, Eq, Hash, IsStop, PartialEq
+StopReason: AsStopReason, Clone, Copy, Debug, Display, Eq, Hash, PartialEq
 Unstoppable: Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Stop
 core::option::Option<T>: Stop
 

@@ -25,8 +25,8 @@ use core::fmt;
 /// }
 /// ```
 ///
-/// Implement [`IsStop`] too, so code holding your error can tell a stop from
-/// a failure without knowing your error type.
+/// Implement [`AsStopReason`] too, so code holding your error can tell a
+/// cancellation or timeout from a failure without knowing your error type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StopReason {
@@ -68,15 +68,18 @@ impl StopReason {
     }
 }
 
-/// Whether an error is a stop, and which one.
+/// The [`StopReason`] an error represents, if it represents one.
 ///
-/// Callers use it to treat a stop differently from a failure, for example to
-/// skip a retry, log quietly, or record a progress phase as cancelled. It only
-/// inspects the error. [`StopReason`] implements it; an error type with a stop
-/// variant implements it next to its `From<StopReason>`:
+/// An operation that was cancelled or timed out usually returns an error
+/// that wraps the [`StopReason`] it got from [`Stop::check`](crate::Stop::check).
+/// Callers use this trait to tell that apart from a real failure without
+/// knowing the error type: to skip a retry, log quietly, or record a progress
+/// phase as cancelled. [`StopReason`] implements it; an error type with a
+/// variant that wraps a `StopReason` implements it next to its
+/// `From<StopReason>`:
 ///
 /// ```rust
-/// use enough::{IsStop, StopReason};
+/// use enough::{AsStopReason, StopReason};
 ///
 /// enum MyError {
 ///     Corrupt,
@@ -87,31 +90,35 @@ impl StopReason {
 ///         Self::Stopped(reason)
 ///     }
 /// }
-/// impl IsStop for MyError {
-///     fn stop_reason(&self) -> Option<StopReason> {
+/// impl AsStopReason for MyError {
+///     fn as_stop_reason(&self) -> Option<StopReason> {
 ///         match self {
 ///             Self::Stopped(reason) => Some(*reason),
 ///             _ => None,
 ///         }
 ///     }
 /// }
-/// assert_eq!(MyError::Stopped(StopReason::TimedOut).stop_reason(), Some(StopReason::TimedOut));
-/// assert!(MyError::Corrupt.stop_reason().is_none());
+/// assert_eq!(
+///     MyError::Stopped(StopReason::TimedOut).as_stop_reason(),
+///     Some(StopReason::TimedOut)
+/// );
+/// assert!(MyError::Corrupt.as_stop_reason().is_none());
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not say whether it is a stop",
-    label = "this error needs to say whether it is a stop",
-    note = "implement `enough::IsStop for {Self}`, returning `Some(reason)` for its stop variant",
-    note = "for an error type you cannot implement it for, classify it explicitly where it is handled"
+    message = "`{Self}` doesn't say whether it represents a cancellation or timeout",
+    label = "needs `enough::AsStopReason`",
+    note = "implement `enough::AsStopReason for {Self}`, returning `Some(reason)` for the variant that wraps a `StopReason`",
+    note = "for an error type you cannot implement it for, map it to a `StopReason` where it is handled"
 )]
-pub trait IsStop {
-    /// The stop this error reports, or `None` for any other failure.
-    fn stop_reason(&self) -> Option<StopReason>;
+pub trait AsStopReason {
+    /// The [`StopReason`] this error represents, or `None` for any other
+    /// failure.
+    fn as_stop_reason(&self) -> Option<StopReason>;
 }
 
-impl IsStop for StopReason {
+impl AsStopReason for StopReason {
     #[inline]
-    fn stop_reason(&self) -> Option<StopReason> {
+    fn as_stop_reason(&self) -> Option<StopReason> {
         Some(*self)
     }
 }
