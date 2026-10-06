@@ -5,8 +5,9 @@
 //!
 //! # When to Use
 //!
-//! **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`).
-//! `BoxedStop` is retained for cases where unique ownership is required.
+//! **Prefer [`StopToken`](crate::StopToken)**, which is `Clone`. `BoxedStop`
+//! is a `StopToken` that can't be cloned, for when unique ownership is
+//! wanted; it checks through the same fast paths.
 //!
 //! Generic functions like `fn process(stop: impl Stop)` are monomorphized
 //! for each concrete type, increasing binary size. `BoxedStop` provides a
@@ -39,18 +40,16 @@
 //! process(&source);
 //! ```
 
-use alloc::boxed::Box;
+use crate::{Stop, StopReason, StopToken};
 
-use crate::{Stop, StopReason};
-
-/// A heap-allocated [`Stop`] implementation.
+/// A type-erased [`Stop`] with unique ownership.
 ///
-/// **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`) and
-/// supports indirection collapsing. `BoxedStop` is retained for cases where
-/// unique ownership is required.
-///
-/// No-op stops (like `Unstoppable`) are optimized away at construction —
-/// `check()` short-circuits without any vtable dispatch.
+/// **Prefer [`StopToken`]**, which is `Clone`. `BoxedStop` wraps one and
+/// checks the same way: no-op stops (like `Unstoppable`) are stored as
+/// nothing and never dispatched, a `Stopper` or `SyncStopper` is checked as
+/// a direct atomic load without a vtable, and wrapping a `StopToken` or
+/// another `BoxedStop` reuses it instead of nesting. Anything else is
+/// allocated and checked through a vtable.
 ///
 /// # Example
 ///
@@ -71,44 +70,36 @@ use crate::{Stop, StopReason};
 /// process(BoxedStop::new(StopSource::new()));
 /// process(BoxedStop::new(Stopper::new()));
 /// ```
-pub struct BoxedStop(Option<Box<dyn Stop + Send + Sync>>);
+pub struct BoxedStop(pub(crate) StopToken);
 
 impl BoxedStop {
     /// Create a new boxed stop from any [`Stop`] implementation.
     ///
     /// No-op stops (where `may_stop()` returns false) are not allocated —
-    /// `check()` will short-circuit to `Ok(())`.
+    /// `check()` will short-circuit to `Ok(())`. See [`StopToken::new`] for
+    /// the other cases that don't allocate.
     #[inline]
     pub fn new<T: Stop + 'static>(stop: T) -> Self {
-        if !stop.may_stop() {
-            return Self(None);
-        }
-        Self(Some(Box::new(stop)))
+        Self(StopToken::new(stop))
     }
 }
 
 impl Stop for BoxedStop {
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        match &self.0 {
-            Some(inner) => inner.check(),
-            None => Ok(()),
-        }
+        self.0.check()
     }
 
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        match &self.0 {
-            Some(inner) => inner.should_stop(),
-            None => false,
-        }
+        self.0.should_stop()
     }
 
-    #[inline]
+    #[inline(always)]
     fn may_stop(&self) -> bool {
-        self.0.is_some()
+        self.0.may_stop()
     }
 }
 

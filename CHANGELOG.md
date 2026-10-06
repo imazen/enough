@@ -25,6 +25,11 @@
 
 ### Changed
 
+- `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
+  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
+  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
+  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
+  each other. Still not `Clone`; auto traits unchanged.
 - `almost-enough`: `PollMeter` looks call sites up by the address of their
   `Location` instead of hashing the file path on every poll, with a shortcut
   when a poll comes from the same site as the previous one: 693 → 308
