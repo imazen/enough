@@ -55,7 +55,8 @@ almost-enough = "0.4.4"  # the constructible Stopper lives here
 ```rust
 use std::thread;
 use std::time::Duration;
-use almost_enough::Stopper; // implements `enough::Stop`
+use almost_enough::Stopper;
+use enough::Stop; // Stopper implements it; brings `check()` into scope
 
 let stop = Stopper::new();
 let worker_stop = stop.clone(); // same flag, shared across threads

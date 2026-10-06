@@ -76,7 +76,7 @@
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
-//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
+//! | [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
 //! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
 //!
 //! ## StopExt Extension Trait

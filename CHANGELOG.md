@@ -29,6 +29,11 @@
 
 ### Changed
 
+- Docs: `WithTimeout` states its cost (a clock read per check, about 110
+  instructions; +22% cycles on a 1 KiB-per-check loop on x86-64) and points
+  to `DebouncedTimeout`, which the almost-enough README's type table now
+  lists. The root README's cancel example imports `Stop` (it did not
+  compile); TRADEOFFS lists `StopToken` at its real 24 bytes.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
   instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
