@@ -196,16 +196,18 @@ impl ChildStopper {
 
     /// Cancel this node (and all its children).
     ///
-    /// This does NOT affect the parent or siblings.
+    /// This does NOT affect the parent or siblings. A Release store, and
+    /// checks are Acquire loads, as with [`Stopper`](crate::Stopper): whoever
+    /// sees the stop also sees what was written before this call.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.self_cancelled.store(true, Ordering::Relaxed);
+        self.inner.self_cancelled.store(true, Ordering::Release);
     }
 
     /// Check if this node is cancelled (either directly or via ancestor).
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        if self.inner.self_cancelled.load(Ordering::Relaxed) {
+        if self.inner.self_cancelled.load(Ordering::Acquire) {
             return true;
         }
         if let Some(ref parent) = self.inner.parent {
@@ -226,7 +228,7 @@ impl Stop for ChildStopper {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.inner.self_cancelled.load(Ordering::Relaxed) {
+        if self.inner.self_cancelled.load(Ordering::Acquire) {
             return Err(StopReason::Cancelled);
         }
         if let Some(ref parent) = self.inner.parent {

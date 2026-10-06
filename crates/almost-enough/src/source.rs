@@ -93,16 +93,18 @@ impl StopSource {
 
     /// Signal all references to stop.
     ///
-    /// This is idempotent - calling it multiple times has no additional effect.
+    /// A Release store, and checks are Acquire loads, as with
+    /// [`Stopper`](crate::Stopper): whoever sees the stop also sees what was
+    /// written before this call. Idempotent: calling it again has no effect.
     #[inline]
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        self.cancelled.store(true, Ordering::Release);
     }
 
     /// Check if this source has been cancelled.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 
     /// Get a borrowed reference to pass to operations.
@@ -134,7 +136,7 @@ impl Stop for StopSource {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -144,7 +146,7 @@ impl Stop for StopSource {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -197,7 +199,7 @@ impl Stop for StopRef<'_> {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -207,7 +209,7 @@ impl Stop for StopRef<'_> {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 

@@ -105,12 +105,12 @@ impl CancellationState {
 
     #[inline]
     fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        self.cancelled.store(true, Ordering::Release);
     }
 
     #[inline]
     fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -309,7 +309,9 @@ pub extern "C" fn enough_cancellation_create() -> *mut FfiCancellationSource {
 /// Cancel a cancellation source.
 ///
 /// After this call, any tokens created from this source will report
-/// as cancelled.
+/// as cancelled. The cancel is a Release store and every check an Acquire
+/// load, so a thread that sees the cancellation also sees what was written
+/// before this call.
 ///
 /// # Safety
 ///
