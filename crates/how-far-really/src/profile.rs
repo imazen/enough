@@ -605,7 +605,7 @@ impl SpanInner {
     /// Whether to time the check about to start: see [`Stats::check_time`].
     fn time_next_check(&self) -> bool {
         let n = self.checks_started.fetch_add(1, Ordering::Relaxed);
-        n < TIMED_CHECKS || n % TIMED_CHECKS == 0
+        n < TIMED_CHECKS || n.is_multiple_of(TIMED_CHECKS)
     }
 
     /// Record a check that started at `start` and just returned `result`,
@@ -653,16 +653,19 @@ impl SpanInner {
             state.stats.stopped_at = Some(end);
             state.stats.stop_reason = Some(reason);
         }
-        let state = &mut *state;
-        if let Some(i) = site(
-            &mut state.stats,
-            &mut state.site_gaps,
-            &mut state.check_site,
-            at,
-        ) {
-            let site = &mut state.stats.sites[i];
-            site.checks = site.checks.saturating_add(1);
-            state.site_gaps[i] = state.site_gaps[i].max(gap);
+        {
+            // Borrow the guard's fields apart.
+            let state = &mut *state;
+            if let Some(i) = site(
+                &mut state.stats,
+                &mut state.site_gaps,
+                &mut state.check_site,
+                at,
+            ) {
+                let site = &mut state.stats.sites[i];
+                site.checks = site.checks.saturating_add(1);
+                state.site_gaps[i] = state.site_gaps[i].max(gap);
+            }
         }
         drop(state);
         self.observed(result, end);
@@ -699,6 +702,7 @@ impl SpanInner {
         }
         state.stats.overflowed |= add(&mut state.stats.reports, 1);
         state.stats.overflowed |= add(&mut state.stats.units, completed);
+        // Borrow the guard's fields apart.
         let state = &mut *state;
         if let Some(i) = site(
             &mut state.stats,

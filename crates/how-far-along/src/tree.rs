@@ -2,11 +2,7 @@ use crate::{
     Execution, Outcome, PhaseSpec, PlanError, Report, Total,
     sync::{Counter, MetadataCell},
 };
-use alloc::{
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
     fmt,
     sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
@@ -427,7 +423,6 @@ impl Phase {
     ///
     /// A split is final: a running phase cannot gain siblings later. Keep
     /// discovery in an `Unknown`-total leaf until the full list is known.
-    #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     pub fn split_vec(
         &mut self,
         execution: Execution,
@@ -439,6 +434,7 @@ impl Phase {
     }
     /// [`split_vec`](Self::split_vec), handing each child to `each` in order
     /// instead of collecting them.
+    #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     pub(crate) fn split_each(
         &mut self,
         execution: Execution,
