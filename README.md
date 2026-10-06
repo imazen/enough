@@ -140,11 +140,11 @@ best.
 
 ### Without `almost-enough`
 
-Use `&dyn Stop` with `may_stop().then_some()`:
+Take `&dyn Stop` and call `live()` once, before the loop:
 
 ```rust
 fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), MyError> {
-    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    let stop = stop.live(); // Option<&dyn Stop>: None if it can never stop
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
             stop.check()?; // None → Ok(()), Some → one dispatch

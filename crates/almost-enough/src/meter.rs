@@ -95,6 +95,11 @@ struct SiteStats {
     total_gap_ns: u128,
 }
 
+/// A call site as `Location::caller` returns it. Polls look sites up by the
+/// address of this static, which is cheap; the report merges any two
+/// statics that name the same `file:line:column`.
+type Caller = &'static Location<'static>;
+
 #[derive(Debug)]
 struct MeterState {
     /// Time of the previous recorded poll (`None` until the first poll; the
@@ -102,8 +107,8 @@ struct MeterState {
     last: Option<Instant>,
     /// Time of the first recorded poll (span = first→last poll).
     first: Instant,
-    /// Call site of the previous poll.
-    last_site: Option<Site>,
+    /// Index in `sites` of the previous poll's call site.
+    last_site: Option<usize>,
     /// Total polls recorded.
     calls: u64,
     /// Histogram of inter-poll gaps, 1 ms per bucket; index 0 = `[0,1)` ms.
@@ -116,12 +121,15 @@ struct MeterState {
     slow_gaps: u64,
     /// Sum of all recorded gaps.
     total_gap_ns: u128,
-    /// Longest single gap, and the site pair it ran between.
+    /// Longest single gap, and the indices in `sites` of the pair it ran
+    /// between.
     max_gap_ns: u64,
-    max_gap_from: Option<Site>,
-    max_gap_to: Option<Site>,
-    /// Per-call-site statistics.
-    sites: HashMap<Site, SiteStats>,
+    max_gap_from: Option<usize>,
+    max_gap_to: Option<usize>,
+    /// Per-call-site statistics, in order of first poll.
+    sites: Vec<(Caller, SiteStats)>,
+    /// Index in `sites` by the caller's address.
+    index: HashMap<usize, usize>,
 }
 
 impl MeterState {
@@ -139,16 +147,36 @@ impl MeterState {
             max_gap_ns: 0,
             max_gap_from: None,
             max_gap_to: None,
-            sites: HashMap::new(),
+            sites: Vec::new(),
+            index: HashMap::new(),
         }
     }
 
-    fn record(&mut self, site: Site, now: Instant) {
+    /// The index of `caller` in `sites`: the previous poll's site without a
+    /// lookup, since loops mostly poll from one place.
+    fn site(&mut self, caller: Caller) -> usize {
+        if let Some(last) = self.last_site {
+            if core::ptr::eq(self.sites[last].0, caller) {
+                return last;
+            }
+        }
+        let sites = &mut self.sites;
+        *self
+            .index
+            .entry(core::ptr::from_ref(caller).addr())
+            .or_insert_with(|| {
+                sites.push((caller, SiteStats::default()));
+                sites.len() - 1
+            })
+    }
+
+    fn record(&mut self, caller: Caller, now: Instant) {
         if self.last.is_none() {
             self.first = now;
         }
         self.calls += 1;
-        let site_stats = self.sites.entry(site).or_default();
+        let site = self.site(caller);
+        let site_stats = &mut self.sites[site].1;
         site_stats.calls += 1;
         if let Some(last) = self.last {
             let gap_ns = now.saturating_duration_since(last).as_nanos();
@@ -191,10 +219,12 @@ impl MeterState {
 /// delegates to the wrapped stop. Cloning the meter shares the same recording
 /// state, so a meter cloned into worker threads produces one unified report.
 ///
-/// The instrumentation cost is a mutex-protected update of roughly 50–100 ns
-/// per poll. Do not meter a poll site that is itself called in a tight inner
-/// loop in production; the meter is meant for tests, fuzzing, and perf
-/// investigations.
+/// Each poll reads the clock once and updates the shared state under a
+/// mutex: about 300 instructions on x86-64, half of them the clock read.
+/// Call sites are looked up by the address of their `Location`, and a poll
+/// from the same site as the previous one skips the lookup. Do not meter a
+/// poll site that is itself called in a tight inner loop in production; the
+/// meter is meant for tests, fuzzing, and perf investigations.
 ///
 /// # Example
 ///
@@ -243,8 +273,23 @@ impl<S> PollMeter<S> {
     /// If the internal mutex was poisoned by a panic during a poll.
     pub fn report(&self) -> PollReport {
         let s = self.state.lock().expect("PollMeter mutex poisoned");
-        let mut sites: Vec<SiteReport> = s
-            .sites
+        // Merge statics that name the same location, keeping first-poll order.
+        let mut merged: Vec<(Site, SiteStats)> = Vec::new();
+        let mut by_site: HashMap<Site, usize> = HashMap::new();
+        for (caller, st) in &s.sites {
+            let site = Site::from_location(caller);
+            let i = *by_site.entry(site).or_insert_with(|| {
+                merged.push((site, SiteStats::default()));
+                merged.len() - 1
+            });
+            let into = &mut merged[i].1;
+            into.calls += st.calls;
+            into.fast_gaps += st.fast_gaps;
+            into.slow_gaps += st.slow_gaps;
+            into.max_gap_ns = into.max_gap_ns.max(st.max_gap_ns);
+            into.total_gap_ns += st.total_gap_ns;
+        }
+        let mut sites: Vec<SiteReport> = merged
             .iter()
             .map(|(site, st)| SiteReport {
                 site: site.to_string(),
@@ -255,6 +300,7 @@ impl<S> PollMeter<S> {
                 mean_gap: mean_duration(st.total_gap_ns, st.calls),
             })
             .collect();
+        let name = |i: usize| Site::from_location(s.sites[i].0).to_string();
         // Slowest sites first.
         sites.sort_by_key(|r| core::cmp::Reverse(r.max_gap));
         let span = match (s.first, s.last) {
@@ -267,8 +313,8 @@ impl<S> PollMeter<S> {
             slow_gaps: s.slow_gaps,
             mean_gap: mean_duration(s.total_gap_ns, s.calls.saturating_sub(1)),
             max_gap: Duration::from_nanos(s.max_gap_ns),
-            max_gap_from: s.max_gap_from.map(|s| s.to_string()),
-            max_gap_to: s.max_gap_to.map(|s| s.to_string()),
+            max_gap_from: s.max_gap_from.map(name),
+            max_gap_to: s.max_gap_to.map(name),
             span,
             histogram_ms: s.buckets,
             overflow_ms: s.overflow,
@@ -311,15 +357,13 @@ impl<S> fmt::Debug for PollMeter<S> {
 impl<S: Stop> Stop for PollMeter<S> {
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        let site = Site::from_location(Location::caller());
-        self.record(site);
+        self.record(Location::caller());
         self.inner.check()
     }
 
     #[track_caller]
     fn should_stop(&self) -> bool {
-        let site = Site::from_location(Location::caller());
-        self.record(site);
+        self.record(Location::caller());
         self.inner.should_stop()
     }
 
@@ -337,11 +381,11 @@ impl<S: Stop> Stop for PollMeter<S> {
 }
 
 impl<S> PollMeter<S> {
-    fn record(&self, site: Site) {
+    fn record(&self, caller: Caller) {
         self.state
             .lock()
             .expect("PollMeter mutex poisoned")
-            .record(site, Instant::now());
+            .record(caller, Instant::now());
     }
 }
 
@@ -621,6 +665,41 @@ mod tests {
         assert_eq!(report.slow_gaps, 1);
         let ascii = report.histogram_ascii(20);
         assert!(ascii.contains(" 55- 56ms") || ascii.contains("55- 56"));
+    }
+
+    #[test]
+    fn alternating_sites_keep_their_own_counts_and_gaps() {
+        // Each switch misses the previous-site shortcut and looks the site up.
+        let meter = PollMeter::new(Unstoppable);
+        let (a, b) = (
+            |m: &PollMeter<Unstoppable>| m.check(),
+            |m: &PollMeter<Unstoppable>| m.check(),
+        );
+        for round in 0..10 {
+            a(&meter).unwrap();
+            if round == 4 {
+                std::thread::sleep(Duration::from_millis(60));
+            }
+            b(&meter).unwrap();
+            b(&meter).unwrap();
+        }
+        let report = meter.report();
+        assert_eq!(report.calls, 30);
+        assert_eq!(report.sites.len(), 2);
+        // Sorted by max gap: the slow gap ended at `b`'s site.
+        assert_eq!(report.sites[0].calls, 20);
+        assert_eq!(report.sites[0].slow_gaps, 1);
+        assert_eq!(report.sites[1].calls, 10);
+        assert_eq!(report.sites[1].slow_gaps, 0);
+        assert_eq!(
+            report.max_gap_to.as_deref(),
+            Some(report.sites[0].site.as_str())
+        );
+        assert_eq!(
+            report.max_gap_from.as_deref(),
+            Some(report.sites[1].site.as_str())
+        );
+        assert_ne!(report.sites[0].site, report.sites[1].site);
     }
 
     #[test]

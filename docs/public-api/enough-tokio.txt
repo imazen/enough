@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: enough-tokio.txt 13 lines (supported surface) | enough-tokio.features.txt 0 added (features: none) | enough-tokio.internal.txt 0 lines (0 hidden + 0 excluded-feature)
+# files: enough-tokio.txt 14 lines (supported surface) | enough-tokio.features.txt 0 added (features: none) | enough-tokio.internal.txt 0 lines (0 hidden + 0 excluded-feature)
 
 ## summary
 #
@@ -15,7 +15,7 @@
 #   inherent methods                            6
 #   enum variants                               1
 #   trait roster entries (type × trait)         6
-#   auto-trait-complete types                   1
+#   auto-trait exceptions                       1
 #
 # per-module pub lines:
 #   (root)                           10
@@ -40,4 +40,5 @@ tokio_util::sync::cancellation_token::CancellationToken: CancellationTokenStopEx
 
 ## auto traits
 
-1 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+0 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+TokioStop: !Freeze

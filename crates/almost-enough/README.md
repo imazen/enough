@@ -252,20 +252,20 @@ fn inner(stop: &StopToken) {
 
 ## Optimizing Hot Loops with `dyn Stop`
 
-Use `may_stop()` to skip overhead for no-op stops behind `&dyn Stop`:
+Call `live()` once to skip overhead for no-op stops behind `&dyn Stop`:
 
 ```rust
 use almost_enough::{Stop, StopReason, Unstoppable};
 
 fn process(stop: &dyn Stop) -> Result<(), StopReason> {
-    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    let stop = stop.live(); // Option<&dyn Stop>: None if it can never stop
     for i in 0..1_000_000 {
         stop.check()?; // None → Ok(()), Some → one vtable dispatch
     }
     Ok(())
 }
 
-// Unstoppable: may_stop() = false, so stop is None — zero overhead
+// Unstoppable can never stop, so stop is None — zero overhead
 assert!(process(&Unstoppable).is_ok());
 ```
 

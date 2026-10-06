@@ -23,14 +23,40 @@
   (~103 µs mean), fast-ssim2 has 456 ms per-stage gaps. PollMeter's own cost
   measures 62.7 ns/call. See `dev/cancel-latency/README.md`.
 
+### Added
+
+- `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
+
 ### Changed
 
+- `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
+  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
+  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
+  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
+  each other. Still not `Clone`; auto traits unchanged.
+- `almost-enough`: `PollMeter` looks call sites up by the address of their
+  `Location` instead of hashing the file path on every poll, with a shortcut
+  when a poll comes from the same site as the previous one: 693 → 308
+  instructions per poll (the clock read is now half of it), and the loop it
+  perturbed went from +42% to about +25–34% cycles at 1 KiB per poll. Reports
+  merge sites by `file:line:column` as before.
+- `enough-tokio`: a `TokioStop` checked more than 32 times registers a waker
+  with its token and from then on checks an atomic flag instead of locking
+  the token's mutex: 47 → 15 instructions per check through `&dyn Stop`, and
+  no shared lock between workers (+76% → +9.5% cycles with four workers at
+  64 bytes per check). Creating a stop still allocates nothing, so short-lived
+  stops cost what the token does and `cancel` wakes only registered ones.
+  `size_of::<TokioStop>()` is 40 bytes (was 8). See
+  `benchmarks/enough-tokio-2026-10-06.md`.
 - Docs: `SyncStopper` is now the documented default stop (READMEs, type
-  tables, `Stopper`/`SyncStopper` docs, TRADEOFFS decision 8). Measured
-  through `&dyn Stop`, it costs the same as `Stopper` on x86-64 and one
-  instruction more per check on aarch64, and also makes writes before
-  `cancel()` visible to whoever sees the stop. `Stopper` stays for bare
-  signals; no code changed.
+  tables, `Stopper`/`SyncStopper` docs, TRADEOFFS decision 8). A litmus test
+  (`examples/stop_ordering.rs`) shows why: after seeing a `Stopper`'s stop, a
+  reader still read a value written before `cancel()` stale in 21% of rounds
+  on Neoverse-N1 and 1 in 10,500 on an Apple M4 Pro, never with
+  `SyncStopper` and never on x86-64. Cost, measured by the new
+  `stopper_ordering` bench: none on x86-64 or an M4 Pro, +2–3% at most on
+  Neoverse-N1 at 64 bytes of work per check. `Stopper` stays for bare
+  signals. See `benchmarks/stopper-ordering-2026-10-06.md`.
 - Docs: `WithTimeout` states its cost (about 110 instructions per check, a
   clock read; +22% cycles on a 1 KiB-per-check loop on x86-64) and points to
   `DebouncedTimeout`. The root README's cancel example now imports `Stop`

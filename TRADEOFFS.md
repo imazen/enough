@@ -71,12 +71,18 @@ Same heap allocation, same `AtomicBool`, same memory address. All clones
 issues. The `Option` optimization is built into `StopToken` and
 `BoxedStop` at construction time, not per-check.
 
-For `&dyn Stop` without StopToken, use `stop.may_stop().then_some(stop)`
-to get `Option<&dyn Stop>` which implements `Stop` (from `enough`).
+For `&dyn Stop` without StopToken, `stop.live()` returns `Option<&dyn
+Stop>`, which implements `Stop` (from `enough`): `None` for a stop that can
+never stop. It is `stop.may_stop().then_some(stop)`, named.
 
 We tried `active_stop() -> Option<&dyn Stop>` as a trait method but
 `Some(self)` doesn't compile for `?Sized` types (can't coerce `&Self`
-to `&dyn Stop` generically).
+to `&dyn Stop` generically). `live` is instead an inherent method on
+`dyn Stop` (and on its `+ Send` and `+ Send + Sync` spellings, which are
+distinct types), where `Self` already is the trait object. Being inherent
+also keeps it from colliding with how-far's `ProgressExt::live`, the same
+idea for pulses: a `live` on the `Stop` trait makes `pulse.live()` on a
+`&dyn Pulse` ambiguous (E0034).
 
 ### 5. `Unstoppable` is explicit, not hidden
 
@@ -150,7 +156,7 @@ For `Unstoppable`, the compiler eliminates the check entirely whether it's
 behind a generic `impl Stop` or a `StopToken` — both compile to the same
 do-nothing path.
 
-### `may_stop().then_some()` matches StopToken for Unstoppable
+### `live()` matches StopToken for Unstoppable
 
 `Option<&dyn Stop> = None` matches generic and StopToken: the `None`
 discriminant branch is perfectly predicted — effectively zero cost. This
