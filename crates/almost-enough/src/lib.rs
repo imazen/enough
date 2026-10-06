@@ -101,8 +101,9 @@
 //!
 //! [`StopToken`] wraps `Arc<dyn Stop>` — it's `Clone` (cheap Arc increment),
 //! type-erased, and can be sent across threads. [`Stopper`] and
-//! [`SyncStopper`] convert to `StopToken` at zero cost via `From`/`Into`
-//! (the existing Arc is reused, no double-wrapping).
+//! [`SyncStopper`] convert to `StopToken` via `From`/`Into` without
+//! allocating (the existing Arc is reused). A `Stopper` is then checked as a
+//! direct atomic load, a `SyncStopper` through the vtable.
 //!
 //! Use [`CloneStop`] (a trait alias for `Stop + Clone + 'static`) to accept
 //! any clonable stop, then erase with `into_token()` at the boundary:
