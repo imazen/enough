@@ -15,10 +15,6 @@
 //! can change which.
 //!
 //! Run with: cargo bench -p almost-enough --bench stopper_ordering
-//!
-//! The resource gate is disabled: zenbench 0.1.9 counts its own lock thread
-//! as a competing benchmark on Linux and waits 30 s per round. The pairs are
-//! interleaved, so machine load affects both sides alike.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -239,7 +235,7 @@ fn defilter(buf: &mut [u8], chunk: usize, stop: &dyn Stop) -> Result<(), StopRea
 }
 
 fn main() {
-    let result = zenbench::run_gated(zenbench::GateConfig::disabled(), |suite| {
+    let result = zenbench::run(|suite| {
         suite.compare("check through &dyn Stop", |group| {
             group.config().cache_firewall(false);
             group.baseline("relaxed_flag");
