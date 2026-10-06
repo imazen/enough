@@ -33,8 +33,8 @@ const DEFAULT_TARGET_NANOS: u64 = 100_000;
 /// A clock read costs about 100 instructions, so reading it every 64 checks
 /// adds about 2 cycles per check, while bounding how late a timeout can come
 /// after checks slow down: at most this many of the slower checks. Without
-/// the bound, a timeout calibrated on back-to-back checks read the clock every
-/// 94,093 checks, and was still running 59.9 s past its deadline once checks
+/// the bound, a timeout calibrated on back-to-back checks read the clock only
+/// every 90,000 to 100,000 checks, and stopped up to 40 s late once checks
 /// took 1 ms (`benchmarks/debounced-timeout-2026-10-06.md`).
 const MAX_CHECKS_PER_CLOCK_READ: u32 = 64;
 
@@ -728,7 +728,8 @@ mod tests {
     fn a_slowdown_after_calibration_stops_within_64_slow_checks() {
         // Calibrate on fast checks, then make every check take 1ms with the
         // deadline 20ms away. Without the bound, a release build calibrated
-        // to one clock read per ~94,000 checks and ran a minute past it.
+        // to one clock read per 90,000 to 100,000 checks and stopped seconds
+        // late.
         let mut stop = calibrated_on_fast_checks();
         stop.deadline_nanos = duration_to_nanos(stop.created.elapsed()) + 20_000_000;
         let mut slow_checks = 0;
