@@ -34,11 +34,11 @@ use crate::{Stop, StopReason, StopToken};
 /// A type-erased [`Stop`] with unique ownership. Deprecated: use
 /// [`StopToken`], which checks the same way and is `Clone`.
 ///
-/// `BoxedStop` wraps a `StopToken`: no-op stops (like `Unstoppable`) are stored as
-/// nothing and never dispatched, a `Stopper` or `SyncStopper` is checked as
-/// a direct atomic load without a vtable, and wrapping a `StopToken` or
-/// another `BoxedStop` reuses it instead of nesting. Anything else is
-/// allocated and checked through a vtable.
+/// `BoxedStop` wraps a `StopToken`: no-op stops (like `Unstoppable`) are stored
+/// as nothing and never dispatched, a `Stopper` is checked as a direct atomic
+/// load without a vtable, a `SyncStopper` keeps its own `Arc` behind the
+/// vtable, and wrapping a `StopToken` or another `BoxedStop` reuses it instead
+/// of nesting. Anything else is allocated and checked through a vtable.
 ///
 /// # Example
 ///

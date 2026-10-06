@@ -34,12 +34,13 @@
 
 ### Changed
 
-- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`; the root README's cancel example compiles; `StopToken` is 24 bytes.
+- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`; the root README's cancel example compiles; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
+- `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
-  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
-  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
-  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
-  each other. Still not `Clone`; auto traits unchanged.
+  a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
+  check in generic code, 16 → 14 through `&dyn Stop`), a `Stopper` or
+  `SyncStopper` is no longer allocated, and `BoxedStop`/`StopToken` nest
+  without wrapping each other. Still not `Clone`; auto traits unchanged.
 - `almost-enough`: `PollMeter` looks call sites up by the address of their
   `Location` instead of hashing the file path on every poll, with a shortcut
   when a poll comes from the same site as the previous one: 693 → 308
