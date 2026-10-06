@@ -3,9 +3,6 @@
 //! loop with 1 KiB of work between checks.
 //!
 //! Run with: cargo bench -p almost-enough --bench child_stopper
-//!
-//! The resource gate is disabled: zenbench 0.1.9 counts its own lock thread
-//! as a competing benchmark on Linux and waits 30 s per round.
 
 use std::hint::black_box;
 
@@ -54,7 +51,7 @@ fn defilter(buf: &mut [u8], chunk: usize, stop: &dyn Stop) -> Result<(), StopRea
 }
 
 fn main() {
-    let result = zenbench::run_gated(zenbench::GateConfig::disabled(), |suite| {
+    let result = zenbench::run(|suite| {
         suite.compare("check through &dyn Stop", |group| {
             group.config().cache_firewall(false);
             group.baseline("stopper");
