@@ -223,6 +223,10 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
     guard.disarm();
     Ok(())
 }
+
+fn risky_operation() -> Result<(), &'static str> {
+    Ok(())
+}
 ```
 
 ## Type Erasure

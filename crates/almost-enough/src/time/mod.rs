@@ -53,15 +53,17 @@ use crate::{Stop, StopReason};
 /// # Cost
 ///
 /// Every check reads the clock (`Instant::now()`). Measured with perf on a
-/// loop that checks after every 1 KiB of PNG defiltering, that is about 110
-/// instructions per check, and the loop took 22% more cycles on x86-64 (12%
-/// on a Neoverse-N1); a plain `Stopper` measured within noise. In return it
-/// stops no later than one check after the deadline.
+/// loop that checks after every 1 KiB of PNG defiltering ([record]), that is
+/// about 112 instructions per check, and the loop took 22% more cycles on
+/// x86-64 (12% on a Neoverse-N1); a plain `Stopper` measured within noise. In
+/// return it stops no later than one check after the deadline.
 ///
 /// If a library checks that often and the deadline doesn't need that
 /// precision, [`DebouncedTimeout`] reads the clock only every N checks,
 /// choosing N from the rate it measures; read its docs on how late it can
 /// stop.
+///
+/// [record]: https://github.com/imazen/how-far/blob/6bc984f06fac1fb8755643c2247fff9fbeba643e/benchmarks/how-far-2026-10-06.md#enough-stop-policies-by-check-pattern
 ///
 /// # Example
 ///

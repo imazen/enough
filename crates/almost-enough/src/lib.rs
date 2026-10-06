@@ -77,7 +77,7 @@
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Deprecated: use `StopToken` |
 //! | [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
-//! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
+//! | [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N checks |
 //!
 //! ## StopExt Extension Trait
 //!
@@ -465,6 +465,14 @@ pub trait StopExt: Stop + Sized {
 
 // Blanket implementation for all Stop + Sized types
 impl<T: Stop + Sized> StopExt for T {}
+
+// Compile the READMEs' examples as doctests.
+#[cfg(all(doctest, feature = "std"))]
+#[doc = include_str!("../../../README.md")]
+struct RootReadme;
+#[cfg(all(doctest, feature = "std"))]
+#[doc = include_str!("../README.md")]
+struct CrateReadme;
 
 #[cfg(test)]
 mod tests {

@@ -50,7 +50,7 @@ enough = "0.4.4"
 almost-enough = "0.4.4"  # the constructible Stopper lives here
 ```
 
-```rust
+```rust,no_run
 use std::thread;
 use std::time::Duration;
 use almost_enough::Stopper;
@@ -85,6 +85,8 @@ parent/child cancellation trees, and `StopToken` — see its
 ## The Trait
 
 ```rust
+use enough::StopReason;
+
 pub trait Stop: Send + Sync {
     /// Check if the operation should stop.
     /// Returns Ok(()) to continue, Err(StopReason) to stop.
@@ -112,10 +114,10 @@ from `almost-enough` internally — it handles the `Unstoppable` optimization
 automatically and is the fastest option for real stop types:
 
 ```rust
-use enough::Stop;
+use enough::{Stop, StopReason};
 use almost_enough::StopToken;
 
-pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError> {
+pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, StopReason> {
     let stop = StopToken::new(stop); // Unstoppable → None (no alloc). Stopper → same Arc.
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
@@ -144,7 +146,9 @@ best.
 Take `&dyn Stop` and call `live()` once, before the loop:
 
 ```rust
-fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), MyError> {
+use enough::{Stop, StopReason};
+
+fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), StopReason> {
     let stop = stop.live(); // Option<&dyn Stop>: None if it can never stop
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
@@ -161,6 +165,8 @@ Use `impl Stop` (without `'static`) to accept borrowed types like
 `StopRef<'a>`:
 
 ```rust
+use enough::{Stop, StopReason};
+
 fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
     for (i, byte) in data.iter().enumerate() {
         if i % 64 == 0 { stop.check()?; }

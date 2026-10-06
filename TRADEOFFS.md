@@ -176,6 +176,9 @@ converge. Default should be firewall off for hot-path benchmarks.
 
 ## Type Overview
 
+Sizes are for 64-bit targets; on 32-bit ones pointers are 4 bytes, so
+`StopToken` is 12 bytes on i686.
+
 | Type | Size | check() | Clone | Alloc | Notes |
 |------|------|---------|-------|-------|-------|
 | `Unstoppable` | 0 | 0ns | Copy | none | Optimized away everywhere |
@@ -186,7 +189,7 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `StopToken` | 24 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
 | `BoxedStop` | 24 bytes | 0ns/~1ns | no | Arc/None | Deprecated: a `StopToken` without `Clone` |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
-| `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |
+| `WithTimeout<T>` | T + 16, rounded up to 8 | ~16ns | if T | if T | Instant::now() dominates |
 
 ## Future Direction
 

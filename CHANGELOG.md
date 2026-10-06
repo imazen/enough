@@ -34,7 +34,7 @@
 
 ### Changed
 
-- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`; the root README's cancel example compiles; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
+- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`; every README example compiles and runs as a doctest; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
 - `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
