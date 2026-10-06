@@ -36,6 +36,14 @@
   instructions per poll (the clock read is now half of it), and the loop it
   perturbed went from +42% to about +25–34% cycles at 1 KiB per poll. Reports
   merge sites by `file:line:column` as before.
+- `enough-tokio`: a `TokioStop` checked more than 32 times registers a waker
+  with its token and from then on checks an atomic flag instead of locking
+  the token's mutex: 47 → 15 instructions per check through `&dyn Stop`, and
+  no shared lock between workers (+76% → +9.5% cycles with four workers at
+  64 bytes per check). Creating a stop still allocates nothing, so short-lived
+  stops cost what the token does and `cancel` wakes only registered ones.
+  `size_of::<TokioStop>()` is 40 bytes (was 8). See
+  `benchmarks/enough-tokio-2026-10-06.md`.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
