@@ -675,18 +675,19 @@ mod tests {
     #[test]
     fn alternating_sites_keep_their_own_counts_and_gaps() {
         // Each switch misses the previous-site shortcut and looks the site up.
+        // Exact gaps: a stalled CI runner must not add a second slow gap.
         let meter = PollMeter::new(Unstoppable);
-        let (a, b) = (
-            |m: &PollMeter<Unstoppable>| m.check(),
-            |m: &PollMeter<Unstoppable>| m.check(),
-        );
-        for round in 0..10 {
-            a(&meter).unwrap();
-            if round == 4 {
-                std::thread::sleep(Duration::from_millis(60));
+        let a = Location::caller();
+        let b = Location::caller();
+        let mut now = Instant::now();
+        {
+            let mut state = meter.state.lock().unwrap();
+            for round in 0..10 {
+                state.record(a, now);
+                now += Duration::from_millis(if round == 4 { 60 } else { 1 });
+                state.record(b, now);
+                state.record(b, now);
             }
-            b(&meter).unwrap();
-            b(&meter).unwrap();
         }
         let report = meter.report();
         assert_eq!(report.calls, 30);
