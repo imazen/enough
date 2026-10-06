@@ -133,7 +133,25 @@ impl<T> MetadataCell<T> {
 type AtomicCount = core::sync::atomic::AtomicU64;
 #[cfg(not(target_has_atomic = "64"))]
 type AtomicCount = core::sync::atomic::AtomicUsize;
+
+/// The largest count; reports past it saturate and set the overflow flag.
+///
+/// With 64-bit atomics this is `2^63 - 1`, leaving headroom so that a report
+/// below [`FAST_ADD`] is one `fetch_add`, which never retries when workers
+/// share a phase. A report that takes the count past the limit stores the
+/// limit back, so the excess is at most the reports in flight, one per
+/// thread, each below 2^32: wrapping would take 2^31 threads reporting at
+/// once. Larger reports saturate in a compare-and-swap loop.
+#[cfg(target_has_atomic = "64")]
+pub(crate) const COUNT_MAX: u64 = (1 << 63) - 1;
+#[cfg(not(target_has_atomic = "64"))]
+pub(crate) const COUNT_MAX: u64 = usize::MAX as u64;
+#[cfg(target_has_atomic = "64")]
+const FAST_ADD: u64 = 1 << 32;
+
 pub(crate) struct Counter {
+    /// May exceed `COUNT_MAX` by the reports in flight once it saturates;
+    /// readers see at most `COUNT_MAX`.
     value: AtomicCount,
     overflow: AtomicBool,
 }
@@ -146,7 +164,7 @@ impl Counter {
     }
     #[allow(clippy::unnecessary_cast)] // AtomicCount is target-dependent.
     pub(crate) fn get(&self) -> u64 {
-        self.value.load(Ordering::Relaxed) as u64
+        (self.value.load(Ordering::Relaxed) as u64).min(COUNT_MAX)
     }
     pub(crate) fn overflowed(&self) -> bool {
         self.overflow.load(Ordering::Relaxed)
@@ -161,17 +179,28 @@ impl Counter {
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
     pub(crate) fn add(&self, n: u64) {
         #[cfg(target_has_atomic = "64")]
+        if n < FAST_ADD {
+            // Cannot wrap; see COUNT_MAX. No load first: under contention it
+            // would fetch the cache line twice.
+            let old = self.value.fetch_add(n, Ordering::Relaxed);
+            if old.saturating_add(n) > COUNT_MAX {
+                self.value.store(COUNT_MAX, Ordering::Relaxed);
+                self.overflow.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+        #[cfg(target_has_atomic = "64")]
         let delta = n;
         #[cfg(not(target_has_atomic = "64"))]
         let delta = n.min(usize::MAX as u64) as usize;
+        let max = COUNT_MAX as _;
         let old = self
             .value
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                Some(v.saturating_add(delta))
+                Some(v.saturating_add(delta).min(max))
             })
             .expect("update always succeeds");
-        let overflow = old.checked_add(delta).is_none() || delta as u64 != n;
-        if overflow {
+        if (old as u64).saturating_add(n) > COUNT_MAX {
             self.overflow.store(true, Ordering::Relaxed);
         }
     }
@@ -220,5 +249,56 @@ mod tests {
             }
         });
         assert_eq!(*cell.get(), 49);
+    }
+
+    #[test]
+    fn counts_exactly_and_saturates_at_the_limit() {
+        let counter = Counter::new();
+        counter.add(5);
+        counter.add(0);
+        assert_eq!((counter.get(), counter.overflowed()), (5, false));
+        // A large report takes the saturating path.
+        counter.add(COUNT_MAX - 7);
+        assert_eq!(
+            (counter.get(), counter.overflowed()),
+            (COUNT_MAX - 2, false)
+        );
+        counter.add(2);
+        assert_eq!((counter.get(), counter.overflowed()), (COUNT_MAX, false));
+        // A small report past the limit overshoots internally; readers and
+        // later reports see the limit.
+        counter.add(1);
+        assert_eq!((counter.get(), counter.overflowed()), (COUNT_MAX, true));
+        counter.add(u64::MAX);
+        counter.add(3);
+        assert_eq!((counter.get(), counter.overflowed()), (COUNT_MAX, true));
+        let copy = Counter::new();
+        copy.copy_from(&counter);
+        assert_eq!((copy.get(), copy.overflowed()), (COUNT_MAX, true));
+    }
+
+    #[test]
+    fn workers_count_exactly_and_saturate_together() {
+        let counter = Counter::new();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| (0..10_000).for_each(|_| counter.add(3)));
+            }
+        });
+        assert_eq!((counter.get(), counter.overflowed()), (120_000, false));
+        // Race small reports across the limit: none may wrap the count.
+        let counter = Counter::new();
+        counter.add(COUNT_MAX - 1_000);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..1_000 {
+                        counter.add(7);
+                        assert!(counter.get() >= COUNT_MAX - 1_000);
+                    }
+                });
+            }
+        });
+        assert_eq!((counter.get(), counter.overflowed()), (COUNT_MAX, true));
     }
 }

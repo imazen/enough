@@ -787,18 +787,13 @@ impl Snapshot {
         }
         out.write_str("]}")
     }
-    /// Largest per-leaf count representable without a lock on this target.
-    /// `u64::MAX` with 64-bit atomics (including wasm32); `usize::MAX` otherwise.
-    /// Exceeding this limit sets `overflowed` rather than wrapping or blocking.
+    /// Largest per-leaf count representable without a lock on this target:
+    /// `2^63 - 1` with 64-bit atomics (including wasm32), which leaves the
+    /// headroom that lets a report be one `fetch_add`; `usize::MAX`
+    /// otherwise. Exceeding this limit sets `overflowed` rather than wrapping
+    /// or blocking.
     pub const fn counter_max() -> u64 {
-        #[cfg(target_has_atomic = "64")]
-        {
-            u64::MAX
-        }
-        #[cfg(not(target_has_atomic = "64"))]
-        {
-            usize::MAX as u64
-        }
+        crate::sync::COUNT_MAX
     }
     /// Work fraction in [0, 1], or None when any required denominator is unknown
     /// or invalid. Success/skipping discharges the obligation, including zero work.

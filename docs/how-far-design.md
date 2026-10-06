@@ -146,9 +146,10 @@ disabling interrupts on one core is not enough, and there even `try_summary`
 enters the critical section.
 
 Core and tracker need pointer atomics for `Arc`. Counters are native 64-bit
-where available and native-width with explicit saturation elsewhere
-(`Snapshot::counter_max`). Pacing reduces cache-line transfers on a shared
-counter; giving workers separate children helps only when separate totals or
+where available, saturating at 2^63 - 1 so that a report is one `fetch_add`
+that never retries when workers share a phase, and native-width with
+compare-and-swap saturation elsewhere (`Snapshot::counter_max`). Pacing
+reduces cache-line transfers on a shared counter; giving workers separate children helps only when separate totals or
 outcomes mean something, and worker count must not change the containing
 phase's weight.
 
