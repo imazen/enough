@@ -4,6 +4,7 @@
 
 ### Added
 
+- `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
