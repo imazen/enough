@@ -55,16 +55,37 @@
 //! let child = stop.child();   // Create child token
 //! ```
 
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
 use enough::{Stop, StopReason};
-use tokio_util::sync::CancellationToken;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Wake, Waker};
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 /// Wrapper around tokio's [`CancellationToken`] that implements [`Stop`].
 ///
 /// This allows using tokio's cancellation system with libraries that
 /// accept `impl Stop`.
+///
+/// # Cost
+///
+/// [`CancellationToken::is_cancelled`] locks a mutex. So that a check
+/// doesn't, `new` registers a waker with the token, and a check reads the
+/// flag that waker sets: one atomic load, as cheap as
+/// `almost_enough::Stopper`, until the token is cancelled. Cancelling the
+/// token sets the flag before `cancel` returns.
+///
+/// In exchange `new` (and [`child`](Self::child) and
+/// [`as_stop`](CancellationTokenStopExt::as_stop)) makes three small
+/// allocations and registers the waker: about 1,000 instructions on x86-64
+/// with the drop, as much as 25 calls to `is_cancelled`. Create one
+/// per operation rather than per check. Clones share the registration.
 ///
 /// # Example
 ///
@@ -84,26 +105,75 @@ use tokio_util::sync::CancellationToken;
 /// ```
 #[derive(Clone)]
 pub struct TokioStop {
+    /// Set by the waker registered with the token. A check reads only this
+    /// until it is set, then asks the token, so a spurious wake costs speed,
+    /// never a false stop.
+    woken: Arc<Woken>,
+    shared: Arc<Shared>,
+}
+
+struct Shared {
     token: CancellationToken,
+    /// Registered with the token by its first poll and never polled again:
+    /// it lives only so that cancelling the token wakes `woken`. Nothing
+    /// observes it, so a panic cannot leave it half-updated.
+    _waiter: AssertUnwindSafe<Pin<Box<WaitForCancellationFutureOwned>>>,
+}
+
+/// The waker the waiter holds. It owns only the flag, not the waiter, so the
+/// waiter cannot keep itself alive through it.
+struct Woken(AtomicBool);
+
+impl Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 impl TokioStop {
     /// Create a new TokioStop from a CancellationToken.
-    #[inline]
+    ///
+    /// Registers a waker with the token, which allocates; see
+    /// [Cost](TokioStop#cost).
     pub fn new(token: CancellationToken) -> Self {
-        Self { token }
+        let woken = Arc::new(Woken(AtomicBool::new(false)));
+        let mut waiter = Box::pin(token.clone().cancelled_owned());
+        let waker = Waker::from(Arc::clone(&woken));
+        // Polling once registers the waiter, so cancelling the token wakes
+        // it. The poll is `Ready` if the token is already cancelled. It can
+        // also be `Pending` without registering (tokio's task-dump tracing
+        // does that), but only after the token's cancellation has begun, so
+        // the token is asked again.
+        let ready = waiter
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_ready();
+        if ready || token.is_cancelled() {
+            woken.wake_by_ref();
+        }
+        Self {
+            woken,
+            shared: Arc::new(Shared {
+                token,
+                _waiter: AssertUnwindSafe(waiter),
+            }),
+        }
     }
 
     /// Get the underlying CancellationToken.
     #[inline]
     pub fn token(&self) -> &CancellationToken {
-        &self.token
+        &self.shared.token
     }
 
     /// Get a clone of the underlying CancellationToken.
     #[inline]
     pub fn into_token(self) -> CancellationToken {
-        self.token
+        self.shared.token.clone()
     }
 
     /// Wait for cancellation.
@@ -111,26 +181,33 @@ impl TokioStop {
     /// This is an async method for use in async contexts.
     #[inline]
     pub async fn cancelled(&self) {
-        self.token.cancelled().await;
+        self.shared.token.cancelled().await;
     }
 
     /// Create a child token that is cancelled when this one is.
     #[inline]
     pub fn child(&self) -> TokioStop {
-        Self::new(self.token.child_token())
+        Self::new(self.shared.token.child_token())
     }
 
     /// Cancel the token.
     #[inline]
     pub fn cancel(&self) {
-        self.token.cancel();
+        self.shared.token.cancel();
+    }
+
+    /// Whether the token is cancelled, once the waker has fired.
+    #[cold]
+    #[inline(never)]
+    fn confirm(&self) -> bool {
+        self.shared.token.is_cancelled()
     }
 }
 
 impl Stop for TokioStop {
     #[inline]
     fn check(&self) -> Result<(), StopReason> {
-        if self.token.is_cancelled() {
+        if self.should_stop() {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -139,7 +216,7 @@ impl Stop for TokioStop {
 
     #[inline]
     fn should_stop(&self) -> bool {
-        self.token.is_cancelled()
+        self.woken.0.load(Ordering::Acquire) && self.confirm()
     }
 }
 
@@ -151,14 +228,14 @@ impl From<CancellationToken> for TokioStop {
 
 impl From<TokioStop> for CancellationToken {
     fn from(stop: TokioStop) -> Self {
-        stop.token
+        stop.into_token()
     }
 }
 
 impl std::fmt::Debug for TokioStop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TokioStop")
-            .field("cancelled", &self.token.is_cancelled())
+            .field("cancelled", &self.shared.token.is_cancelled())
             .finish()
     }
 }
@@ -523,6 +600,217 @@ mod tests {
 
         assert_eq!(received, vec![1, 2, 3]);
         assert!(was_cancelled);
+    }
+
+    // ── The cached flag ─────────────────────────────────────────────────────
+
+    fn woken(stop: &TokioStop) -> bool {
+        stop.woken.0.load(Ordering::Acquire)
+    }
+
+    #[test]
+    fn cancel_sets_the_flag_before_it_returns() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+        assert!(!woken(&stop));
+        token.cancel();
+        assert!(woken(&stop));
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn an_already_cancelled_token_is_seen_at_construction() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let stop = TokioStop::new(token);
+        assert!(woken(&stop));
+        assert!(stop.should_stop());
+    }
+
+    #[test]
+    fn a_child_of_a_cancelled_token_starts_cancelled() {
+        let parent = TokioStop::new(CancellationToken::new());
+        parent.cancel();
+        assert!(parent.child().should_stop());
+        assert!(TokioStop::new(parent.token().child_token()).should_stop());
+    }
+
+    #[test]
+    fn cancelling_an_ancestor_reaches_a_grandchild_whose_parent_was_dropped() {
+        // Dropping the middle token's last handle moves its children to the
+        // root; the grandchild's registration must survive the move.
+        let root = CancellationToken::new();
+        let middle = root.child_token();
+        let leaf = TokioStop::new(middle.child_token());
+        let sibling = TokioStop::new(middle.child_token().child_token());
+        drop(middle);
+        assert!(!leaf.should_stop() && !sibling.should_stop());
+        root.cancel();
+        assert!(leaf.should_stop() && sibling.should_stop());
+    }
+
+    #[test]
+    fn cancelling_through_any_handle_reaches_the_flag() {
+        let stop = TokioStop::new(CancellationToken::new());
+        stop.token().cancel();
+        assert!(woken(&stop) && stop.should_stop());
+
+        let stop = TokioStop::new(CancellationToken::new());
+        let clone = stop.clone();
+        clone.cancel();
+        assert!(stop.should_stop());
+    }
+
+    #[test]
+    fn a_spurious_wake_is_not_a_stop() {
+        let token = CancellationToken::new();
+        let stop = TokioStop::new(token.clone());
+        Waker::from(Arc::clone(&stop.woken)).wake();
+        assert!(woken(&stop));
+        assert!(!stop.should_stop());
+        assert_eq!(stop.check(), Ok(()));
+        token.cancel();
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn clones_share_one_registration() {
+        let stop = TokioStop::new(CancellationToken::new());
+        let clone = stop.clone();
+        assert!(Arc::ptr_eq(&stop.woken, &clone.woken));
+        assert!(Arc::ptr_eq(&stop.shared, &clone.shared));
+    }
+
+    #[test]
+    fn dropping_the_last_clone_releases_the_registration() {
+        for cancel in [false, true] {
+            let token = CancellationToken::new();
+            let stop = TokioStop::new(token.clone());
+            let clone = stop.clone();
+            let (flag, shared) = (Arc::downgrade(&stop.woken), Arc::downgrade(&stop.shared));
+            if cancel {
+                token.cancel();
+            }
+            drop(stop);
+            assert!(flag.upgrade().is_some(), "a clone is still alive");
+            drop(clone);
+            // The waiter holds the waker, which holds the flag; neither may
+            // keep the other alive.
+            assert!(shared.upgrade().is_none());
+            assert!(flag.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn many_stops_on_one_token_all_see_the_cancel() {
+        let token = CancellationToken::new();
+        let stops: Vec<_> = (0..100).map(|_| TokioStop::new(token.clone())).collect();
+        // Drop every other one so the token's waiter list has holes.
+        let stops: Vec<_> = stops.into_iter().step_by(2).collect();
+        token.cancel();
+        assert!(stops.iter().all(|stop| woken(stop) && stop.should_stop()));
+    }
+
+    #[test]
+    fn construction_racing_cancel_never_misses_it() {
+        use std::sync::Barrier;
+        for _ in 0..if cfg!(miri) { 20 } else { 2_000 } {
+            let token = CancellationToken::new();
+            let start = Arc::new(Barrier::new(2));
+            let canceller = std::thread::spawn({
+                let (token, start) = (token.clone(), Arc::clone(&start));
+                move || {
+                    start.wait();
+                    token.cancel();
+                }
+            });
+            start.wait();
+            let stop = TokioStop::new(token.child_token());
+            canceller.join().unwrap();
+            // `cancel` has returned, so the stop must see it.
+            assert!(stop.should_stop());
+        }
+    }
+
+    #[test]
+    fn checks_on_other_threads_see_the_cancel_and_what_preceded_it() {
+        use std::sync::atomic::AtomicUsize;
+        for _ in 0..if cfg!(miri) { 4 } else { 200 } {
+            let token = CancellationToken::new();
+            let stop = TokioStop::new(token.clone());
+            let data = Arc::new(AtomicUsize::new(0));
+            let checkers: Vec<_> = (0..4)
+                .map(|_| {
+                    let (stop, data) = (stop.clone(), Arc::clone(&data));
+                    std::thread::spawn(move || {
+                        while stop.check().is_ok() {
+                            std::hint::spin_loop();
+                        }
+                        // Err synchronizes with the cancel, so the write
+                        // before it is visible.
+                        data.load(Ordering::Relaxed)
+                    })
+                })
+                .collect();
+            data.store(42, Ordering::Relaxed);
+            token.cancel();
+            for checker in checkers {
+                assert_eq!(checker.join().unwrap(), 42);
+            }
+        }
+    }
+
+    #[test]
+    fn into_token_returns_the_same_token() {
+        let token = CancellationToken::new();
+        assert!(TokioStop::new(token.clone()).into_token() == token);
+        let back: CancellationToken = TokioStop::new(token.clone()).into();
+        assert!(back == token);
+    }
+
+    #[test]
+    fn auto_traits_are_unchanged() {
+        fn assert_traits<
+            T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
+        >() {
+        }
+        assert_traits::<TokioStop>();
+    }
+
+    #[test]
+    fn works_inside_a_current_thread_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let token = CancellationToken::new();
+            let stop = TokioStop::new(token.clone());
+            let canceller = tokio::spawn(async move { token.cancel() });
+            canceller.await.unwrap();
+            assert!(stop.should_stop());
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_blocking_loop_stops_when_cancelled() {
+        let token = CancellationToken::new();
+        // Built inside a runtime task, as `spawn_blocking` callers do.
+        let stop = TokioStop::new(token.clone());
+        let work = tokio::task::spawn_blocking(move || {
+            let mut spins = 0u64;
+            while stop.check().is_ok() {
+                spins += 1;
+                std::hint::black_box(spins);
+            }
+            spins
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), work)
+            .await
+            .expect("the loop saw the cancel")
+            .unwrap();
     }
 
     #[tokio::test]

@@ -25,6 +25,12 @@
 
 ### Changed
 
+- `enough-tokio`: `TokioStop` checks an atomic flag that a waker registered
+  with the token sets on cancellation, instead of locking the token's mutex
+  on every check: 46 → 9 instructions per check through `&dyn Stop`, 39 → 1
+  in generic code, and no shared lock between workers. `new` now allocates
+  and registers the waker (about 1,000 instructions). See
+  `benchmarks/enough-tokio-2026-10-06.md`.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
