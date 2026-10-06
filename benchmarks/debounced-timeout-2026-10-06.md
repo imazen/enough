@@ -5,7 +5,7 @@ come about once per target interval (100 µs). On `main` (`6bd6b96`), N had no
 upper bound, and a slowdown was noticed only at the next clock read. This
 change caps N at 64 and replaces the `count % N` division with a countdown.
 
-Measured on x86-64 (Ryzen 9 9950X3D, WSL2), rustc 1.99.0, release build.
+Measured on `r5900xt` (AMD Ryzen 9 5900XT, Zen 3, native Ubuntu), rustc 1.99.0, release build.
 
 ## How late it stops after checks slow down
 
