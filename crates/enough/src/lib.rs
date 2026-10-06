@@ -130,29 +130,11 @@ pub trait Stop: Send + Sync {
     /// [`Unstoppable`] returns `false`. Wrapper types delegate to their
     /// inner stop. The default is `true` (conservative — always check).
     ///
-    /// Use this with `impl Stop for Option<T>` to skip checks in hot loops
-    /// behind `dyn Stop`:
-    ///
-    /// ```rust
-    /// use enough::{Stop, StopReason, Unstoppable};
-    ///
-    /// fn process(stop: &dyn Stop) -> Result<(), StopReason> {
-    ///     let stop = stop.may_stop().then_some(stop);
-    ///     // stop is Option<&dyn Stop>, which impl Stop:
-    ///     // None → check() always returns Ok(()), Some → delegates
-    ///     for i in 0..100 {
-    ///         stop.check()?;
-    ///     }
-    ///     Ok(())
-    /// }
-    ///
-    /// // Unstoppable: may_stop() returns false, so stop is None
-    /// assert!(process(&Unstoppable).is_ok());
-    /// ```
+    /// Behind `&dyn Stop`, [`live`](Stop#method.live) uses this to skip checks
+    /// in hot loops: it returns `None` for a stop that can never stop.
     ///
     /// In generic code (`impl Stop`), this is unnecessary — the compiler
     /// already optimizes `Unstoppable::check()` to nothing via inlining.
-    /// Use `may_stop()` only when accepting `&dyn Stop`.
     #[inline]
     fn may_stop(&self) -> bool {
         true
@@ -290,24 +272,64 @@ impl<T: Stop + ?Sized> Stop for alloc::sync::Arc<T> {
     }
 }
 
+impl<'a> dyn Stop + 'a {
+    /// This stop, or `None` if it can never stop.
+    ///
+    /// For a loop that checks a `&dyn Stop` often: a stop whose
+    /// [`may_stop`](Stop::may_stop) returns `false`, such as [`Unstoppable`],
+    /// becomes `None`. `Option<&dyn Stop>` implements `Stop` (`None` never
+    /// stops), so each check costs a branch the compiler can hoist out of the
+    /// loop instead of a call. Call it once, before the loop.
+    ///
+    /// "Live" means the stop *can* fire, not that it hasn't: a stop that was
+    /// cancelled is still live, and checking it returns the stop.
+    ///
+    /// ```rust
+    /// use enough::{Stop, StopReason, Unstoppable};
+    ///
+    /// fn decode(rows: &[u8], stop: &dyn Stop) -> Result<usize, StopReason> {
+    ///     let stop = stop.live();
+    ///     for _ in rows {
+    ///         stop.check()?; // a branch, not a call, for Unstoppable
+    ///     }
+    ///     Ok(rows.len())
+    /// }
+    ///
+    /// assert!((&Unstoppable as &dyn Stop).live().is_none());
+    /// assert_eq!(decode(&[1, 2, 3], &Unstoppable), Ok(3));
+    /// ```
+    ///
+    /// Generic code (`impl Stop`) doesn't need it: there `Unstoppable`'s
+    /// checks inline to nothing.
+    #[inline]
+    pub fn live(&self) -> Option<&Self> {
+        self.may_stop().then_some(self)
+    }
+}
+
+impl<'a> dyn Stop + Send + 'a {
+    /// This stop, or `None` if it can never stop; see
+    /// [`live`](Stop#method.live).
+    #[inline]
+    pub fn live(&self) -> Option<&Self> {
+        self.may_stop().then_some(self)
+    }
+}
+
+impl<'a> dyn Stop + Send + Sync + 'a {
+    /// This stop, or `None` if it can never stop; see
+    /// [`live`](Stop#method.live).
+    #[inline]
+    pub fn live(&self) -> Option<&Self> {
+        self.may_stop().then_some(self)
+    }
+}
+
 /// `Option<T>` implements `Stop`: `None` is a no-op (always `Ok(())`),
 /// `Some(inner)` delegates to the inner stop.
 ///
-/// This enables the [`may_stop()`](Stop::may_stop) pattern for hot loops:
-///
-/// ```rust
-/// use enough::{Stop, StopReason, Unstoppable};
-///
-/// fn hot_loop(stop: &dyn Stop) -> Result<(), StopReason> {
-///     let stop = stop.may_stop().then_some(stop);
-///     for i in 0..1000 {
-///         stop.check()?; // None → Ok(()), Some → delegates
-///     }
-///     Ok(())
-/// }
-///
-/// assert!(hot_loop(&Unstoppable).is_ok());
-/// ```
+/// This is what [`live`](Stop#method.live) returns: a hot loop checks the
+/// `Option` and pays a branch instead of a call when the stop can never stop.
 impl<T: Stop> Stop for Option<T> {
     #[inline]
     #[track_caller]
@@ -461,15 +483,41 @@ mod tests {
     }
 
     #[test]
-    fn may_stop_hot_loop_pattern() {
+    fn live_is_none_only_for_stops_that_can_never_stop() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        struct Flag(AtomicBool);
+        impl Stop for Flag {
+            fn check(&self) -> Result<(), StopReason> {
+                if self.0.load(Ordering::Relaxed) {
+                    Err(StopReason::Cancelled)
+                } else {
+                    Ok(())
+                }
+            }
+        }
         fn process(stop: &dyn Stop) -> Result<(), StopReason> {
-            let stop = stop.may_stop().then_some(stop);
+            let stop = stop.live();
             for _ in 0..100 {
                 stop.check()?;
             }
             Ok(())
         }
 
+        assert!((&Unstoppable as &dyn Stop).live().is_none());
         assert!(process(&Unstoppable).is_ok());
+        let flag = Flag(AtomicBool::new(false));
+        assert!((&flag as &dyn Stop).live().is_some());
+        assert!(process(&flag).is_ok());
+        // Cancelled is still live: live means "can stop", not "has not".
+        flag.0.store(true, Ordering::Relaxed);
+        let live = (&flag as &dyn Stop).live();
+        assert!(live.is_some());
+        assert_eq!(live.check(), Err(StopReason::Cancelled));
+        assert_eq!(process(&flag), Err(StopReason::Cancelled));
+        // The Send and Send + Sync spellings are distinct types.
+        let send: &(dyn Stop + Send) = &Unstoppable;
+        let both: &(dyn Stop + Send + Sync) = &flag;
+        assert!(send.live().is_none());
+        assert!(both.live().is_some());
     }
 }
