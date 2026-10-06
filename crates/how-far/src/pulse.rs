@@ -282,101 +282,35 @@ pub trait Pulse: Stop + Report {
 // so generic and owned code can hold any pulse. Checkpoints recognize only
 // `&NoPulse` itself, so `&&NoPulse` works but pays for its calls.
 
-impl<P: Pulse + ?Sized> Pulse for &P {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        (**self).record_issue(error);
-    }
-    #[inline]
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        (**self).split(execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        (**self).start()
-    }
-    fn set_total(&self, total: Total) -> Result<(), PlanError> {
-        (**self).set_total(total)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        (**self).share()
-    }
+/// Forward every `Pulse` method through a pointer-like wrapper.
+macro_rules! forward_pulse {
+    ($($wrapper:ty),*) => {$(
+        impl<P: Pulse + ?Sized> Pulse for $wrapper {
+            #[track_caller]
+            fn record_issue(&self, error: PlanError) {
+                (**self).record_issue(error);
+            }
+            #[inline]
+            fn split(
+                &self,
+                execution: Execution,
+                parts: &[PhaseSpec<'_>],
+            ) -> Result<Vec<Child<'_>>, PlanError> {
+                (**self).split(execution, parts)
+            }
+            fn start(&self) -> Result<(), PlanError> {
+                (**self).start()
+            }
+            fn set_total(&self, total: Total) -> Result<(), PlanError> {
+                (**self).set_total(total)
+            }
+            fn share(&self) -> Result<SharedPulse, PlanError> {
+                (**self).share()
+            }
+        }
+    )*};
 }
-
-impl<P: Pulse + ?Sized> Pulse for &mut P {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        (**self).record_issue(error);
-    }
-    #[inline]
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        (**self).split(execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        (**self).start()
-    }
-    fn set_total(&self, total: Total) -> Result<(), PlanError> {
-        (**self).set_total(total)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        (**self).share()
-    }
-}
-
-impl<P: Pulse + ?Sized> Pulse for Box<P> {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        (**self).record_issue(error);
-    }
-    #[inline]
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        (**self).split(execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        (**self).start()
-    }
-    fn set_total(&self, total: Total) -> Result<(), PlanError> {
-        (**self).set_total(total)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        (**self).share()
-    }
-}
-
-impl<P: Pulse + ?Sized> Pulse for Arc<P> {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        (**self).record_issue(error);
-    }
-    #[inline]
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        (**self).split(execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        (**self).start()
-    }
-    fn set_total(&self, total: Total) -> Result<(), PlanError> {
-        (**self).set_total(total)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        (**self).share()
-    }
-}
+forward_pulse!(&P, &mut P, Box<P>, Arc<P>);
 
 /// What a pulse's children add: publishing a terminal outcome.
 ///
@@ -499,14 +433,23 @@ impl dyn Pulse + '_ {
             Ok(children) if children.len() == parts.len() => children,
             Ok(_) => {
                 self.record_issue(PlanError::Unsupported);
-                parts.iter().map(|_| Child::untracked(self)).collect()
+                untracked_children(self, parts.len())
             }
             Err(error) => {
                 self.record_issue(error);
-                parts.iter().map(|_| Child::untracked(self)).collect()
+                untracked_children(self, parts.len())
             }
         }
     }
+}
+
+/// `count` unobserved children that all check `parent`'s stop policy.
+pub(crate) fn untracked_children(parent: &dyn Pulse, count: usize) -> Vec<Child<'_>> {
+    let mut children = Vec::with_capacity(count);
+    for _ in 0..count {
+        children.push(Child::untracked(parent));
+    }
+    children
 }
 
 struct Untracked<P> {
@@ -530,10 +473,11 @@ impl<P: Pulse> Report for Untracked<P> {
 impl<P: Pulse> Pulse for Untracked<P> {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         PhaseSpec::validate_split(parts)?;
-        Ok(parts
-            .iter()
-            .map(|_| Child::untracked(&self.inner))
-            .collect())
+        Ok(untracked_children(&self.inner, parts.len()))
+    }
+    /// Nobody observes an untracked phase, as with `NoPulse`.
+    fn set_total(&self, _: Total) -> Result<(), PlanError> {
+        Ok(())
     }
     fn share(&self) -> Result<SharedPulse, PlanError> {
         Ok(SharedPulse::new(Untracked {

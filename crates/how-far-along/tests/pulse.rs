@@ -15,62 +15,6 @@ fn pool(n: usize) -> Execution {
     Execution::work_pool(NonZeroUsize::new(n).unwrap())
 }
 
-/// A library that plans a serial → fork-join → serial structure by hand.
-fn nested_operation(pulse: &dyn Pulse) -> Result<(), StopReason> {
-    pulse.check()?;
-    let [before, middle, after] = pulse
-        .split_array(
-            Execution::Sequence,
-            [
-                PhaseSpec::new("before", 35, Total::Exact(1)),
-                PhaseSpec::new("middle", 30, Total::Unknown),
-                PhaseSpec::new("after", 35, Total::Exact(1)),
-            ],
-        )
-        .unwrap();
-    let [quick, slow] = middle
-        .split_array(
-            Execution::ForkJoin,
-            [
-                PhaseSpec::new("quick", 1, Total::Exact(1)),
-                PhaseSpec::new("slow", 1, Total::Exact(100)),
-            ],
-        )
-        .unwrap();
-    before.step(1)?;
-    before.finish(Outcome::Succeeded).unwrap();
-    std::thread::scope(|scope| {
-        scope.spawn(move || {
-            quick.check().unwrap();
-            quick.step(1).unwrap();
-            quick.finish(Outcome::Succeeded).unwrap();
-        });
-        scope.spawn(move || {
-            slow.check().unwrap();
-            slow.step(100).unwrap();
-            slow.finish(Outcome::Succeeded).unwrap();
-        });
-    });
-    middle.finish(Outcome::Succeeded).unwrap();
-    after.step(1)?;
-    after.finish(Outcome::Succeeded).unwrap();
-    Ok(())
-}
-
-#[test]
-fn one_dyn_pulse_carries_nested_parallel_progress() {
-    let tree = tree();
-    let observer = tree.observer();
-    nested_operation(&tree).unwrap();
-    // The library never finishes the pulse it was given.
-    assert_eq!(observer.snapshot().status, Status::Running);
-    tree.finish(Outcome::Succeeded).unwrap();
-    let snapshot = observer.snapshot();
-    assert_eq!(snapshot.status, Status::Finished(Outcome::Succeeded));
-    assert_eq!(snapshot.fraction(), Some(1.0));
-    assert_eq!(snapshot.children[1].children[1].completed, 100);
-}
-
 #[test]
 fn scoped_workers_share_one_stage_in_a_serial_parallel_serial_plan() {
     let tree = tree();
@@ -133,44 +77,6 @@ fn scoped_workers_share_one_stage_in_a_serial_parallel_serial_plan() {
 }
 
 #[test]
-fn rayon_chunks_share_one_stage_without_a_child_per_worker() {
-    use rayon::prelude::*;
-
-    let tree = PulseTree::new(Phase::new("encode", Total::Unknown), Unstoppable);
-    let observer = tree.observer();
-    let mut stages = TryStages::new(
-        &tree,
-        &[
-            PhaseSpec::new("prepare", 35, Total::Exact(1)),
-            PhaseSpec::new("encode chunks", 30, Total::Exact(16)).execution(pool(4)),
-            PhaseSpec::new("write", 35, Total::Exact(1)),
-        ],
-    )
-    .unwrap();
-    stages.run_stoppable(|stage| stage.step(1)).unwrap();
-    let workers = rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build()
-        .unwrap();
-    stages
-        .run_stoppable(|stage| {
-            workers.install(|| {
-                [1_u64, 4, 2, 9].par_iter().try_for_each(|&units| {
-                    stage.check()?;
-                    stage.step(units)
-                })
-            })
-        })
-        .unwrap();
-    stages.run_stoppable(|stage| stage.step(1)).unwrap();
-    stages.finish().unwrap();
-    tree.finish(Outcome::Succeeded).unwrap();
-    let final_state = observer.snapshot();
-    assert_eq!(final_state.children[1].completed, 16);
-    assert_eq!(final_state.fraction(), Some(1.0));
-}
-
-#[test]
 fn the_first_report_ends_planning_and_a_dropped_child_is_abandoned() {
     let tree = PulseTree::new(Phase::new("job", Total::Exact(2)), Unstoppable);
     tree.step(1).unwrap();
@@ -184,7 +90,7 @@ fn the_first_report_ends_planning_and_a_dropped_child_is_abandoned() {
     );
     tree.finish(Outcome::Succeeded).unwrap();
 
-    let tree = tree_named("job");
+    let tree = self::tree();
     let observer = tree.observer();
     let children = tree
         .split(
@@ -203,10 +109,6 @@ fn the_first_report_ends_planning_and_a_dropped_child_is_abandoned() {
         observer.snapshot().status,
         Status::Finished(Outcome::Succeeded)
     );
-}
-
-fn tree_named(name: &str) -> PulseTree {
-    PulseTree::new(Phase::new(name, Total::Unknown), Unstoppable)
 }
 
 #[test]

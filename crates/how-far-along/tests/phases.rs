@@ -217,7 +217,7 @@ fn unknown_subtree_keeps_reserved_budget_and_failures_do_not_discharge_it() {
 }
 
 #[test]
-fn a_tree_and_no_pulse_reject_an_invalid_plan_with_the_same_error() {
+fn an_invalid_plan_fails_as_no_pulse_does_and_changes_nothing() {
     use how_far_along::{NoPulse, Pulse};
     let plans: [&[PhaseSpec<'_>]; 4] = [
         &[],
@@ -233,37 +233,12 @@ fn a_tree_and_no_pulse_reject_an_invalid_plan_with_the_same_error() {
             PhaseSpec::new("zero", 0, Total::Unknown),
         ],
     ];
+    let mut job = Phase::new("plan", Total::Unknown);
     for parts in plans {
-        let tree = Phase::new("plan", Total::Unknown).split_vec(Execution::Sequence, parts);
         let no_pulse = NoPulse.split(Execution::Sequence, parts);
+        let tree = job.split_vec(Execution::Sequence, parts);
         assert_eq!(tree.err(), no_pulse.err(), "{parts:?}");
     }
-}
-
-#[test]
-fn invalid_plan_is_transactional_and_units_cannot_change_after_use() {
-    let mut job = Phase::new("plan", Total::Unknown);
-    assert!(matches!(
-        job.split(Execution::Sequence, []),
-        Err(PlanError::EmptyOrZeroWeight)
-    ));
-    assert!(matches!(
-        job.split(
-            Execution::Sequence,
-            [PhaseSpec::new("zero", 0, Total::Unknown)]
-        ),
-        Err(PlanError::EmptyOrZeroWeight)
-    ));
-    assert!(matches!(
-        job.split(
-            Execution::Sequence,
-            [
-                PhaseSpec::new("a", u64::MAX, Total::Unknown),
-                PhaseSpec::new("b", 1, Total::Unknown)
-            ]
-        ),
-        Err(PlanError::Overflow)
-    ));
     job.set_units("bytes").unwrap();
     let _reporter = job.reporter();
     assert_eq!(job.set_units("rows"), Err(PlanError::AlreadyInUse));

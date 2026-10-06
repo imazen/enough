@@ -1,7 +1,5 @@
 //! A pulse made from a cancellation policy alone.
-use crate::{
-    Child, ChildPulse, Execution, Outcome, PhaseSpec, PlanError, Pulse, Report, SharedPulse, Total,
-};
+use crate::{Child, Execution, PhaseSpec, PlanError, Pulse, Report, SharedPulse, Total};
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt;
 use enough::{Stop, StopReason};
@@ -109,13 +107,9 @@ impl Report for StopOnly<'_> {
 impl Pulse for StopOnly<'_> {
     fn split(&self, _: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
         PhaseSpec::validate_split(parts)?;
-        let mut children = Vec::with_capacity(parts.len());
-        for _ in parts {
-            children.push(Child::new(StopOnly {
-                stop: self.stop.clone(),
-            }));
-        }
-        Ok(children)
+        // Untracked children check this token at every level and share
+        // through it.
+        Ok(crate::pulse::untracked_children(self, parts.len()))
     }
     /// Nobody observes the total, so a revision is accepted and discarded.
     fn set_total(&self, _: Total) -> Result<(), PlanError> {
@@ -125,11 +119,5 @@ impl Pulse for StopOnly<'_> {
         Ok(SharedPulse::new(StopOnly {
             stop: StopSource::Owned(self.stop.owned()?),
         }))
-    }
-}
-
-impl ChildPulse for StopOnly<'_> {
-    fn finish(self: alloc::boxed::Box<Self>, _: Outcome) -> Result<(), PlanError> {
-        Ok(())
     }
 }

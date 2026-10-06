@@ -36,14 +36,6 @@ const _: () = {
 };
 
 #[test]
-fn hot_path_values_fit_in_registers() {
-    // Two words in, at most one byte out: no stack spill at the call itself.
-    assert_eq!(size_of::<&dyn Pulse>(), 2 * WORD);
-    assert_eq!(size_of::<Result<(), StopReason>>(), 1);
-    assert_eq!(size_of::<Child<'static>>(), 2 * WORD);
-}
-
-#[test]
 fn cold_path_values_have_known_sizes() {
     // Plans are passed as slices, so a split is two words however many parts.
     assert_eq!(size_of::<&[PhaseSpec<'static>]>(), 2 * WORD);

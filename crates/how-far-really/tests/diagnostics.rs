@@ -6,7 +6,7 @@ use how_far_along::{
     Execution, Outcome, Phase, PhaseSpec, ProgressExt, Pulse, PulseTree, Report, Stop, StopReason,
     Total, Unstoppable,
 };
-use how_far_really::diagnostics::{DiagnosticPulse, Kind, Options};
+use how_far_really::diagnostics::{DiagnosticPulse, Finding, Kind, Options};
 use how_far_really::profile::{Clock, Profiler, SpanKind, Trace};
 use std::{
     num::NonZeroUsize,
@@ -122,11 +122,7 @@ fn sequential_weights_produce_a_copyable_candidate_but_overlapping_branches_do_n
     let trace = profiler
         .snapshot()
         .with_progress(root.observer().snapshot());
-    let findings = trace.diagnose(&Options::default());
-    let weights = findings
-        .iter()
-        .find(|f| f.kind == Kind::StageWeights)
-        .unwrap();
+    let weights = find(&trace, Kind::StageWeights).unwrap();
     let code = weights.sample_code.as_ref().unwrap();
     assert!(code.contains("PhaseSpec::new(\"prepare\", 10, Total::Exact(1)).units(\"rows\")"));
     assert!(code.contains("PhaseSpec::new(\"encode\", 90, Total::Exact(1)).execution(Execution::work_pool(NonZeroUsize::new(4).unwrap()))"));
@@ -134,12 +130,7 @@ fn sequential_weights_produce_a_copyable_candidate_but_overlapping_branches_do_n
     // The same data cannot justify serial weights if the declared stages overlap.
     let mut overlap = trace.clone();
     overlap.spans[1].start = ms(5);
-    assert!(
-        !overlap
-            .diagnose(&Options::default())
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert_eq!(stage_weights(&overlap), None);
 }
 
 #[test]
@@ -183,13 +174,8 @@ fn a_poller_callback_can_time_its_lazy_snapshot_work() {
         });
     });
     poller.poll();
-    assert!(
-        profiler
-            .snapshot()
-            .diagnose(&Options::default())
-            .iter()
-            .any(|f| f.kind == Kind::CallbackDuration && f.evidence.contains("12.00 ms"))
-    );
+    let duration = find(&profiler.snapshot(), Kind::CallbackDuration).unwrap();
+    assert!(duration.evidence.contains("12.00 ms"));
 }
 
 #[test]
@@ -244,12 +230,7 @@ fn a_library_is_measured_without_changing_its_signature() {
     assert_eq!(trace.spans.len(), 2);
     assert_eq!(trace.spans[0].node, Some(snapshot.children[0].id));
     assert_eq!(trace.spans[1].node, Some(snapshot.children[1].id));
-    assert!(
-        trace
-            .diagnose(&Options::default())
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert!(stage_weights(&trace).is_some());
 }
 
 #[test]
@@ -308,10 +289,11 @@ fn nested_children_keep_their_node_ids_and_outcomes() {
     );
 }
 
-#[test]
-fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
+/// Stages `before`, a fork-join `middle` whose workers finish at 30 and 80 ms
+/// and which itself finishes at `middle_end`, and `after`, ending at 100 ms.
+fn serial_parallel_serial(middle_end: u64) -> Finding {
     let clock = ManualClock::default();
-    let profiler = Profiler::new(clock.clone(), 6);
+    let profiler = Profiler::new(clock.clone(), 16);
     let measured = DiagnosticPulse::new(tree(), &profiler);
     let observer = measured.observer();
     let [before, middle, after] = measured
@@ -346,6 +328,7 @@ fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
     clock.set(80);
     slow.step(1).unwrap();
     slow.finish(Outcome::Succeeded).unwrap();
+    clock.set(middle_end);
     middle.finish(Outcome::Succeeded).unwrap();
 
     after.check().unwrap();
@@ -354,18 +337,28 @@ fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
     after.finish(Outcome::Succeeded).unwrap();
     measured.finish(Outcome::Succeeded).unwrap();
     let trace = profiler.snapshot().with_progress(observer.snapshot());
-    let weights = trace
-        .diagnose(&Options::default())
-        .into_iter()
-        .find(|finding| finding.kind == Kind::StageWeights)
-        .unwrap();
+    find(&trace, Kind::StageWeights).unwrap()
+}
+
+#[test]
+fn serial_parallel_serial_weights_use_the_parallel_subtree_wall_window() {
+    let weights = serial_parallel_serial(80);
     assert!(weights.evidence.contains("[10, 70, 20]"));
+    let code = weights.sample_code.unwrap();
+    assert!(code.contains("PhaseSpec::new(\"middle\", 70, Total::Unknown)"));
+}
+
+#[test]
+fn audit_nested_stage_includes_coordination_after_children() {
+    // Ten ms of parent coordination after the workers finish.
+    let weights = serial_parallel_serial(90);
     assert!(
-        weights
-            .sample_code
-            .unwrap()
-            .contains("PhaseSpec::new(\"middle\", 70, Total::Unknown)")
+        weights.evidence.contains("[10, 80, 10]"),
+        "{}",
+        weights.evidence
     );
+    let code = weights.sample_code.unwrap();
+    assert!(code.contains("PhaseSpec::new(\"middle\", 80, Total::Unknown)"));
 }
 
 /// Run sequential `(name, weight, end_ms)` stages whose only checkpoint is a
@@ -427,10 +420,10 @@ fn a_succeeded_stage_without_any_checkpoint_still_has_a_span() {
     assert_eq!(trace.spans.len(), 1);
     assert_eq!(trace.spans[0].elapsed(), ms(25));
     assert!(
-        trace
-            .diagnose(&Options::default())
-            .iter()
-            .any(|f| f.kind == Kind::StopGap && f.evidence.contains("25.00 ms"))
+        find(&trace, Kind::StopGap)
+            .unwrap()
+            .evidence
+            .contains("25.00 ms")
     );
 }
 
@@ -441,39 +434,20 @@ fn a_near_zero_stage_keeps_its_declared_weight_instead_of_driving_advice() {
     // flush took 0.1% of the run; a 99/1 candidate would be noise.
     let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1001)]);
     assert_eq!(trace.spans[1].elapsed(), ms(1));
-    assert!(
-        !trace
-            .diagnose(&options)
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert!(!kinds(&trace, &options).contains(&Kind::StageWeights));
     // Without the floor, the noise-driven candidate comes back.
     options.negligible_stage_share = 0.0;
-    assert!(
-        trace
-            .diagnose(&options)
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert!(kinds(&trace, &options).contains(&Kind::StageWeights));
     options.negligible_stage_share = Options::default().negligible_stage_share;
     // The same stage at a measurable share still gets advice.
     let trace = staged(&[("frames", 9, 1000), ("flush", 1, 1500)]);
-    assert!(
-        trace
-            .diagnose(&options)
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert!(kinds(&trace, &options).contains(&Kind::StageWeights));
 }
 
 #[test]
 fn other_stages_are_recalibrated_around_a_held_negligible_stage() {
     let trace = staged(&[("a", 40, 100), ("b", 50, 1090), ("c", 10, 1100)]);
-    let finding = trace
-        .diagnose(&Options::default())
-        .into_iter()
-        .find(|f| f.kind == Kind::StageWeights)
-        .unwrap();
+    let finding = find(&trace, Kind::StageWeights).unwrap();
     assert!(finding.evidence.contains("keeps its declared share"));
     let code = finding.sample_code.unwrap();
     assert!(code.contains("PhaseSpec::new(\"c\", 10, Total::Exact(1))"));
@@ -483,12 +457,7 @@ fn other_stages_are_recalibrated_around_a_held_negligible_stage() {
 #[test]
 fn a_negligible_stage_that_owns_most_of_the_bar_is_still_reported() {
     let trace = staged(&[("work", 10, 1000), ("tail", 90, 1001)]);
-    assert!(
-        trace
-            .diagnose(&Options::default())
-            .iter()
-            .any(|f| f.kind == Kind::StageWeights)
-    );
+    assert!(stage_weights(&trace).is_some());
 }
 
 #[test]
@@ -703,85 +672,23 @@ fn diagnose(measured: DiagnosticPulse, profiler: &Profiler) -> (Trace, Vec<Kind>
     let observer = measured.observer();
     measured.finish(Outcome::Succeeded).unwrap();
     let trace = profiler.snapshot().with_progress(observer.snapshot());
-    let kinds = trace
-        .diagnose(&Options::default())
-        .iter()
-        .map(|f| f.kind)
-        .collect();
+    let kinds = kinds(&trace, &Options::default());
     (trace, kinds)
 }
 
-fn stage_weights(trace: &Trace) -> Option<String> {
+fn kinds(trace: &Trace, options: &Options) -> Vec<Kind> {
+    trace.diagnose(options).iter().map(|f| f.kind).collect()
+}
+
+fn find(trace: &Trace, kind: Kind) -> Option<Finding> {
     trace
         .diagnose(&Options::default())
         .into_iter()
-        .find(|f| f.kind == Kind::StageWeights)
-        .map(|f| f.evidence)
+        .find(|f| f.kind == kind)
 }
 
-#[test]
-fn audit_nested_stage_includes_coordination_after_children() {
-    let clock = ManualClock::default();
-    let profiler = Profiler::new(clock.clone(), 16);
-    let measured = DiagnosticPulse::new(tree(), &profiler);
-    let observer = measured.observer();
-    let [before, middle, after] = measured
-        .split_array(
-            Execution::Sequence,
-            [
-                PhaseSpec::new("before", 33, Total::Exact(1)),
-                PhaseSpec::new("middle", 34, Total::Unknown),
-                PhaseSpec::new("after", 33, Total::Exact(1)),
-            ],
-        )
-        .unwrap();
-    before.check().unwrap();
-    clock.set(10);
-    before.step(1).unwrap();
-    before.finish(Outcome::Succeeded).unwrap();
-
-    let [quick, slow] = middle
-        .split_array(
-            Execution::ForkJoin,
-            [
-                PhaseSpec::new("quick", 1, Total::Exact(1)),
-                PhaseSpec::new("slow", 1, Total::Exact(1)),
-            ],
-        )
-        .unwrap();
-    quick.check().unwrap();
-    slow.check().unwrap();
-    clock.set(30);
-    quick.step(1).unwrap();
-    quick.finish(Outcome::Succeeded).unwrap();
-    clock.set(80);
-    slow.step(1).unwrap();
-    slow.finish(Outcome::Succeeded).unwrap();
-    clock.set(90); // ten ms of parent coordination after the workers finish
-    middle.finish(Outcome::Succeeded).unwrap();
-
-    after.check().unwrap();
-    clock.set(100);
-    after.step(1).unwrap();
-    after.finish(Outcome::Succeeded).unwrap();
-    measured.finish(Outcome::Succeeded).unwrap();
-    let trace = profiler.snapshot().with_progress(observer.snapshot());
-    let weights = trace
-        .diagnose(&Options::default())
-        .into_iter()
-        .find(|finding| finding.kind == Kind::StageWeights)
-        .unwrap();
-    assert!(
-        weights.evidence.contains("[10, 80, 10]"),
-        "{}",
-        weights.evidence
-    );
-    assert!(
-        weights
-            .sample_code
-            .unwrap()
-            .contains("PhaseSpec::new(\"middle\", 80, Total::Unknown)")
-    );
+fn stage_weights(trace: &Trace) -> Option<String> {
+    find(trace, Kind::StageWeights).map(|f| f.evidence)
 }
 
 #[test]
@@ -819,27 +726,7 @@ fn a_root_that_checks_on_entry_and_then_splits_is_not_silent() {
 
 #[test]
 fn held_negligible_stages_cannot_hide_a_misweighted_bar() {
-    let clock = ManualClock::default();
-    let profiler = Profiler::new(clock.clone(), 8);
-    let measured = DiagnosticPulse::new(tree(), &profiler);
-    let mut stages = Stages::new(
-        &measured,
-        &[
-            PhaseSpec::new("a", 45, Total::Exact(1)),
-            PhaseSpec::new("b", 45, Total::Exact(1)),
-            PhaseSpec::new("c", 10, Total::Exact(1)),
-        ],
-    );
-    for end in [10, 20, 1000] {
-        stages
-            .run(|stage| {
-                clock.set(end);
-                stage.step(1)
-            })
-            .unwrap();
-    }
-    stages.complete_as(Outcome::Succeeded);
-    let (trace, _) = diagnose(measured, &profiler);
+    let trace = staged(&[("a", 45, 10), ("b", 45, 20), ("c", 10, 1000)]);
     // Held stages may own at most half the bar together, so only one 45%
     // stage keeps its share and the misweighting is still reported.
     let evidence = stage_weights(&trace).expect("90% of the bar on 2% of the time");
@@ -885,11 +772,7 @@ fn a_branch_stage_is_timed_from_entry_to_exit() {
     // 40 ms each, as planned.
     assert_eq!(stage_weights(&trace), None);
     // The 30 ms of setup before the split is the stage's own silence.
-    let gap = trace
-        .diagnose(&Options::default())
-        .into_iter()
-        .find(|f| f.kind == Kind::StopGap)
-        .expect("setup without a check");
+    let gap = find(&trace, Kind::StopGap).expect("setup without a check");
     assert!(gap.evidence.contains("\"a\": 30.00 ms"), "{}", gap.evidence);
     assert!(!kinds.contains(&Kind::IncompleteEvidence));
 }
@@ -964,26 +847,7 @@ fn a_leaf_that_checks_but_never_reports_has_a_report_gap() {
 
 #[test]
 fn a_stage_within_one_clock_tick_still_gets_weight_advice() {
-    let clock = ManualClock::default();
-    let profiler = Profiler::new(clock.clone(), 8);
-    let measured = DiagnosticPulse::new(tree(), &profiler);
-    let mut stages = Stages::new(
-        &measured,
-        &[
-            PhaseSpec::new("frames", 10, Total::Exact(1)),
-            PhaseSpec::new("flush", 90, Total::Exact(1)),
-        ],
-    );
-    for end in [1000, 1000] {
-        stages
-            .run(|stage| {
-                clock.set(end);
-                stage.step(1)
-            })
-            .unwrap();
-    }
-    stages.complete_as(Outcome::Succeeded);
-    let (trace, _) = diagnose(measured, &profiler);
+    let trace = staged(&[("frames", 10, 1000), ("flush", 90, 1000)]);
     let evidence = stage_weights(&trace).expect("flush owns 90% of the bar but no time");
     assert!(evidence.contains("[99, 1]"), "{evidence}");
 }
@@ -1000,12 +864,7 @@ fn a_cancellation_after_the_operation_returned_is_not_unobserved() {
     profiler.operation_returned();
     clock.set(50);
     profiler.cancellation_requested();
-    let kinds: Vec<_> = profiler
-        .snapshot()
-        .diagnose(&Options::default())
-        .iter()
-        .map(|f| f.kind)
-        .collect();
+    let kinds = kinds(&profiler.snapshot(), &Options::default());
     assert!(!kinds.contains(&Kind::UnobservedCancellation), "{kinds:?}");
 }
 
@@ -1022,11 +881,6 @@ fn callback_cadence_ignores_idle_time_between_operations() {
         }
         work.finish(Outcome::Succeeded);
     }
-    let kinds: Vec<_> = profiler
-        .snapshot()
-        .diagnose(&Options::default())
-        .iter()
-        .map(|f| f.kind)
-        .collect();
+    let kinds = kinds(&profiler.snapshot(), &Options::default());
     assert!(!kinds.contains(&Kind::CallbackInterval), "{kinds:?}");
 }

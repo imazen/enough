@@ -4,6 +4,16 @@ version = "0.0.0"
 edition.workspace = true
 rust-version = "1.88"
 publish = false
+description = "A library that calls the example codec inside its own how-far stages"
+
+[features]
+default = ["std", "adapters"]
+# Parallel batch processing on Rayon.
+std = ["how-far-example-codec/std", "dep:rayon"]
+# A library-local stop source combined with the caller's pulse.
+adapters = ["how-far/adapters"]
+
 [dependencies]
-how-far = { workspace = true, features = ["adapters"] }
-how-far-example-codec = { path = "../how-far-codec" }
+how-far.workspace = true
+how-far-example-codec = { path = "../how-far-codec", default-features = false }
+rayon = { version = "1.12.0", optional = true }

@@ -65,4 +65,4 @@ document under `progress`. Node/span identifiers are local to the process/trace.
 Times and unit totals are strings, to avoid JavaScript precision loss; call
 counts and identifiers are JSON numbers.
 See the [example crates](../../examples/how-far-app/README.md) and
-[API boundaries](../../docs/how-far-api.md).
+[design and API boundaries](../../docs/how-far-design.md).

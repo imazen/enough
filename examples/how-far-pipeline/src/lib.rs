@@ -1,20 +1,32 @@
-//! A second library nests the codec without depending on a tracker or diagnostics.
-#![no_std]
+//! A second library that calls the codec inside its own stages, through one
+//! `&dyn Pulse`, without depending on a tracker or diagnostics.
+#![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 extern crate alloc;
+
 use alloc::vec::Vec;
 use how_far::{Execution, PhaseSpec, Phases, Stages, StopReason, Total, prelude::*};
 use how_far_example_codec::{self as codec, Mode};
 
+/// The pipeline's own error, which keeps the codec's error intact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-    Codec(codec::Error),
+    /// An image failed or stopped inside the codec.
+    Codec {
+        /// The image's position in the batch.
+        image: usize,
+        /// The codec's error.
+        error: codec::Error,
+    },
+    /// A stop request between images.
     Stopped(StopReason),
+    /// Input the pipeline rejects itself.
     Invalid(&'static str),
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Codec(error) => write!(f, "decoding failed: {error}"),
+            Self::Codec { image, error } => write!(f, "image {image}: {error}"),
             Self::Stopped(reason) => reason.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
@@ -23,14 +35,9 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::Codec(error) => Some(error),
+            Self::Codec { error, .. } => Some(error),
             _ => None,
         }
-    }
-}
-impl From<codec::Error> for Error {
-    fn from(error: codec::Error) -> Self {
-        Self::Codec(error)
     }
 }
 impl From<StopReason> for Error {
@@ -43,14 +50,18 @@ impl IsStop for Error {
         match self {
             Self::Stopped(reason) => Some(*reason),
             // Classification delegates to the nested library's own error.
-            Self::Codec(error) => error.stop_reason(),
+            Self::Codec { error, .. } => error.stop_reason(),
             Self::Invalid(_) => None,
         }
     }
 }
 
-/// `complete_with` hands the whole body's result to the plan, so an early `?`
-/// cannot bypass the final handoff.
+fn codec_error(image: usize) -> impl Fn(codec::Error) -> Error {
+    move |error| Error::Codec { image, error }
+}
+
+/// Decode, transform, and optionally sharpen. `complete_with` hands the whole
+/// body's result to the plan, so an early `?` cannot bypass the handoff.
 pub fn convert(
     input: &[u8],
     pulse: &dyn Pulse,
@@ -66,7 +77,7 @@ pub fn convert(
         ],
     )
     .complete_with(|stages| {
-        let mut pixels = stages.run(|p| codec::decode(input, p, mode).map_err(Error::from))?;
+        let mut pixels = stages.run(|p| codec::decode(input, p, mode).map_err(codec_error(0)))?;
         stages.run(|p| {
             p.check()?;
             let mut paced = p.paced(64);
@@ -74,10 +85,10 @@ pub fn convert(
                 *pixel ^= 0xff;
                 paced.step(1)?;
             }
-            paced.finish().map_err(Error::from)
+            Ok::<_, Error>(paced.finish()?)
         })?;
         if sharpen {
-            stages.run(|p| p.step(1).map_err(Error::from))?;
+            stages.run(|p| Ok::<_, Error>(p.step(1)?))?;
         }
         Ok(pixels)
     })
@@ -85,6 +96,7 @@ pub fn convert(
 
 /// Keep the caller's stage and cancellation, adding a library-local stop source.
 /// Both are borrowed, so a stack-local token or caller-supplied `&dyn Stop` works.
+#[cfg(feature = "adapters")]
 pub fn convert_with_stop(
     input: &[u8],
     pulse: &dyn Pulse,
@@ -94,6 +106,83 @@ pub fn convert_with_stop(
 ) -> Result<Vec<u8>, Error> {
     let pulse = how_far::WithStop::borrowed(pulse, additional_stop);
     convert(input, &pulse, mode, sharpen)
+}
+
+/// Encode images one after another, each inside its own stage.
+pub fn process_each(images: &[codec::Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>, Error> {
+    let names: Vec<_> = (0..images.len())
+        .map(|i| alloc::format!("image {i}"))
+        .collect();
+    let parts: Vec<_> = names
+        .iter()
+        .zip(images)
+        .map(|(name, image)| PhaseSpec::new(name, image.pixels.len().max(1) as u64, Total::Unknown))
+        .collect();
+    Stages::new(pulse, &parts).complete_with(|stages| {
+        let mut encoded = Vec::with_capacity(images.len());
+        for (index, image) in images.iter().enumerate() {
+            encoded
+                .push(stages.run(|stage| codec::encode(image, stage).map_err(codec_error(index)))?);
+        }
+        Ok(encoded)
+    })
+}
+
+/// Validate, encode every image in parallel (a fork-join child per image, on
+/// Rayon, each handed to the codec, which plans its own stages inside it),
+/// then pack.
+#[cfg(feature = "std")]
+pub fn process(images: &[codec::Image], pulse: &dyn Pulse) -> Result<Vec<Vec<u8>>, Error> {
+    use rayon::prelude::*;
+    let pixels: u64 = images.iter().map(|image| image.pixels.len() as u64).sum();
+    Stages::new(
+        pulse,
+        &[
+            PhaseSpec::new("validate", 1, Total::Exact(images.len() as u64)).units("images"),
+            PhaseSpec::new("encode", 20, Total::Unknown),
+            PhaseSpec::new("pack", 1, Total::Exact(pixels)).units("bytes"),
+        ],
+    )
+    .complete_with(|stages| {
+        stages.run(|stage| {
+            for _ in images {
+                stage.step(1)?;
+            }
+            Ok::<_, Error>(())
+        })?;
+        let encoded = stages.run(|stage| {
+            let names: Vec<_> = (0..images.len())
+                .map(|i| alloc::format!("image {i}"))
+                .collect();
+            let parts: Vec<_> = names
+                .iter()
+                .zip(images)
+                .map(|(name, image)| {
+                    PhaseSpec::new(name, image.pixels.len().max(1) as u64, Total::Unknown)
+                })
+                .collect();
+            stage
+                .plan(Execution::ForkJoin, &parts)
+                .into_par_iter()
+                .zip(images.par_iter())
+                .enumerate()
+                .map(|(index, (child, image))| {
+                    child.complete_with(|child| {
+                        codec::encode(image, child).map_err(codec_error(index))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        stages.run(|stage| {
+            for bytes in &encoded {
+                stage.step(bytes.len() as u64)?;
+            }
+            Ok::<_, Error>(())
+        })?;
+        Ok(encoded)
+    })
 }
 
 /// Intentionally incorrect implementations, for the diagnostic demonstration.

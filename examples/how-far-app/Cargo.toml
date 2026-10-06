@@ -4,6 +4,8 @@ version = "0.0.0"
 edition.workspace = true
 rust-version = "1.88"
 publish = false
+description = "Applications driving how-far libraries across crates, threads, pools and runtimes"
+
 [dependencies]
 how-far.workspace = true
 how-far-example-codec = { path = "../how-far-codec" }
@@ -11,3 +13,7 @@ how-far-example-pipeline = { path = "../how-far-pipeline" }
 how-far-along = { workspace = true, features = ["std", "json"] }
 how-far-really.workspace = true
 almost-enough.workspace = true
+
+[dev-dependencies]
+rayon = "1.12.0"
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "sync", "macros"] }

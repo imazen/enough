@@ -54,7 +54,6 @@ jobs:
         run: >-
           cargo test --workspace --exclude how-far --exclude how-far-along --exclude how-far-really
           --exclude how-far-example-codec --exclude how-far-example-pipeline --exclude how-far-example-app
-          --exclude test-how-far-codec --exclude test-how-far-pipeline --exclude test-how-far-app
 
       - name: Test (no default features)
         run: |
@@ -151,6 +150,8 @@ jobs:
           cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features
           cargo build -p how-far-along --target thumbv7em-none-eabihf --no-default-features --features callback,adapters,json
           cargo build -p how-far-along --target wasm32-unknown-unknown --no-default-features --features callback,adapters,json
+          # The example libraries adopt how-far as no_std + alloc codecs do.
+          cargo build -p how-far-example-codec -p how-far-example-pipeline --target thumbv7em-none-eabihf --no-default-features --features how-far-example-pipeline/adapters
 
   # ==========================================================================
   # Feature powerset — verify all feature combinations compile
@@ -238,7 +239,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           cargo test -p how-far --all-features
-          cargo test -p test-how-far-codec -p test-how-far-pipeline -p test-how-far-app
+          cargo test -p how-far-example-codec -p how-far-example-pipeline
           cargo test -p how-far-along --all-features
           cargo test -p how-far-really
           cargo run -p how-far-really --example diagnostics

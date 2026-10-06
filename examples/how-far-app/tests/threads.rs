@@ -2,11 +2,12 @@
 //! cancellation that crosses threads.
 
 use almost_enough::Stopper;
-use how_far_along::{Outcome, ProgressExt, Pulse, Status, Unstoppable};
+use how_far_along::{IsStop, Outcome, ProgressExt, Pulse, Status, Unstoppable};
 use std::{sync::Arc, thread, time::Duration};
-use test_how_far_app::{all, find, images, tree, tree_stopping_when};
-use test_how_far_codec::{CodecError, Image, encode_detached, encode_groups};
-use test_how_far_pipeline::{PipelineError, process_each};
+mod common;
+use common::{all, find, images, tree, tree_stopping_when};
+use how_far_example_codec::{self as codec, Image, encode_detached, encode_groups};
+use how_far_example_pipeline::process_each;
 
 #[test]
 fn scoped_fork_join_children_each_finish_with_their_own_counts() {
@@ -58,7 +59,7 @@ fn a_stop_tripped_on_one_worker_stops_its_siblings() {
     let error = encode_groups(&image, 4, &tracked).unwrap_err();
     assert_eq!(
         error,
-        CodecError::Stopped(how_far_along::StopReason::Cancelled)
+        codec::Error::Stopped(how_far_along::StopReason::Cancelled)
     );
     tracked.finish(Outcome::Cancelled).unwrap();
     let root = observer.snapshot();
@@ -91,9 +92,11 @@ fn an_observer_on_another_thread_sees_monotonic_progress() {
             fractions.push(observer.snapshot().fraction().unwrap());
             fractions
         });
-        let result = test_how_far_codec::encode(&image, &tracked);
+        let result = how_far_example_codec::encode(&image, &tracked);
         tracked
-            .finish(Outcome::from_result(&result, CodecError::is_stop))
+            .finish(Outcome::from_result(&result, |error| {
+                error.stop_reason().is_some()
+            }))
             .unwrap();
         sampler.join().unwrap()
     });
@@ -113,7 +116,9 @@ fn a_tree_moves_into_a_spawned_thread_and_is_observed_from_here() {
     let worker = thread::spawn(move || {
         let result = process_each(&work, &tracked);
         tracked
-            .finish(Outcome::from_result(&result, PipelineError::is_stop))
+            .finish(Outcome::from_result(&result, |error| {
+                error.stop_reason().is_some()
+            }))
             .unwrap();
         result.map(|encoded| encoded.len())
     });
@@ -134,9 +139,11 @@ fn cancel_from_the_main_thread_reaches_workers_on_other_threads() {
     let tracked = tree("long", stop.clone());
     let observer = tracked.observer();
     let worker = thread::spawn(move || {
-        let result = test_how_far_codec::encode(&image, &tracked);
+        let result = how_far_example_codec::encode(&image, &tracked);
         tracked
-            .finish(Outcome::from_result(&result, CodecError::is_stop))
+            .finish(Outcome::from_result(&result, |error| {
+                error.stop_reason().is_some()
+            }))
             .unwrap();
         result.map(|bytes| bytes.len())
     });
@@ -150,7 +157,7 @@ fn cancel_from_the_main_thread_reaches_workers_on_other_threads() {
     stop.cancel();
     assert_eq!(
         worker.join().unwrap(),
-        Err(CodecError::Stopped(how_far_along::StopReason::Cancelled))
+        Err(codec::Error::Stopped(how_far_along::StopReason::Cancelled))
     );
     let root = observer.snapshot();
     assert_eq!(root.status, Status::Finished(Outcome::Cancelled));

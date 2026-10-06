@@ -17,7 +17,5 @@ stop policies (`Unstoppable`, an `AtomicBool`, a stop callback) behind one
 itself, which checkpoints recognize by its address.
 
 Results:
-[`how-far-checkpoint-cost-2026-10-01.md`](../../benchmarks/how-far-checkpoint-cost-2026-10-01.md),
-[`how-far-checkpoint-matrix-2026-10-03.md`](../../benchmarks/how-far-checkpoint-matrix-2026-10-03.md),
-and [`how-far-checkpoint-nopulse-2026-10-03.md`](../../benchmarks/how-far-checkpoint-nopulse-2026-10-03.md).
+[`how-far-2026-10-06.md`](../../benchmarks/how-far-2026-10-06.md).
 CI builds the harness so it keeps compiling; it does not run it.

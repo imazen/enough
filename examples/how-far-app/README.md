@@ -12,11 +12,12 @@ These are three separate crates with real dependency boundaries:
 
 | Crate | Role | Production dependencies |
 | --- | --- | --- |
-| `how-far-example-codec` | Fast decode, optional fallback, own error enum | `how-far` |
-| `how-far-example-pipeline` | Decode → transform → optional sharpen; own outer error | Core + codec |
-| `how-far-example-app` | Chooses cancellation, tracking, diagnostics and final result handoff | Both libraries + all three how-far crates |
+| `how-far-example-codec` | Decode with a fallback attempt; encode with stages, a Rayon stage and a coder that owns its stop; with `std`, scoped fork-join, `'static` workers and recursive `rayon::join` | `how-far` (+ Rayon with `std`) |
+| `how-far-example-pipeline` | Decode → transform → optional sharpen; batches of images, serial or one parallel child per image; intentional mistakes | Core + codec |
+| `how-far-example-app` | Chooses cancellation, tracking, diagnostics and the final handoff; its `tests/` drive both libraries across threads, Rayon pools and Tokio | Both libraries + all three how-far crates |
 
-Both libraries are `no_std + alloc`. Their public signatures expose only core
+Both libraries are `no_std + alloc` with their default `std` feature off, and
+CI builds them that way for Cortex-M. Their public signatures expose only core
 `&dyn Pulse`, ordinary inputs, and their own `Result<T, Error>`. The codec uses
 `Phases` for independently selected attempts; the pipeline uses `Stages` for
 sequential work. Both convert `StopReason` into their own errors for `?`, and

@@ -181,7 +181,7 @@ fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
 
 | Crate | Purpose |
 |-------|---------|
-| [`enough`](https://crates.io/crates/enough) | Core trait: `Stop`, `StopReason`, `Unstoppable` |
+| [`enough`](https://crates.io/crates/enough) | Core traits: `Stop`, `StopReason`, `IsStop`, `Unstoppable` |
 | [`almost-enough`](https://crates.io/crates/almost-enough) | All implementations: `Stopper`, `StopToken`, `StopSource`, timeouts, combinators |
 | [`enough-ffi`](https://crates.io/crates/enough-ffi) | C FFI for cross-language use |
 | [`enough-tokio`](https://crates.io/crates/enough-tokio) | Bridge to tokio's CancellationToken |
@@ -193,7 +193,7 @@ Can't add a dependency? See [`ZERO-DEP.md`](https://github.com/imazen/enough/blo
 
 ## Features
 
-- **None (default)** - `no_std` core: `Stop` trait, `StopReason`, `Unstoppable`
+- **None (default)** - `no_std` core: `Stop` and `IsStop` traits, `StopReason`, `Unstoppable`
 - **`alloc`** - Adds `Box<T>` and `Arc<T>` blanket impls for `Stop`
 - **`std`** - Implies `alloc` (kept for downstream compatibility)
 

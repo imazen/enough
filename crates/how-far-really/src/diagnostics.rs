@@ -23,8 +23,8 @@
 
 use crate::{
     profile::{
-        Profiler, SiteStats, SourceSite, Span, SpanInner, SpanKind, SpanRecord, Trace, advanced,
-        checked, sorted_indices,
+        Profiler, SourceSite, Span, SpanInner, SpanKind, SpanRecord, Trace, advanced, checked,
+        sorted_indices,
     },
     sync::Mutex,
 };
@@ -174,6 +174,14 @@ impl fmt::Display for Finding {
     }
 }
 
+fn finding(kind: Kind, evidence: String, advice: &str) -> Finding {
+    Finding {
+        kind,
+        evidence,
+        advice: advice.into(),
+        sample_code: None,
+    }
+}
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
@@ -227,14 +235,14 @@ fn location(site: Option<SourceSite>, boundary: &str) -> String {
 /// Creating one turns on [`Profiler::set_report_timing`].
 #[must_use = "finish the measured root after its work joins; dropping it unfinished records Abandoned"]
 pub struct DiagnosticPulse {
-    tree: PulseTree,
+    inner: PulseTree,
     meter: MeterOwner,
 }
 
 impl fmt::Debug for DiagnosticPulse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DiagnosticPulse")
-            .field("tree", &self.tree)
+            .field("tree", &self.inner)
             .finish_non_exhaustive()
     }
 }
@@ -244,19 +252,10 @@ impl DiagnosticPulse {
     pub fn new(tree: PulseTree, profiler: &Profiler) -> Self {
         profiler.set_report_timing(true);
         let observer = tree.observer();
+        let name = observer.name().into();
         Self {
-            meter: MeterOwner(Arc::new(Meter {
-                node: observer.id(),
-                name: observer.name().into(),
-                observer,
-                profiler: profiler.clone(),
-                span: Mutex::new(SpanSlot::default()),
-                entered: None,
-                exited: None,
-                has_children: AtomicBool::new(false),
-                closed: AtomicBool::new(false),
-            })),
-            tree,
+            meter: Meter::owner(observer, name, profiler, None, None),
+            inner: tree,
         }
     }
 
@@ -267,8 +266,8 @@ impl DiagnosticPulse {
 
     /// Record the operation's outcome in the tree, and close the root's span.
     pub fn finish(self, outcome: Outcome) -> Result<(), PlanError> {
-        let Self { tree, meter } = self;
-        let result = tree.finish(outcome);
+        let Self { inner, meter } = self;
+        let result = inner.finish(outcome);
         meter.close(if result.is_ok() {
             outcome
         } else {
@@ -281,8 +280,8 @@ impl DiagnosticPulse {
 /// The measurement state shared by the root wrapper and every child.
 struct MeterOwner(Arc<Meter>);
 impl core::ops::Deref for MeterOwner {
-    type Target = Meter;
-    fn deref(&self) -> &Meter {
+    type Target = Arc<Meter>;
+    fn deref(&self) -> &Arc<Meter> {
         &self.0
     }
 }
@@ -295,7 +294,6 @@ struct Meter {
     /// This phase's own node, not the root's.
     observer: Observer,
     profiler: Profiler,
-    node: NodeId,
     name: String,
     span: Mutex<SpanSlot>,
     /// A sequential stage: when it was entered (the previous stage's end).
@@ -326,6 +324,24 @@ impl SpanSlot {
 }
 
 impl Meter {
+    fn owner(
+        observer: Observer,
+        name: String,
+        profiler: &Profiler,
+        entered: Option<Arc<Mutex<Duration>>>,
+        exited: Option<Arc<Mutex<Duration>>>,
+    ) -> MeterOwner {
+        MeterOwner(Arc::new(Meter {
+            observer,
+            profiler: profiler.clone(),
+            name,
+            span: Mutex::new(SpanSlot::default()),
+            entered,
+            exited,
+            has_children: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+        }))
+    }
     /// `inner.check()`, recorded in this phase's span while it has one.
     #[track_caller]
     fn check(&self, inner: &dyn Stop) -> Result<(), StopReason> {
@@ -345,15 +361,10 @@ impl Meter {
     }
     #[track_caller]
     fn issue(&self, problem: Problem) {
-        let at = core::panic::Location::caller();
         self.profiler.incident(Incident {
-            node: self.node,
+            node: self.observer.id(),
             problem,
-            site: SourceSite {
-                file: at.file(),
-                line: at.line(),
-                column: at.column(),
-            },
+            site: SourceSite::from_location(core::panic::Location::caller()),
         });
     }
     #[track_caller]
@@ -367,17 +378,15 @@ impl Meter {
             self.issue(Problem::ReportToBranch);
         }
     }
-    fn start_span(&self) -> Span {
-        match &self.entered {
-            Some(entered) => {
-                let at = *entered.lock();
-                self.profiler
-                    .span_from(Some(self.node), self.name.clone(), SpanKind::Work, at)
-            }
-            None => self
-                .profiler
-                .span(self.node, self.name.clone(), SpanKind::Work),
-        }
+    fn start_span(&self, kind: SpanKind, entered: Option<Duration>) -> Span {
+        let node = Some(self.observer.id());
+        let name = self.name.clone();
+        self.profiler.start_span(None, node, name, kind, entered)
+    }
+    /// A work span from the stage's entry, if it is a sequential stage.
+    fn start_work(&self) -> Span {
+        let entered = self.entered.as_ref().map(|cell| *cell.lock());
+        self.start_span(SpanKind::Work, entered)
     }
 
     /// This phase's span, started at its first checkpoint. After the phase
@@ -390,7 +399,7 @@ impl Meter {
         if self.closed.load(Ordering::Acquire) {
             return slot.last.clone();
         }
-        let span = self.start_span();
+        let span = self.start_work();
         let shared = span.shared();
         slot.open = Some(span);
         Some(shared)
@@ -413,14 +422,10 @@ impl Meter {
         let now = self.profiler.now();
         // Work before the split without a checkpoint still took time.
         if slot.open.is_none() && *entered.lock() < now {
-            slot.open = Some(self.start_span());
+            slot.open = Some(self.start_work());
         }
         slot.retire(Outcome::Succeeded);
-        slot.open =
-            Some(
-                self.profiler
-                    .span_from(Some(self.node), self.name.clone(), SpanKind::Wait, now),
-            );
+        slot.open = Some(self.start_span(SpanKind::Wait, Some(now)));
     }
 
     fn split<'s>(
@@ -442,26 +447,18 @@ impl Meter {
         }
         let mut measured = Vec::with_capacity(children.len());
         for (index, child) in children.into_iter().enumerate() {
+            // A sink with no node per part keeps measuring this one.
+            let observer = nodes.get(index).unwrap_or(&self.observer).clone();
+            let meter = Meter::owner(
+                observer,
+                parts[index].name.into(),
+                &self.profiler,
+                cells.get(index).cloned(),
+                cells.get(index + 1).cloned(),
+            );
             measured.push(Child::new(DiagnosticChild {
                 inner: child,
-                meter: MeterOwner(Arc::new(Meter {
-                    // A sink with no node per part keeps measuring this one.
-                    observer: match nodes.get(index) {
-                        Some(node) => node.clone(),
-                        None => self.observer.clone(),
-                    },
-                    profiler: self.profiler.clone(),
-                    node: match nodes.get(index) {
-                        Some(node) => node.id(),
-                        None => self.node,
-                    },
-                    name: parts[index].name.into(),
-                    span: Mutex::new(SpanSlot::default()),
-                    entered: cells.get(index).cloned(),
-                    exited: cells.get(index + 1).cloned(),
-                    has_children: AtomicBool::new(false),
-                    closed: AtomicBool::new(false),
-                })),
+                meter,
             }));
         }
         Ok(measured)
@@ -478,7 +475,7 @@ impl Meter {
             && !self.has_children.load(Ordering::Relaxed)
         {
             // A leaf stage with no checkpoint still took time.
-            slot.open = Some(self.start_span());
+            slot.open = Some(self.start_work());
         }
         slot.retire(outcome);
         drop(slot);
@@ -501,102 +498,10 @@ fn find_node(snapshot: &Snapshot, id: NodeId) -> Option<&Snapshot> {
     None
 }
 
-impl Stop for DiagnosticPulse {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.meter.check(&self.tree)
-    }
-    fn may_stop(&self) -> bool {
-        true
-    }
-}
-
-impl Report for DiagnosticPulse {
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        self.meter.advance(&self.tree, completed);
-    }
-    fn may_report(&self) -> bool {
-        true
-    }
-}
-
-impl Pulse for DiagnosticPulse {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        self.meter.issue(Problem::Plan(error));
-    }
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        self.meter.split(&self.tree, execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        self.tree.start()
-    }
-    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(DiagnosticView {
-            inner: self.tree.share()?,
-            meter: Arc::clone(&self.meter.0),
-        }))
-    }
-    fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
-        self.tree.set_total(total)
-    }
-}
-
 /// A measured child phase.
 struct DiagnosticChild<'a> {
     inner: Child<'a>,
     meter: MeterOwner,
-}
-
-impl Stop for DiagnosticChild<'_> {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.meter.check(&self.inner)
-    }
-    fn may_stop(&self) -> bool {
-        true
-    }
-}
-
-impl Report for DiagnosticChild<'_> {
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        self.meter.advance(&self.inner, completed);
-    }
-    fn may_report(&self) -> bool {
-        true
-    }
-}
-
-impl Pulse for DiagnosticChild<'_> {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        self.meter.issue(Problem::Plan(error));
-    }
-    fn split(
-        &self,
-        execution: Execution,
-        parts: &[PhaseSpec<'_>],
-    ) -> Result<Vec<Child<'_>>, PlanError> {
-        self.meter.split(&self.inner, execution, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        self.inner.start()
-    }
-    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(DiagnosticView {
-            inner: self.inner.share()?,
-            meter: Arc::clone(&self.meter.0),
-        }))
-    }
-    fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
-        self.inner.set_total(total)
-    }
 }
 
 impl ChildPulse for DiagnosticChild<'_> {
@@ -630,45 +535,56 @@ struct DiagnosticView {
     inner: how_far::SharedPulse,
     meter: Arc<Meter>,
 }
-impl Stop for DiagnosticView {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.meter.check(&self.inner)
-    }
-    fn may_stop(&self) -> bool {
-        true
-    }
+/// `Stop`, `Report` and `Pulse` for wrappers whose `inner` pulse is measured
+/// by `meter`. `may_stop` and `may_report` are `true` so calls are always made.
+macro_rules! measured {
+    ($($wrapper:ty),*) => {$(
+        impl Stop for $wrapper {
+            #[track_caller]
+            fn check(&self) -> Result<(), StopReason> {
+                self.meter.check(&self.inner)
+            }
+            fn may_stop(&self) -> bool {
+                true
+            }
+        }
+        impl Report for $wrapper {
+            #[track_caller]
+            fn advance(&self, completed: u64) {
+                self.meter.advance(&self.inner, completed);
+            }
+            fn may_report(&self) -> bool {
+                true
+            }
+        }
+        impl Pulse for $wrapper {
+            #[track_caller]
+            fn record_issue(&self, error: PlanError) {
+                self.meter.issue(Problem::Plan(error));
+            }
+            fn split(
+                &self,
+                execution: Execution,
+                parts: &[PhaseSpec<'_>],
+            ) -> Result<Vec<Child<'_>>, PlanError> {
+                self.meter.split(&self.inner, execution, parts)
+            }
+            fn start(&self) -> Result<(), PlanError> {
+                self.inner.start()
+            }
+            fn set_total(&self, total: how_far::Total) -> Result<(), PlanError> {
+                self.inner.set_total(total)
+            }
+            fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
+                Ok(how_far::SharedPulse::new(DiagnosticView {
+                    inner: self.inner.share()?,
+                    meter: Arc::clone(&self.meter),
+                }))
+            }
+        }
+    )*};
 }
-impl Report for DiagnosticView {
-    #[track_caller]
-    fn advance(&self, n: u64) {
-        self.meter.advance(&self.inner, n);
-    }
-    fn may_report(&self) -> bool {
-        true
-    }
-}
-impl Pulse for DiagnosticView {
-    #[track_caller]
-    fn record_issue(&self, error: PlanError) {
-        self.meter.issue(Problem::Plan(error));
-    }
-    fn split(&self, e: Execution, parts: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        self.meter.split(&self.inner, e, parts)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        self.inner.start()
-    }
-    fn set_total(&self, t: how_far::Total) -> Result<(), PlanError> {
-        self.inner.set_total(t)
-    }
-    fn share(&self) -> Result<how_far::SharedPulse, PlanError> {
-        Ok(how_far::SharedPulse::new(Self {
-            inner: self.inner.clone(),
-            meter: Arc::clone(&self.meter),
-        }))
-    }
-}
+measured!(DiagnosticPulse, DiagnosticChild<'_>, DiagnosticView);
 
 impl Trace {
     /// Analyze the retained spans and the attached progress tree, if any.
@@ -680,20 +596,14 @@ impl Trace {
     pub fn diagnose(&self, options: &Options) -> Vec<Finding> {
         let mut findings = Vec::new();
         for incident in &self.incidents {
-            findings.push(Finding {
-                kind: match incident.problem { Problem::Plan(_) => Kind::ProtocolMisuse, _ => Kind::InvalidReport },
-                evidence: format!("phase {} at {}: {:?}", incident.node, incident.site, incident.problem),
-                advice: "Plan before reporting, select each phase once, and join workers before completing their owner. The work result was preserved.".into(),
-                sample_code: None,
-            });
+            findings.push(finding(match incident.problem { Problem::Plan(_) => Kind::ProtocolMisuse, _ => Kind::InvalidReport }, format!("phase {} at {}: {:?}", incident.node, incident.site, incident.problem), "Plan before reporting, select each phase once, and join workers before completing their owner. The work result was preserved."));
         }
         if self.dropped_incidents != 0 {
-            findings.push(Finding {
-                kind: Kind::IncompleteEvidence,
-                evidence: format!("{} reporting incidents omitted", self.dropped_incidents),
-                advice: "Increase the incident budget or fix repeated protocol misuse.".into(),
-                sample_code: None,
-            });
+            findings.push(finding(
+                Kind::IncompleteEvidence,
+                format!("{} reporting incidents omitted", self.dropped_incidents),
+                "Increase the incident budget or fix repeated protocol misuse.",
+            ));
         }
         if let Some(root) = &self.progress {
             lifecycle_findings(root, false, &mut findings);
@@ -703,42 +613,31 @@ impl Trace {
             && cancelled <= returned
             && self.observed_at.is_none()
         {
-            findings.push(Finding { kind: Kind::UnobservedCancellation,
-                evidence: "host recorded cancellation and operation return, but no instrumented checkpoint observed the stop".into(),
-                advice: "Check at entry and finish the final paced batch. A request racing completion or uninstrumented checks can also explain this; timing alone does not prove a bug.".into(), sample_code: None });
+            findings.push(finding(Kind::UnobservedCancellation, "host recorded cancellation and operation return, but no instrumented checkpoint observed the stop".into(), "Check at entry and finish the final paced batch. A request racing completion or uninstrumented checks can also explain this; timing alone does not prove a bug."));
         }
         if self.dropped_spans != 0 || self.active_spans != 0 {
-            findings.push(Finding {
-                kind: Kind::IncompleteEvidence,
-                evidence: format!(
+            findings.push(finding(
+                Kind::IncompleteEvidence,
+                format!(
                     "{} spans dropped; {} still active",
                     self.dropped_spans, self.active_spans
                 ),
-                advice: "Increase profiler capacity and finish/join every task before diagnosing."
-                    .into(),
-                sample_code: None,
-            });
+                "Increase profiler capacity and finish/join every task before diagnosing.",
+            ));
         }
         for span in &self.spans {
             if span.stats.stopped_at.is_some() && span.outcome != Outcome::Cancelled {
-                findings.push(Finding { kind: Kind::StopOutcomeMismatch,
-                    evidence: format!("task {:?} observed a stop but ended {:?}", span.task, span.outcome),
-                    advice: "Propagate StopReason and implement the borrowed error conversion. If recovery is intentional, record each attempt separately.".into(), sample_code: None });
+                findings.push(finding(Kind::StopOutcomeMismatch, format!("task {:?} observed a stop but ended {:?}", span.task, span.outcome), "Propagate StopReason and implement the borrowed error conversion. If recovery is intentional, record each attempt separately."));
             }
             if span.stats.overflowed
                 || span.stats.clock_regressions != 0
                 || span.stats.unattributed_calls != 0
             {
-                findings.push(Finding {
-                    kind: Kind::IncompleteEvidence,
-                    evidence: format!(
+                findings.push(finding(Kind::IncompleteEvidence, format!(
                         "task {:?}: overflow={}, clock regressions={}, unattributed calls={}",
                         span.task, span.stats.overflowed, span.stats.clock_regressions,
                         span.stats.unattributed_calls
-                    ),
-                    advice: "Use a monotonic shared clock and sufficient span/site capacity before tuning this task.".into(),
-                    sample_code: None,
-                });
+                    ), "Use a monotonic shared clock and sufficient span/site capacity before tuning this task."));
                 continue;
             }
             if span.kind != SpanKind::Work || span.outcome != Outcome::Succeeded {
@@ -747,69 +646,51 @@ impl Trace {
             if span.stats.max_check_gap > options.stop_gap_target
                 && span.elapsed() >= options.stop_gap_target
             {
-                // The last site with the longest gap before a check, as
-                // `max_by_key` would pick; the gap may instead end at exit.
-                let mut longest: Option<&SiteStats> = None;
-                for site in &span.stats.sites {
-                    if longest.is_none_or(|l| site.max_gap_before_check >= l.max_gap_before_check) {
-                        longest = Some(site);
+                // The last site whose check ended the longest gap (no site's
+                // gap exceeds the span's), or else the task's exit.
+                let mut ending = String::from("task exit");
+                for s in &span.stats.sites {
+                    if s.max_gap_before_check == span.stats.max_check_gap {
+                        ending = format!("{}:{}:{}", s.file, s.line, s.column);
                     }
                 }
-                let ending = match longest {
-                    Some(s) if s.max_gap_before_check == span.stats.max_check_gap => {
-                        format!("{}:{}:{}", s.file, s.line, s.column)
-                    }
-                    _ => "task exit".into(),
-                };
-                let cover = covering_span(
+                let (covered, note) = cover(
                     self,
                     span,
                     span.stats.max_check_gap_start,
                     span.stats.max_check_gap,
+                    options,
                 );
-                let covered = covers(cover, options);
-                findings.push(Finding {
-                    kind: Kind::StopGap,
-                    evidence: format!(
-                        "task {:?}: {:.2} ms without a check before {ending}{}",
+                findings.push(finding(Kind::StopGap, format!(
+                        "task {:?}: {:.2} ms without a check before {ending}{note}",
                         span.task,
                         ms(span.stats.max_check_gap),
-                        cover_note(cover)
-                    ),
-                    advice: if covered {
-                        "This task's own checkpoints are sparse here, but the other task above checked at the target cadence throughout the interval. If it is the work inside this stage (for example an encoder holding its own Stop), cancellation is already covered and this is a measurement seam, not a latency problem. Otherwise add a cheap check() in the long-running section.".into()
+                    ), if covered {
+                        "This task's own checkpoints are sparse here, but the other task above checked at the target cadence throughout the interval. If it is the work inside this stage (for example an encoder holding its own Stop), cancellation is already covered and this is a measurement seam, not a latency problem. Otherwise add a cheap check() in the long-running section."
                     } else {
-                        "Add a cheap check() in the long-running section; keep the stop-only cadence independent of reporting.".into()
-                    },
-                    sample_code: None,
-                });
+                        "Add a cheap check() in the long-running section; keep the stop-only cadence independent of reporting."
+                    }));
             }
             if counts_units(self, span)
                 && let Some(gap) = &span.stats.max_report_gap
                 && gap.duration > options.report_gap_target
             {
                 let own = gap.checks > 0 && gap.max_check_gap <= options.stop_gap_target;
-                let cover = if own {
-                    None
+                let (covered, note) = if own {
+                    (true, String::new())
                 } else {
-                    covering_span(self, span, gap.start, gap.duration)
+                    cover(self, span, gap.start, gap.duration, options)
                 };
-                let covered = covers(cover, options);
-                findings.push(Finding {
-                    kind: Kind::ReportGap,
-                    evidence: format!(
-                        "task {:?}: {:.2} ms between {} and {}; stop checks inside it: {}, longest stop gap {:.2} ms{}",
+                findings.push(finding(Kind::ReportGap, format!(
+                        "task {:?}: {:.2} ms between {} and {}; stop checks inside it: {}, longest stop gap {:.2} ms{note}",
                         span.task, ms(gap.duration),
                         location(gap.from, "task entry"), location(gap.to, "task exit"),
-                        gap.checks, ms(gap.max_check_gap), cover_note(cover)
-                    ),
-                    advice: if own || covered {
-                        "Cancellation is checked at the target cadence inside this interval, so this is a progress-granularity seam rather than missing cancellation checks; more stop checks would not help. Finer progress needs a smaller reportable unit: sub-phases, an Estimated total, or a report from inside the long operation. Visible UI smoothness also depends on the consumer's polling cadence.".into()
+                        gap.checks, ms(gap.max_check_gap)
+                    ), if covered {
+                        "Cancellation is checked at the target cadence inside this interval, so this is a progress-granularity seam rather than missing cancellation checks; more stop checks would not help. Finer progress needs a smaller reportable unit: sub-phases, an Estimated total, or a report from inside the long operation. Visible UI smoothness also depends on the consumer's polling cadence."
                     } else {
-                        "No stop check at the target cadence was recorded inside this interval either. Consider reporting completed units and checking cancellation here; step(n) does both.".into()
-                    },
-                    sample_code: None,
-                });
+                        "No stop check at the target cadence was recorded inside this interval either. Consider reporting completed units and checking cancellation here; step(n) does both."
+                    }));
             }
             let seconds = span.elapsed().as_secs_f64();
             if seconds > 0.0 {
@@ -838,9 +719,9 @@ impl Trace {
                         if calls < options.minimum_calls || (calls as f64 / seconds) <= threshold {
                             continue;
                         }
-                        findings.push(Finding {
+                        findings.push(finding(
                             kind,
-                            evidence: format!(
+                            format!(
                                 "task {:?}: {} calls at {}:{}:{} in {:.2} ms ({:.0}/s)",
                                 span.task,
                                 calls,
@@ -850,9 +731,8 @@ impl Trace {
                                 ms(span.elapsed()),
                                 calls as f64 / seconds,
                             ),
-                            advice: advice.into(),
-                            sample_code: None,
-                        });
+                            advice,
+                        ));
                     }
                 }
             }
@@ -870,17 +750,16 @@ impl Trace {
 
 /// Another work span that ran across nearly all of `[start, start + len]` and
 /// recorded checks, such as an encoder's own `Stop` instrumented from the same
-/// profiler. Checks happen at that task's cadence, not necessarily this task's.
-/// Among several, the first with the shortest longest gap.
-fn covering_span<'a>(
-    trace: &'a Trace,
+/// profiler; among several, the first with the shortest longest gap. Returns
+/// whether it checked at the target cadence throughout its own run (its
+/// cadence, not necessarily this task's), and a note naming it.
+fn cover(
+    trace: &Trace,
     owner: &SpanRecord,
     start: Duration,
     len: Duration,
-) -> Option<&'a SpanRecord> {
-    if len.is_zero() {
-        return None;
-    }
+    options: &Options,
+) -> (bool, String) {
     let end = start.saturating_add(len);
     let mut best: Option<&SpanRecord> = None;
     for s in &trace.spans {
@@ -899,24 +778,18 @@ fn covering_span<'a>(
             best = Some(s);
         }
     }
-    best
-}
-/// Whether a covering span checked at the target cadence throughout its run.
-fn covers(cover: Option<&SpanRecord>, options: &Options) -> bool {
-    match cover {
-        Some(c) => c.stats.max_check_gap <= options.stop_gap_target,
-        None => false,
-    }
-}
-fn cover_note(cover: Option<&SpanRecord>) -> String {
-    match cover {
-        Some(c) => format!(
-            "; task {:?} also ran across it with {} checks (longest gap {:.2} ms over its whole run)",
-            c.task,
-            c.stats.checks,
-            ms(c.stats.max_check_gap)
+    match best {
+        // Callers pass only gaps longer than a target, so `len` is never zero.
+        Some(c) => (
+            c.stats.max_check_gap <= options.stop_gap_target,
+            format!(
+                "; task {:?} also ran across it with {} checks (longest gap {:.2} ms over its whole run)",
+                c.task,
+                c.stats.checks,
+                ms(c.stats.max_check_gap)
+            ),
         ),
-        None => String::new(),
+        None => (false, String::new()),
     }
 }
 
@@ -977,46 +850,26 @@ fn callback_findings(trace: &Trace, options: &Options, findings: &mut Vec<Findin
     let busy = busy_windows(trace);
     for CallbackGroup { task, samples, .. } in &groups {
         let by_start = sorted_indices(samples.len(), &|a, b| samples[a].0.cmp(&samples[b].0));
-        let mut interval: Option<Duration> = None;
-        for pair in by_start.windows(2) {
-            let (from, to) = (samples[pair[0]].0, samples[pair[1]].0);
+        let mut interval = Duration::ZERO;
+        for i in 1..by_start.len() {
+            let (from, to) = (samples[by_start[i - 1]].0, samples[by_start[i]].0);
             // Idle time between operations is not a missed callback.
-            if !busy.is_empty() && !within(&busy, from, to) {
-                continue;
+            if busy.is_empty() || within(&busy, from, to) {
+                interval = interval.max(to.saturating_sub(from));
             }
-            let gap = to.saturating_sub(from);
-            interval = Some(match interval {
-                Some(longest) => longest.max(gap),
-                None => gap,
-            });
         }
-        if let Some(interval) = interval
-            && interval > options.callback_interval_target
-        {
-            findings.push(Finding {
-                kind: Kind::CallbackInterval,
-                evidence: format!("callback {:?}: longest start-to-start interval {:.2} ms across {} retained calls (target {:.2} ms)",
-                    task, ms(interval), samples.len(), ms(options.callback_interval_target)),
-                advice: "Poll or post notifications more regularly if the user interface needs this cadence; reporting alone does not dispatch callbacks.".into(),
-                sample_code: None,
-            });
+        if interval > options.callback_interval_target {
+            findings.push(finding(Kind::CallbackInterval, format!("callback {:?}: longest start-to-start interval {:.2} ms across {} retained calls (target {:.2} ms)",
+                    task, ms(interval), samples.len(), ms(options.callback_interval_target)), "Poll or post notifications more regularly if the user interface needs this cadence; reporting alone does not dispatch callbacks."));
         }
         let by_duration = sorted_indices(samples.len(), &|a, b| samples[a].1.cmp(&samples[b].1));
-        let Some(&longest) = by_duration.last() else {
-            continue;
-        };
-        let maximum = samples[longest].1;
+        let maximum = samples[by_duration[samples.len() - 1]].1; // Never empty.
         if maximum <= options.callback_budget {
             continue;
         }
         let p95 = samples[by_duration[((samples.len() * 95).div_ceil(100)).saturating_sub(1)]].1;
-        findings.push(Finding {
-            kind: Kind::CallbackDuration,
-            evidence: format!("callback {:?}: max {:.2} ms, p95 {:.2} ms across {} retained calls (budget {:.2} ms)",
-                task, ms(maximum), ms(p95), samples.len(), ms(options.callback_budget)),
-            advice: "Keep subscriber work below the budget: defer rendering/I/O or post a coalesced notification to the owner thread. Time snapshot construction inside the callback if it happens there.".into(),
-            sample_code: None,
-        });
+        findings.push(finding(Kind::CallbackDuration, format!("callback {:?}: max {:.2} ms, p95 {:.2} ms across {} retained calls (budget {:.2} ms)",
+                task, ms(maximum), ms(p95), samples.len(), ms(options.callback_budget)), "Keep subscriber work below the budget: defer rendering/I/O or post a coalesced notification to the owner thread. Time snapshot construction inside the callback if it happens there."));
     }
 }
 
@@ -1105,36 +958,31 @@ fn stage_weight_finding(trace: &Trace, parent: &Snapshot, options: &Options) -> 
     if parent.execution != Execution::Sequence || children.len() < 2 || children.len() > 100 {
         return None;
     }
-    for child in children {
-        if child.status != Status::Finished(Outcome::Succeeded) {
-            return None;
-        }
-    }
     let mut durations = Vec::with_capacity(children.len());
-    let mut previous_end: Option<Duration> = None;
-    let mut sequential = true;
+    let mut previous_end = Duration::ZERO;
     let mut total = Duration::ZERO;
     let mut weight_sum = 0_u64;
     for child in children {
         let (start, end) = stage_time(trace, child)?;
-        if previous_end.is_some_and(|previous| previous > start) {
-            sequential = false;
+        // Failed or overlapping stages cannot calibrate sequential weights.
+        if child.status != Status::Finished(Outcome::Succeeded) || previous_end > start {
+            return None;
         }
-        previous_end = Some(end);
+        previous_end = end;
         // A stage within one clock tick has a measured share of zero.
         let duration = end.saturating_sub(start);
         durations.push(duration);
         total = total.saturating_add(duration);
         weight_sum += child.weight;
     }
-    if !sequential || total < options.minimum_stage_wall || weight_sum == 0 {
+    if total < options.minimum_stage_wall || weight_sum == 0 {
         return None;
     }
     let mut shares = Vec::with_capacity(children.len());
     let mut declared = Vec::with_capacity(children.len());
-    for (child, duration) in children.iter().zip(&durations) {
-        shares.push(duration.as_secs_f64() / total.as_secs_f64());
-        declared.push(child.weight as f64 / weight_sum as f64);
+    for i in 0..children.len() {
+        shares.push(durations[i].as_secs_f64() / total.as_secs_f64());
+        declared.push(children[i].weight as f64 / weight_sum as f64);
     }
     // A stage this small is dominated by clock and scheduling noise and may be
     // input-dependent (a flush that is trivial for this input). It keeps its
@@ -1240,20 +1088,19 @@ fn stage_time(trace: &Trace, stage: &Snapshot) -> Option<(Duration, Duration)> {
 
 impl how_far::Complete for DiagnosticPulse {
     fn complete_as(self, outcome: Outcome) {
-        let Self { tree, meter } = self;
-        how_far::Complete::complete_as(tree, outcome);
+        let Self { inner, meter } = self;
+        how_far::Complete::complete_as(inner, outcome);
         meter.close(outcome);
     }
 }
 
 fn lifecycle_findings(node: &Snapshot, parent_succeeded: bool, out: &mut Vec<Finding>) {
     let mut add = |kind, evidence: String, advice: &str| {
-        out.push(Finding {
+        out.push(finding(
             kind,
-            evidence: format!("phase {:?} ({}): {}", node.name, node.id, evidence),
-            advice: advice.into(),
-            sample_code: None,
-        })
+            format!("phase {:?} ({}): {}", node.name, node.id, evidence),
+            advice,
+        ))
     };
     if node.completion_inferred {
         add(

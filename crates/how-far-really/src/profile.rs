@@ -126,7 +126,7 @@ pub struct SourceSite {
 }
 
 impl SourceSite {
-    fn from_location(at: &'static Location<'static>) -> Self {
+    pub(crate) fn from_location(at: &'static Location<'static>) -> Self {
         Self {
             file: at.file(),
             line: at.line(),
@@ -263,24 +263,13 @@ impl SpanRecord {
     }
 }
 
-struct TraceState {
-    incidents: Vec<crate::diagnostics::Incident>,
-    dropped_incidents: u64,
-    metadata: Vec<(String, String)>,
-    spans: Vec<SpanRecord>,
-    dropped: u64,
-    cancelled_at: Option<Duration>,
-    observed_at: Option<Duration>,
-    returned_at: Option<Duration>,
-}
-
 struct Inner {
     clock: Arc<dyn Clock>,
     capacity: usize,
     report_timing: AtomicBool,
     next_id: AtomicUsize,
     active: AtomicUsize,
-    state: Mutex<TraceState>,
+    state: Mutex<Trace>,
 }
 
 /// A bounded, cloneable span collector. It starts no threads, keeps no global
@@ -318,12 +307,15 @@ impl Profiler {
                 report_timing: AtomicBool::new(false),
                 next_id: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
-                state: Mutex::new(TraceState {
+                state: Mutex::new(Trace {
+                    schema_version: 2,
                     incidents: Vec::new(),
                     dropped_incidents: 0,
+                    progress: None,
                     metadata: Vec::new(),
                     spans: Vec::new(),
-                    dropped: 0,
+                    dropped_spans: 0,
+                    active_spans: 0,
                     cancelled_at: None,
                     observed_at: None,
                     returned_at: None,
@@ -391,20 +383,9 @@ impl Profiler {
         self.inner.clock.now()
     }
 
-    /// A span whose start is known to precede its first checkpoint, such as a
-    /// sequential stage entered when the previous one finished.
-    pub(crate) fn span_from(
-        &self,
-        node: Option<NodeId>,
-        task: impl Into<String>,
-        kind: SpanKind,
-        start: Duration,
-    ) -> Span {
-        self.start_span(None, node, task.into(), kind, Some(start))
-    }
-
+    /// `entered`, if known, is when the span began, before its first checkpoint.
     #[allow(deprecated)] // Atomic::try_update is newer than the Rust 1.88 MSRV.
-    fn start_span(
+    pub(crate) fn start_span(
         &self,
         parent: Option<SpanId>,
         node: Option<NodeId>,
@@ -422,10 +403,7 @@ impl Profiler {
             });
         let (Ok(id) | Err(id)) = id;
         let now = self.inner.clock.now();
-        let start = match entered {
-            Some(at) => at.min(now),
-            None => now,
-        };
+        let start = entered.unwrap_or(now).min(now);
         self.inner.active.fetch_add(1, Ordering::Relaxed);
         Span {
             finished: false,
@@ -455,10 +433,7 @@ impl Profiler {
     pub fn cancellation_requested(&self) {
         let now = self.inner.clock.now();
         let mut state = self.inner.state.lock();
-        state.cancelled_at = Some(match state.cancelled_at {
-            Some(old) => old.min(now),
-            None => now,
-        });
+        state.cancelled_at = Some(state.cancelled_at.unwrap_or(now).min(now));
     }
 
     /// Record when the operation returned, after every worker joined and
@@ -481,20 +456,10 @@ impl Profiler {
         Some(self.snapshot_from(&state))
     }
 
-    fn snapshot_from(&self, state: &TraceState) -> Trace {
-        Trace {
-            schema_version: 2,
-            incidents: state.incidents.clone(),
-            dropped_incidents: state.dropped_incidents,
-            progress: None,
-            metadata: state.metadata.clone(),
-            spans: state.spans.clone(),
-            dropped_spans: state.dropped,
-            active_spans: self.inner.active.load(Ordering::Relaxed),
-            cancelled_at: state.cancelled_at,
-            observed_at: state.observed_at,
-            returned_at: state.returned_at,
-        }
+    fn snapshot_from(&self, state: &Trace) -> Trace {
+        let mut trace = state.clone();
+        trace.active_spans = self.inner.active.load(Ordering::Relaxed);
+        trace
     }
 }
 
@@ -507,6 +472,28 @@ struct SpanState {
     /// missing cancellation checks.
     window: Window,
     closed: bool,
+}
+
+impl SpanState {
+    /// End the interval since the last report at `end`, keeping it if longest.
+    fn close_report_gap(&mut self, end: Duration, duration: Duration, to: Option<SourceSite>) {
+        let (checks, max_check_gap) = self.window.close(end);
+        if self
+            .stats
+            .max_report_gap
+            .as_ref()
+            .is_none_or(|old| duration > old.duration)
+        {
+            self.stats.max_report_gap = Some(ReportGap {
+                start: self.last_report,
+                duration,
+                checks,
+                max_check_gap,
+                from: self.last_report_site,
+                to,
+            });
+        }
+    }
 }
 
 struct Window {
@@ -606,10 +593,7 @@ impl SpanInner {
     fn observed(&self, result: Result<(), StopReason>, end: Duration) {
         if result.is_err() {
             let mut trace = self.profiler.inner.state.lock();
-            trace.observed_at = Some(match trace.observed_at {
-                Some(old) => old.min(end),
-                None => end,
-            });
+            trace.observed_at = Some(trace.observed_at.unwrap_or(end).min(end));
         }
     }
 
@@ -625,29 +609,14 @@ impl SpanInner {
         if state.closed {
             return;
         }
-        if let Some(now) = now {
-            let at = SourceSite::from_location(at);
-            if now >= state.last_report {
-                let (checks, max_check_gap) = state.window.close(now);
-                let duration = now - state.last_report;
-                if state
-                    .stats
-                    .max_report_gap
-                    .as_ref()
-                    .is_none_or(|old| duration > old.duration)
-                {
-                    state.stats.max_report_gap = Some(ReportGap {
-                        start: state.last_report,
-                        duration,
-                        checks,
-                        max_check_gap,
-                        from: state.last_report_site,
-                        to: Some(at),
-                    });
-                }
-                state.last_report = now;
-                state.last_report_site = Some(at);
-            }
+        if let Some(now) = now
+            && now >= state.last_report
+        {
+            let at = Some(SourceSite::from_location(at));
+            let duration = now - state.last_report;
+            state.close_report_gap(now, duration, at);
+            state.last_report = now;
+            state.last_report_site = at;
         }
         state.stats.overflowed |= add(&mut state.stats.reports, 1);
         state.stats.overflowed |= add(&mut state.stats.units, completed);
@@ -674,26 +643,11 @@ impl SpanInner {
                 state.stats.max_check_gap_start = state.last_check;
             }
             if self.time_reports {
-                let (checks, max_check_gap) = state.window.close(end);
                 let duration = end.checked_sub(state.last_report).unwrap_or_else(|| {
                     state.stats.clock_regressions += 1;
                     Duration::ZERO
                 });
-                if state
-                    .stats
-                    .max_report_gap
-                    .as_ref()
-                    .is_none_or(|old| duration > old.duration)
-                {
-                    state.stats.max_report_gap = Some(ReportGap {
-                        start: state.last_report,
-                        duration,
-                        checks,
-                        max_check_gap,
-                        from: state.last_report_site,
-                        to: None,
-                    });
-                }
+                state.close_report_gap(end, duration, None);
             }
             core::mem::take(&mut state.stats)
         };
@@ -712,7 +666,7 @@ impl SpanInner {
         if self.id.0 != usize::MAX && trace.spans.len() < self.profiler.inner.capacity {
             trace.spans.push(record);
         } else {
-            trace.dropped = trace.dropped.saturating_add(1);
+            trace.dropped_spans = trace.dropped_spans.saturating_add(1);
         }
         self.profiler.inner.active.fetch_sub(1, Ordering::Relaxed);
     }
@@ -818,7 +772,7 @@ pub(crate) fn sorted_indices(
     for index in 0..len {
         order.push(index);
     }
-    let mut merged = alloc::vec![0; len];
+    let mut merged = order.clone();
     let mut width = 1;
     while width < len {
         let mut start = 0;
@@ -839,7 +793,7 @@ pub(crate) fn sorted_indices(
             }
             start = end;
         }
-        core::mem::swap(&mut order, &mut merged);
+        (order, merged) = (merged, order);
         width *= 2;
     }
     order
@@ -852,21 +806,21 @@ fn add(value: &mut u64, n: u64) -> bool {
 }
 
 fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a mut SiteStats> {
-    let mut position = None;
-    for (index, s) in stats.sites.iter().enumerate() {
+    let sites = &mut stats.sites;
+    let mut index = 0;
+    while index < sites.len() {
+        let s = &sites[index];
         if s.file == at.file() && s.line == at.line() && s.column == at.column() {
-            position = Some(index);
             break;
         }
+        index += 1;
     }
-    let index = if let Some(index) = position {
-        index
-    } else {
-        if stats.sites.len() == 64 {
-            stats.unattributed_calls = stats.unattributed_calls.saturating_add(1);
-            return None;
-        }
-        stats.sites.push(SiteStats {
+    if index == 64 {
+        stats.unattributed_calls = stats.unattributed_calls.saturating_add(1);
+        return None;
+    }
+    if index == sites.len() {
+        sites.push(SiteStats {
             file: at.file(),
             line: at.line(),
             column: at.column(),
@@ -875,9 +829,8 @@ fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a 
             units: 0,
             max_gap_before_check: Duration::ZERO,
         });
-        stats.sites.len() - 1
-    };
-    Some(&mut stats.sites[index])
+    }
+    Some(&mut sites[index])
 }
 
 /// `value.check()`, recorded in `span` at the caller's location. Every
@@ -973,13 +926,15 @@ impl Trace {
     /// `Work`, a span with clock regressions, or a span together with one of
     /// its ancestors (which would count time twice).
     pub fn overlap(&self, ids: &[SpanId]) -> Option<Overlap> {
-        let mut spans: Vec<&SpanRecord> = Vec::with_capacity(ids.len());
+        if ids.is_empty() {
+            return None;
+        }
+        let (mut first, mut last, mut task_time) = (Duration::MAX, Duration::ZERO, Duration::ZERO);
+        let mut events: Vec<(Duration, isize)> = Vec::with_capacity(2 * ids.len());
         for (i, &id) in ids.iter().enumerate() {
-            if ids[..i].contains(&id) {
-                return None;
-            }
             let span = self.span(id)?;
-            if span.kind != SpanKind::Work
+            if ids[..i].contains(&id)
+                || span.kind != SpanKind::Work
                 || span.end < span.start
                 || span.stats.clock_regressions != 0
             {
@@ -992,13 +947,6 @@ impl Trace {
                 }
                 parent = self.span(id)?.parent;
             }
-            spans.push(span);
-        }
-        let span = spans.first()?;
-        let (mut first, mut last) = (span.start, span.end);
-        let mut task_time = Duration::ZERO;
-        let mut events: Vec<(Duration, isize)> = Vec::with_capacity(2 * spans.len());
-        for span in &spans {
             first = first.min(span.start);
             last = last.max(span.end);
             task_time = task_time.saturating_add(span.elapsed());
@@ -1034,10 +982,7 @@ impl Trace {
                 task_time.as_secs_f64() / wall.as_secs_f64()
             },
             peak_active_tasks: peak,
-            single_task_tail: match tail_start {
-                Some(at) => last.saturating_sub(at),
-                None => Duration::ZERO,
-            },
+            single_task_tail: last.saturating_sub(tail_start.unwrap_or(last)),
         })
     }
 
@@ -1078,9 +1023,7 @@ impl Trace {
             self.schema_version, self.dropped_spans, self.active_spans
         )?;
         for (i, (key, value)) in self.metadata.iter().enumerate() {
-            if i > 0 {
-                out.write_char(',')?;
-            }
+            out.write_str(if i > 0 { "," } else { "" })?;
             quote(out, key)?;
             out.write_char(':')?;
             quote(out, value)?;
@@ -1096,9 +1039,7 @@ impl Trace {
             self.dropped_incidents
         )?;
         for (i, incident) in self.incidents.iter().enumerate() {
-            if i != 0 {
-                out.write_char(',')?;
-            }
+            out.write_str(if i > 0 { "," } else { "" })?;
             write!(out, "{{\"node\":{},\"problem\":", incident.node)?;
             // Stable wire names; Debug text remains human-readable evidence only.
             let name = match incident.problem {
@@ -1118,17 +1059,12 @@ impl Trace {
             )?;
         }
         out.write_char(']')?;
-        out.write_str(",\"cancelled_at\":")?;
-        optional_time(out, self.cancelled_at)?;
-        out.write_str(",\"observed_at\":")?;
-        optional_time(out, self.observed_at)?;
-        out.write_str(",\"returned_at\":")?;
-        optional_time(out, self.returned_at)?;
+        optional_time(out, ",\"cancelled_at\":", self.cancelled_at)?;
+        optional_time(out, ",\"observed_at\":", self.observed_at)?;
+        optional_time(out, ",\"returned_at\":", self.returned_at)?;
         out.write_str(",\"spans\":[")?;
         for (i, span) in self.spans.iter().enumerate() {
-            if i > 0 {
-                out.write_char(',')?;
-            }
+            out.write_str(if i > 0 { "," } else { "" })?;
             write!(out, "{{\"id\":{},\"parent\":", span.id)?;
             optional_number(out, span.parent.map(SpanId::get))?;
             out.write_str(",\"node\":")?;
@@ -1137,7 +1073,7 @@ impl Trace {
             quote(out, &span.task)?;
             write!(
                 out,
-                ",\"kind\":\"{}\",\"outcome\":\"{}\",\"start\":\"{}\",\"end\":\"{}\",\"checks\":{},\"reports\":{},\"units\":\"{}\",\"overflowed\":{},\"max_check_gap\":\"{}\",\"max_check_gap_start\":\"{}\",\"check_time\":\"{}\",\"clock_regressions\":{},\"unattributed_calls\":{},\"stopped_at\":",
+                ",\"kind\":\"{}\",\"outcome\":\"{}\",\"start\":\"{}\",\"end\":\"{}\",\"checks\":{},\"reports\":{},\"units\":\"{}\",\"overflowed\":{},\"max_check_gap\":\"{}\",\"max_check_gap_start\":\"{}\",\"check_time\":\"{}\",\"clock_regressions\":{},\"unattributed_calls\":{}",
                 span.kind.name(),
                 outcome_name(span.outcome),
                 span.start.as_nanos(),
@@ -1152,7 +1088,7 @@ impl Trace {
                 span.stats.clock_regressions,
                 span.stats.unattributed_calls
             )?;
-            optional_time(out, span.stats.stopped_at)?;
+            optional_time(out, ",\"stopped_at\":", span.stats.stopped_at)?;
             out.write_str(",\"stop_reason\":")?;
             match span.stats.stop_reason {
                 Some(reason) => write!(out, "\"{}\"", stop_reason_name(reason))?,
@@ -1178,9 +1114,7 @@ impl Trace {
             }
             out.write_str(",\"sites\":[")?;
             for (j, site) in span.stats.sites.iter().enumerate() {
-                if j > 0 {
-                    out.write_char(',')?;
-                }
+                out.write_str(if j > 0 { "," } else { "" })?;
                 out.write_str("{\"file\":")?;
                 quote(out, site.file)?;
                 write!(
@@ -1233,7 +1167,8 @@ impl fmt::Display for Trace {
     }
 }
 
-fn optional_time(out: &mut impl fmt::Write, value: Option<Duration>) -> fmt::Result {
+fn optional_time(out: &mut impl fmt::Write, key: &str, value: Option<Duration>) -> fmt::Result {
+    out.write_str(key)?;
     match value {
         Some(time) => write!(out, "\"{}\"", time.as_nanos()),
         None => out.write_str("null"),

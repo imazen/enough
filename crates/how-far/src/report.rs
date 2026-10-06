@@ -36,53 +36,23 @@ impl Report for NoReport {
     }
 }
 
-impl<T: Report + ?Sized> Report for &T {
-    #[inline]
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        (**self).advance(completed);
-    }
-    #[inline]
-    fn may_report(&self) -> bool {
-        (**self).may_report()
-    }
+/// Forward `Report` through a pointer-like wrapper.
+macro_rules! forward_report {
+    ($($wrapper:ty),*) => {$(
+        impl<T: Report + ?Sized> Report for $wrapper {
+            #[inline]
+            #[track_caller]
+            fn advance(&self, completed: u64) {
+                (**self).advance(completed);
+            }
+            #[inline]
+            fn may_report(&self) -> bool {
+                (**self).may_report()
+            }
+        }
+    )*};
 }
-
-impl<T: Report + ?Sized> Report for &mut T {
-    #[inline]
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        (**self).advance(completed);
-    }
-    #[inline]
-    fn may_report(&self) -> bool {
-        (**self).may_report()
-    }
-}
-
-impl<T: Report + ?Sized> Report for Box<T> {
-    #[inline]
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        (**self).advance(completed);
-    }
-    #[inline]
-    fn may_report(&self) -> bool {
-        (**self).may_report()
-    }
-}
-
-impl<T: Report + ?Sized> Report for Arc<T> {
-    #[inline]
-    #[track_caller]
-    fn advance(&self, completed: u64) {
-        (**self).advance(completed);
-    }
-    #[inline]
-    fn may_report(&self) -> bool {
-        (**self).may_report()
-    }
-}
+forward_report!(&T, &mut T, Box<T>, Arc<T>);
 
 /// `None` discards reports; `Some` forwards them.
 impl<T: Report> Report for Option<T> {

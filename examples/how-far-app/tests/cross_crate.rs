@@ -1,10 +1,11 @@
 //! An application drives a pipeline library that calls a codec library, both
 //! in other crates, through one `&dyn Pulse`.
 
-use how_far_along::{NoPulse, Outcome, Status};
-use test_how_far_app::{all, find, images, tree, tree_stopping_when};
-use test_how_far_codec::{CodecError, Image};
-use test_how_far_pipeline::{PipelineError, process, process_each};
+use how_far_along::{IsStop, NoPulse, Outcome, Status};
+mod common;
+use common::{all, find, images, tree, tree_stopping_when};
+use how_far_example_codec::{self as codec, Image};
+use how_far_example_pipeline::{self as pipeline, process, process_each};
 
 #[test]
 fn tracking_never_changes_the_output() {
@@ -31,7 +32,9 @@ fn one_tree_records_both_libraries_phases() {
     let observer = tracked.observer();
     let result = process(&batch, &tracked);
     tracked
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     assert_eq!(root.status, Status::Finished(Outcome::Succeeded));
@@ -86,13 +89,15 @@ fn cancelling_inside_the_codec_records_each_level_and_returns_the_stop() {
     let result = process_each(&batch, &tracked);
     assert_eq!(
         result,
-        Err(PipelineError::Codec {
+        Err(pipeline::Error::Codec {
             image: 1,
-            error: CodecError::Stopped(how_far_along::StopReason::Cancelled)
+            error: codec::Error::Stopped(how_far_along::StopReason::Cancelled)
         })
     );
     tracked
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     assert_eq!(root.status, Status::Finished(Outcome::Cancelled));
@@ -121,13 +126,15 @@ fn corrupt_input_is_recorded_as_a_failure_not_a_cancellation() {
     let result = process_each(&batch, &tracked);
     assert_eq!(
         result,
-        Err(PipelineError::Codec {
+        Err(pipeline::Error::Codec {
             image: 1,
-            error: CodecError::Corrupt { row: 7 }
+            error: codec::Error::Corrupt { row: 7 }
         })
     );
     tracked
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     assert_eq!(root.status, Status::Finished(Outcome::Failed));
@@ -145,7 +152,7 @@ fn corrupt_input_is_recorded_as_a_failure_not_a_cancellation() {
 fn parallel_images_each_get_an_outcome_when_one_is_cancelled() {
     let batch = images(4);
     let tracked = tree_stopping_when("batch", |root| {
-        test_how_far_app::all(root)
+        common::all(root)
             .iter()
             .filter(|phase| phase.name == "transform")
             .map(|phase| phase.completed)
@@ -155,7 +162,7 @@ fn parallel_images_each_get_an_outcome_when_one_is_cancelled() {
     let observer = tracked.observer();
     let result = process(&batch, &tracked);
     let error = result.unwrap_err();
-    assert!(error.is_stop(), "{error:?}");
+    assert!(error.stop_reason().is_some(), "{error:?}");
     tracked.finish(Outcome::Cancelled).unwrap();
     let root = observer.snapshot();
     let encode = find(&root, &["encode"]);
@@ -188,7 +195,7 @@ fn an_empty_image_still_succeeds() {
     let empty = Image::pattern(8, 0);
     let tracked = tree("empty", how_far_along::Unstoppable);
     let observer = tracked.observer();
-    test_how_far_codec::encode(&empty, &tracked).unwrap();
+    how_far_example_codec::encode(&empty, &tracked).unwrap();
     tracked.finish(Outcome::Succeeded).unwrap();
     assert_eq!(observer.snapshot().fraction(), Some(1.0));
 }

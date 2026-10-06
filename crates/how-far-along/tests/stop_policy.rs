@@ -18,6 +18,21 @@ impl Stop for CountChecks {
     }
 }
 
+/// The root's policy times out and `local` cancels; replacing drops the root's.
+fn check_policies(pulse: &dyn Stop, local: &Stopper, replace: bool) -> Result<(), StopReason> {
+    let root = Err(StopReason::TimedOut);
+    assert_eq!(pulse.check(), if replace { Ok(()) } else { root });
+    local.cancel();
+    let result = pulse.check();
+    let expected = if replace {
+        Err(StopReason::Cancelled)
+    } else {
+        root
+    };
+    assert_eq!(result, expected);
+    result
+}
+
 #[test]
 fn borrowed_policies_apply_at_every_depth_and_keep_completion_ownership() {
     for replace in [false, true] {
@@ -51,23 +66,7 @@ fn borrowed_policies_apply_at_every_depth_and_keep_completion_ownership() {
                 .unwrap()
                 .pop()
                 .unwrap();
-            assert_eq!(
-                grandchild.check(),
-                if replace {
-                    Ok(())
-                } else {
-                    Err(StopReason::TimedOut)
-                }
-            );
-            local.cancel();
-            assert_eq!(
-                grandchild.check(),
-                Err(if replace {
-                    StopReason::Cancelled
-                } else {
-                    StopReason::TimedOut
-                })
-            );
+            check_policies(&grandchild, &local, replace).unwrap_err();
             // Counting is independent of the chosen checkpoint policy.
             how_far::Report::advance(&grandchild, 1);
             grandchild
@@ -133,24 +132,7 @@ fn owned_replacement_and_combination_survive_spawn_and_new_children() {
                 .unwrap()
                 .pop()
                 .unwrap();
-            assert_eq!(
-                child.check(),
-                if replace {
-                    Ok(())
-                } else {
-                    Err(StopReason::TimedOut)
-                }
-            );
-            local.cancel();
-            let result = child.check();
-            assert_eq!(
-                result,
-                Err(if replace {
-                    StopReason::Cancelled
-                } else {
-                    StopReason::TimedOut
-                })
-            );
+            let result = check_policies(&child, &local, replace);
             child.complete(result).unwrap_err();
         });
         worker.join().unwrap();

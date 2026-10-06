@@ -2,14 +2,15 @@
 //! codec contexts, and async runtimes.
 
 use almost_enough::Stopper;
-use how_far::{SharedPulse, TryStages};
+use how_far::{SharedPulse, Stages};
 use how_far_along::{
-    Child, Observer, Outcome, Phase, ProgressExt, Pulse, PulseTree, Reporter, Snapshot, Status,
-    Stop, StopReason, Unstoppable,
+    Child, IsStop, Observer, Outcome, Phase, ProgressExt, Pulse, PulseTree, Reporter, Snapshot,
+    Status, Stop, StopReason, Unstoppable,
 };
 use std::sync::Arc;
-use test_how_far_app::{find, tree, tree_stopping_when};
-use test_how_far_codec::{CodecError, EntropyCoder, Image, encode};
+mod common;
+use common::{find, tree, tree_stopping_when};
+use how_far_example_codec::{self as codec, EntropyCoder, Image, encode};
 
 fn owned<T: Send + Sync + 'static>() {}
 fn shared<T: Send + Sync>() {}
@@ -25,7 +26,7 @@ fn shared_views_and_trees_are_owned_and_thread_safe() {
     owned::<Arc<dyn Pulse>>();
     owned::<Box<dyn Pulse>>();
     shared::<Child<'_>>();
-    shared::<TryStages<'_>>();
+    shared::<Stages<'_>>();
     shared::<&dyn Pulse>();
 }
 
@@ -39,7 +40,7 @@ fn a_codec_context_that_owns_its_stop_is_cancelled_mid_loop() {
     let mut coder = EntropyCoder::new(tracked.share().unwrap());
     assert_eq!(
         coder.code(&tiles),
-        Err(CodecError::Stopped(StopReason::Cancelled))
+        Err(codec::Error::Stopped(StopReason::Cancelled))
     );
     assert_eq!(observer.snapshot().completed, 3);
     tracked.finish(Outcome::Cancelled).unwrap();
@@ -53,9 +54,11 @@ fn a_stage_view_stored_by_the_codec_stops_inside_its_stage() {
     });
     let observer = tracked.observer();
     let result = encode(&image, &tracked);
-    assert_eq!(result, Err(CodecError::Stopped(StopReason::Cancelled)));
+    assert_eq!(result, Err(codec::Error::Stopped(StopReason::Cancelled)));
     tracked
-        .finish(Outcome::from_result(&result, CodecError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     let entropy = find(&root, &["entropy"]);
@@ -111,7 +114,9 @@ fn blocking_work_runs_on_tokio_while_an_async_task_watches_and_cancels() {
         let work = tokio::task::spawn_blocking(move || {
             let result = encode(&image, &tracked);
             tracked
-                .finish(Outcome::from_result(&result, CodecError::is_stop))
+                .finish(Outcome::from_result(&result, |error| {
+                    error.stop_reason().is_some()
+                }))
                 .unwrap();
             result
         });
@@ -129,7 +134,7 @@ fn blocking_work_runs_on_tokio_while_an_async_task_watches_and_cancels() {
         }
         assert_eq!(
             work.await.unwrap(),
-            Err(CodecError::Stopped(StopReason::Cancelled))
+            Err(codec::Error::Stopped(StopReason::Cancelled))
         );
         assert_eq!(
             observer.snapshot().status,

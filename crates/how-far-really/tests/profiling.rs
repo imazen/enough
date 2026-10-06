@@ -110,29 +110,10 @@ fn check_storms_counts_units_and_original_sites_stay_separate() {
     );
     assert!(record.is_poll_storm(1_000, 1_000_000.0));
     assert!(!record.is_poll_storm(1_000_000, 1_000_000.0));
-    let check = record
-        .stats
-        .sites
-        .iter()
-        .find(|s| s.line == checks_line)
-        .unwrap();
-    assert_eq!(check.checks, 10_000);
-    assert_eq!(
-        record
-            .stats
-            .sites
-            .iter()
-            .find(|s| s.line == reports_line)
-            .unwrap()
-            .units,
-        16
-    );
-    let step = record
-        .stats
-        .sites
-        .iter()
-        .find(|s| s.line == step_line)
-        .unwrap();
+    let site = |line| record.stats.sites.iter().find(|s| s.line == line).unwrap();
+    assert_eq!(site(checks_line).checks, 10_000);
+    assert_eq!(site(reports_line).units, 16);
+    let step = site(step_line);
     assert_eq!((step.checks, step.reports), (1, 1));
     assert!(record.stats.sites.iter().all(|s| s.file == file!()));
 }

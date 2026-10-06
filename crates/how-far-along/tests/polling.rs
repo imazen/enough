@@ -1,7 +1,7 @@
 //! Callback dispatch over snapshots, on the owner thread and on workers.
 
 use almost_enough::Stopper;
-use how_far::{NoReport, ProgressWithStop};
+use how_far::ProgressWithStop;
 use how_far_along::poll::{LocalPoller, SharedPoller};
 use how_far_along::{Outcome, Phase, ProgressExt, Report, Status, Stop, StopReason, Total};
 use std::{
@@ -193,11 +193,4 @@ fn posted_delivery_moves_snapshots_to_the_owner_thread() {
         assert_eq!(rx.recv().unwrap().completed, 1);
     });
     job.finish().unwrap();
-}
-
-#[test]
-fn a_no_op_pair_compiles_away() {
-    let silent = ProgressWithStop::new(how_far_along::Unstoppable, NoReport);
-    assert_eq!(std::mem::size_of_val(&silent), 0);
-    silent.step(1).unwrap();
 }

@@ -62,4 +62,4 @@ use how_far_along::diagnostics::DiagnosticPulse;
 
 Tracking JSON uses schema version 2 (`NotStarted` and inferred-completion evidence).
 See [the example application](../../examples/how-far-app/README.md) and
-[API boundaries](../../docs/how-far-api.md).
+[design and API boundaries](../../docs/how-far-design.md).

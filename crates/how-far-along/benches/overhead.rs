@@ -106,6 +106,15 @@ fn advance_10k(report: &dyn Report) {
     }
 }
 
+/// Time `decode` over one 256 KiB buffer, reused across iterations.
+fn on_buf(b: &mut zenbench::Bencher, mut decode: impl FnMut(&mut [u8]) -> Result<(), StopReason>) {
+    let mut work = make_buf();
+    b.iter(|| {
+        let _ = decode(&mut work);
+        zenbench::black_box(&work);
+    })
+}
+
 fn tree(stop: impl Stop + 'static) -> PulseTree {
     PulseTree::new(Phase::new("bench", Total::Unknown), stop)
 }
@@ -180,27 +189,15 @@ fn main() {
                 group.throughput(zenbench::Throughput::Bytes(BUF as u64));
                 group.baseline("NoPulse");
                 group.bench("NoPulse", move |b| {
-                    let mut work = make_buf();
-                    b.iter(|| {
-                        let _ = decode(&mut work, chunk, &NoPulse);
-                        zenbench::black_box(&work);
-                    })
+                    on_buf(b, |w| decode(w, chunk, &NoPulse))
                 });
                 group.bench("tree(Unstoppable)", move |b| {
                     let pulse = tree(Unstoppable);
-                    let mut work = make_buf();
-                    b.iter(|| {
-                        let _ = decode(&mut work, chunk, &pulse);
-                        zenbench::black_box(&work);
-                    })
+                    on_buf(b, |w| decode(w, chunk, &pulse))
                 });
                 group.bench("tree(Stopper)", move |b| {
                     let pulse = tree(Stopper::new());
-                    let mut work = make_buf();
-                    b.iter(|| {
-                        let _ = decode(&mut work, chunk, &pulse);
-                        zenbench::black_box(&work);
-                    })
+                    on_buf(b, |w| decode(w, chunk, &pulse))
                 });
             });
         }
@@ -215,41 +212,21 @@ fn main() {
             group.baseline("&dyn Pulse → tree");
             group.bench("&dyn Pulse → tree", |b| {
                 let pulse = tree(Stopper::new());
-                let mut work = make_buf();
-                b.iter(|| {
-                    let _ = decode(&mut work, 256, &pulse);
-                    zenbench::black_box(&work);
-                })
+                on_buf(b, |w| decode(w, 256, &pulse))
             });
             group.bench("impl Pulse → tree", |b| {
                 let pulse = tree(Stopper::new());
-                let mut work = make_buf();
-                b.iter(|| {
-                    let _ = decode_generic(&mut work, 256, &pulse);
-                    zenbench::black_box(&work);
-                })
+                on_buf(b, |w| decode_generic(w, 256, &pulse))
             });
             group.bench("impl Pulse → NoPulse", |b| {
-                let mut work = make_buf();
-                b.iter(|| {
-                    let _ = decode_generic(&mut work, 256, &NoPulse);
-                    zenbench::black_box(&work);
-                })
+                on_buf(b, |w| decode_generic(w, 256, &NoPulse))
             });
             group.bench("gated &dyn Pulse → NoPulse", |b| {
-                let mut work = make_buf();
-                b.iter(|| {
-                    let _ = decode_live(&mut work, 256, &NoPulse);
-                    zenbench::black_box(&work);
-                })
+                on_buf(b, |w| decode_live(w, 256, &NoPulse))
             });
             group.bench("gated &dyn Pulse → tree", |b| {
                 let pulse = tree(Stopper::new());
-                let mut work = make_buf();
-                b.iter(|| {
-                    let _ = decode_live(&mut work, 256, &pulse);
-                    zenbench::black_box(&work);
-                })
+                on_buf(b, |w| decode_live(w, 256, &pulse))
             });
         });
     });

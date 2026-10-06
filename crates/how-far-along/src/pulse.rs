@@ -109,6 +109,11 @@ impl State {
     fn set_total(&self, total: Total) -> Result<(), PlanError> {
         self.with_owner(|p| p.set_total(total))?
     }
+    fn share(self: &Arc<Self>) -> Result<SharedPulse, PlanError> {
+        Ok(SharedPulse::new(View {
+            state: Arc::clone(self),
+        }))
+    }
 
     /// Administer the phase. Concurrent administrators, including shared
     /// views, run one at a time; a closed owner reports `Finished`.
@@ -241,10 +246,11 @@ impl how_far::Complete for PulseTree {
         let _ = self.node.state.complete(outcome);
     }
 }
+/// Forward the pulse traits to `self.$field`, a [`State`] or a pulse.
 macro_rules! pulse_view {
-    ($ty:ty, $field:ident) => {
+    ($ty:ty, $field:ident $(, #[$hint:meta])?) => {
         impl Stop for $ty {
-            #[inline]
+            $(#[$hint])?
             #[track_caller]
             fn check(&self) -> Result<(), StopReason> {
                 self.$field.check()
@@ -254,7 +260,7 @@ macro_rules! pulse_view {
             }
         }
         impl Report for $ty {
-            #[inline]
+            $(#[$hint])?
             #[track_caller]
             fn advance(&self, n: u64) {
                 self.$field.advance(n)
@@ -278,44 +284,11 @@ macro_rules! pulse_view {
                 self.$field.set_total(total)
             }
             fn share(&self) -> Result<SharedPulse, PlanError> {
-                Ok(SharedPulse::new(View {
-                    state: self.$field.clone(),
-                }))
+                self.$field.share()
             }
         }
     };
 }
-pulse_view!(TreePulse, state);
-pulse_view!(View, state);
-impl Stop for PulseTree {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.node.check()
-    }
-    fn may_stop(&self) -> bool {
-        self.node.may_stop()
-    }
-}
-impl Report for PulseTree {
-    #[track_caller]
-    fn advance(&self, n: u64) {
-        self.node.advance(n)
-    }
-    fn may_report(&self) -> bool {
-        self.node.may_report()
-    }
-}
-impl Pulse for PulseTree {
-    fn split(&self, e: Execution, p: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        self.node.split(e, p)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        self.node.start()
-    }
-    fn set_total(&self, t: Total) -> Result<(), PlanError> {
-        self.node.set_total(t)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        self.node.share()
-    }
-}
+pulse_view!(TreePulse, state, #[inline]);
+pulse_view!(View, state, #[inline]);
+pulse_view!(PulseTree, node);

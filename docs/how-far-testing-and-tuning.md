@@ -48,7 +48,7 @@ Worth a test each:
   assert that a stage shared by workers counts each unit once.
 
 The repository's
-[scenario tests](../tests/test-how-far-app/tests)
+[scenario tests](../examples/how-far-app/tests)
 do all of these against a pretend codec and a pipeline built on it, across
 crates, scoped and spawned threads, Rayon, and Tokio.
 

@@ -1,11 +1,12 @@
 //! Diagnostics across crate boundaries: a test measures libraries it does not
 //! own, including checks made inside a codec context that owns its stop.
 
-use how_far_along::{NodeId, Outcome, Unstoppable};
+use how_far_along::{IsStop, NodeId, Outcome, Unstoppable};
 use how_far_really::diagnostics::{DiagnosticPulse, Kind, Options};
 use how_far_really::profile::{Profiler, SpanKind, StdClock};
-use test_how_far_app::{find, images, tree};
-use test_how_far_pipeline::{PipelineError, process_each};
+mod common;
+use common::{find, images, tree};
+use how_far_example_pipeline::process_each;
 
 #[test]
 fn each_codec_stage_in_each_image_gets_its_own_span() {
@@ -15,7 +16,9 @@ fn each_codec_stage_in_each_image_gets_its_own_span() {
     let observer = measured.observer();
     let result = process_each(&batch, &measured);
     measured
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     let trace = profiler.snapshot().with_progress(root.clone());

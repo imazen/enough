@@ -90,16 +90,33 @@ fn forwarding_preserves_the_original_call_site() {
     assert_eq!(*site.0.lock().unwrap(), line);
 }
 
-#[test]
-fn step_counts_work_that_finished_before_a_stop() {
-    struct Stopped;
-    impl Stop for Stopped {
-        fn check(&self) -> Result<(), StopReason> {
-            Err(StopReason::Cancelled)
-        }
+/// Records reports and checks in order, with the line each came from.
+#[derive(Default)]
+struct Log(Mutex<Vec<(&'static str, u64, u32)>>);
+impl Report for Log {
+    #[track_caller]
+    fn advance(&self, n: u64) {
+        let line = std::panic::Location::caller().line();
+        self.0.lock().unwrap().push(("report", n, line));
     }
-    let count = Count(AtomicU64::new(0));
-    let work = ProgressWithStop::new(Stopped, &count);
-    assert_eq!(work.step(3), Err(StopReason::Cancelled));
-    assert_eq!(count.0.load(Ordering::Relaxed), 3);
+}
+impl Stop for Log {
+    #[track_caller]
+    fn check(&self) -> Result<(), StopReason> {
+        let line = std::panic::Location::caller().line();
+        self.0.lock().unwrap().push(("check", 0, line));
+        Err(StopReason::Cancelled)
+    }
+}
+
+#[test]
+fn step_counts_finished_work_then_checks_at_the_callers_line() {
+    let log = Log::default();
+    let work = ProgressWithStop::new(&log, &log);
+    let line = line!() + 1;
+    assert_eq!(work.step(17), Err(StopReason::Cancelled));
+    assert_eq!(
+        *log.0.lock().unwrap(),
+        [("report", 17, line), ("check", 0, line)]
+    );
 }

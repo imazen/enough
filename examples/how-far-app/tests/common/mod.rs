@@ -1,4 +1,5 @@
-//! Shared helpers for the application scenario tests in `tests/`.
+//! Helpers shared by the scenario tests; each test binary uses a subset.
+#![allow(dead_code)]
 
 use how_far_along::{Observer, Phase, PulseTree, Snapshot, Stop, StopReason, Total};
 use std::sync::{
@@ -77,8 +78,8 @@ pub fn all(root: &Snapshot) -> Vec<&Snapshot> {
 }
 
 /// A batch of small test images.
-pub fn images(count: usize) -> Vec<test_how_far_codec::Image> {
+pub fn images(count: usize) -> Vec<how_far_example_codec::Image> {
     (0..count)
-        .map(|i| test_how_far_codec::Image::pattern(64 + 16 * i, 48 + 8 * i))
+        .map(|i| how_far_example_codec::Image::pattern(64 + 16 * i, 48 + 8 * i))
         .collect()
 }

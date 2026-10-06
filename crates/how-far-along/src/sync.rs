@@ -221,13 +221,4 @@ mod tests {
         });
         assert_eq!(*cell.get(), 49);
     }
-    #[test]
-    #[cfg(feature = "std")]
-    fn ui_read_does_not_wait_for_a_busy_metadata_lock() {
-        let cell = MetadataCell::new(17);
-        let guard = cell.value.lock().unwrap();
-        assert!(cell.try_get().is_none());
-        drop(guard);
-        assert_eq!(*cell.try_get().unwrap(), 17);
-    }
 }

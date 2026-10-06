@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-pub use enough::{Stop, StopReason, Unstoppable};
+pub use enough::{IsStop, Stop, StopReason, Unstoppable};
 
 #[cfg(feature = "adapters")]
 mod adapters;
@@ -22,7 +22,7 @@ mod stop_only;
 #[cfg(feature = "checked")]
 mod try_stages;
 
-pub use completion::{Complete, IsStop, ResultExt};
+pub use completion::{Complete, ResultExt};
 pub use ext::ProgressExt;
 pub use paced::Paced;
 pub use phases::Phases;

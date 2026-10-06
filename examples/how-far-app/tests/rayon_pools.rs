@@ -1,11 +1,12 @@
 //! Rayon: shared stages, fork-join children, recursive `join`, nested
 //! parallelism, and `'static` tasks.
 
-use how_far_along::{Outcome, ProgressExt, Pulse, Status, Unstoppable};
+use how_far_along::{IsStop, Outcome, ProgressExt, Pulse, Status, Unstoppable};
 use std::sync::mpsc;
-use test_how_far_app::{all, find, images, tree};
-use test_how_far_codec::{CodecError, Image, encode, encode_quadtree};
-use test_how_far_pipeline::{PipelineError, process};
+mod common;
+use common::{all, find, images, tree};
+use how_far_example_codec::{self as codec, Image, encode, encode_quadtree};
+use how_far_example_pipeline::{self as pipeline, process};
 
 fn pool(threads: usize) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new()
@@ -87,7 +88,9 @@ fn the_global_pool_works_like_a_custom_one() {
     let observer = tracked.observer();
     let result = process(&batch, &tracked);
     tracked
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     assert_eq!(observer.snapshot().fraction(), Some(1.0));
 }
@@ -151,13 +154,15 @@ fn a_codec_failure_on_one_rayon_image_leaves_the_others_finished() {
     let result = pool(4).install(|| process(&batch, &tracked));
     assert_eq!(
         result,
-        Err(PipelineError::Codec {
+        Err(pipeline::Error::Codec {
             image: 2,
-            error: CodecError::Corrupt { row: 3 }
+            error: codec::Error::Corrupt { row: 3 }
         })
     );
     tracked
-        .finish(Outcome::from_result(&result, PipelineError::is_stop))
+        .finish(Outcome::from_result(&result, |error| {
+            error.stop_reason().is_some()
+        }))
         .unwrap();
     let root = observer.snapshot();
     assert_eq!(root.status, Status::Finished(Outcome::Failed));

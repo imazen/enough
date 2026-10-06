@@ -57,25 +57,22 @@ pub struct Summary {
     /// State of the observed phase, independent of its fraction.
     pub status: Status,
 }
-impl Summary {
-    fn leaf(status: Status, total: Total, completed: u64, overflow: bool) -> Self {
-        let fraction = match status {
-            Status::Finished(Outcome::Succeeded | Outcome::Skipped) => Some(1.0),
-            Status::Finished(Outcome::NotRun) => Some(0.0),
-            _ if overflow => None,
-            _ => match total {
-                Total::Exact(0) | Total::Estimated(0) => Some(0.0),
-                Total::Exact(n) | Total::Estimated(n) => {
-                    Some((completed as f64 / n as f64).min(1.0))
-                }
-                _ => None,
-            },
-        };
-        Self {
-            fraction,
-            unresolved_fraction: if fraction.is_some() { 0.0 } else { 1.0 },
-            status,
-        }
+/// Whether an outcome alone fixes a phase's fraction, whatever its children did.
+fn credited(status: Status) -> bool {
+    matches!(
+        status,
+        Status::Finished(Outcome::Succeeded | Outcome::Skipped | Outcome::NotRun)
+    )
+}
+/// The fraction of a leaf, or of a phase whose outcome fixes it.
+fn leaf_fraction(status: Status, total: Total, completed: u64, overflowed: bool) -> Option<f64> {
+    match (status, total) {
+        (Status::Finished(Outcome::Succeeded | Outcome::Skipped), _) => Some(1.0),
+        (Status::Finished(Outcome::NotRun), _) => Some(0.0),
+        _ if overflowed => None,
+        (_, Total::Exact(0) | Total::Estimated(0)) => Some(0.0),
+        (_, Total::Exact(n) | Total::Estimated(n)) => Some((completed as f64 / n as f64).min(1.0)),
+        _ => None,
     }
 }
 
@@ -173,29 +170,31 @@ impl Node {
         self.snapshot_with(false)
             .expect("blocking metadata read succeeds")
     }
-    fn snapshot_with(&self, nonblocking: bool) -> Option<Snapshot> {
-        // The state first: a terminal state guarantees the metadata read next
-        // includes any frozen snapshot.
+    /// Status, counter and metadata. The state is read first: a terminal state
+    /// guarantees the metadata read next includes any frozen snapshot.
+    fn read(&self, nonblocking: bool) -> Option<(Status, &Counter, Arc<Metadata>)> {
         let state = self.state.load(Ordering::Acquire);
         let meta = if nonblocking {
             self.meta.try_get()?
         } else {
             self.meta.get()
         };
+        Some(match state {
+            0 => (Status::NotStarted, &self.completed, meta),
+            1 => (Status::Running, &self.completed, meta),
+            // Without a frozen snapshot, a terminal outcome is always encoded.
+            _ => {
+                let outcome = decode(self.outcome.load(Ordering::Relaxed));
+                let status = Status::Finished(outcome.unwrap_or(Outcome::Abandoned));
+                (status, &self.final_count, meta)
+            }
+        })
+    }
+    fn snapshot_with(&self, nonblocking: bool) -> Option<Snapshot> {
+        let (status, counter, meta) = self.read(nonblocking)?;
         if let Some(frozen) = &meta.frozen {
             return Some(frozen.clone());
         }
-        let (status, counter) = match state {
-            0 => (Status::NotStarted, &self.completed),
-            1 => (Status::Running, &self.completed),
-            // Without a frozen snapshot, a terminal outcome is always encoded.
-            _ => (
-                Status::Finished(
-                    decode(self.outcome.load(Ordering::Relaxed)).unwrap_or(Outcome::Abandoned),
-                ),
-                &self.final_count,
-            ),
-        };
         let mut result = Snapshot {
             id: self.id,
             parent: self.parent,
@@ -210,11 +209,9 @@ impl Node {
             completed: counter.get(),
             overflowed: counter.overflowed(),
             completion_inferred: self.inferred.load(Ordering::Relaxed),
-            children: Vec::new(),
+            children: Vec::with_capacity(meta.children.len()),
         };
-        let children = meta.children.clone();
-        result.children = Vec::with_capacity(children.len());
-        for child in &children {
+        for child in &meta.children {
             let child = child.snapshot_with(nonblocking)?;
             if result.status == Status::NotStarted && child.status != Status::NotStarted {
                 // A pending branch whose child has started is running.
@@ -225,14 +222,9 @@ impl Node {
         Some(result)
     }
     fn summary(&self, nonblocking: bool) -> Option<Summary> {
-        // Acquire pairs with terminal publication; counters themselves are
-        // numeric observations, never synchronization for application data.
-        let state = self.state.load(Ordering::Acquire);
-        let meta = if nonblocking {
-            self.meta.try_get()?
-        } else {
-            self.meta.get()
-        };
+        // Counters are numeric observations, never synchronization for
+        // application data.
+        let (status, counter, meta) = self.read(nonblocking)?;
         if let Some(frozen) = &meta.frozen {
             return Some(Summary {
                 fraction: frozen.fraction(),
@@ -240,24 +232,15 @@ impl Node {
                 status: frozen.status,
             });
         }
-        let (status, counter) = match state {
-            0 => (Status::NotStarted, &self.completed),
-            1 => (Status::Running, &self.completed),
-            _ => (
-                Status::Finished(
-                    decode(self.outcome.load(Ordering::Relaxed)).unwrap_or(Outcome::Abandoned),
-                ),
-                &self.final_count,
-            ),
+        let fraction = leaf_fraction(status, meta.total, counter.get(), counter.overflowed());
+        let mut result = Summary {
+            fraction,
+            unresolved_fraction: if fraction.is_some() { 0.0 } else { 1.0 },
+            status,
         };
-        let mut result = Summary::leaf(status, meta.total, counter.get(), counter.overflowed());
         if meta.children.is_empty() {
             return Some(result);
         }
-        let terminal_credit = matches!(
-            status,
-            Status::Finished(Outcome::Succeeded | Outcome::Skipped | Outcome::NotRun)
-        );
         let mut sum = 0.0;
         for child in &meta.children {
             sum += child.weight as f64;
@@ -273,7 +256,7 @@ impl Node {
             fraction += weight * observed.fraction.unwrap_or(0.0);
             unresolved += weight * observed.unresolved_fraction;
         }
-        if !terminal_credit {
+        if !credited(status) {
             result.fraction = if unresolved == 0.0 {
                 Some(fraction.clamp(0.0, 1.0))
             } else {
@@ -283,21 +266,8 @@ impl Node {
         }
         Some(result)
     }
-    /// The outcome, once there is one.
-    fn outcome(&self) -> Option<Outcome> {
-        if self.state.load(Ordering::Acquire) != 2 {
-            return None;
-        }
-        if let Some(outcome) = decode(self.outcome.load(Ordering::Relaxed)) {
-            return Some(outcome);
-        }
-        match &self.meta.get().frozen {
-            Some(Snapshot {
-                status: Status::Finished(outcome),
-                ..
-            }) => Some(*outcome),
-            _ => Some(Outcome::Abandoned),
-        }
+    fn finished(&self) -> bool {
+        self.state.load(Ordering::Acquire) == 2
     }
 }
 
@@ -475,7 +445,7 @@ impl Phase {
     pub fn finish_with(&mut self, outcome: Outcome) -> Result<(), PlanError> {
         self.ensure_live()?;
         for child in &self.node.meta.get().children {
-            if child.outcome().is_none() {
+            if !child.finished() {
                 return Err(PlanError::UnfinishedChildren);
             }
         }
@@ -512,7 +482,7 @@ impl Phase {
         let code = encode(outcome);
         let mut running_child = false;
         for child in &self.node.meta.get().children {
-            if child.state.load(Ordering::Acquire) != 2 {
+            if !child.finished() {
                 running_child = true;
             }
         }
@@ -529,7 +499,7 @@ impl Phase {
         self.node.state.store(2, Ordering::Release);
     }
     fn ensure_live(&self) -> Result<(), PlanError> {
-        if self.node.state.load(Ordering::Acquire) == 2 {
+        if self.node.finished() {
             Err(PlanError::Finished)
         } else {
             Ok(())
@@ -546,7 +516,7 @@ impl Phase {
 }
 impl Drop for Phase {
     fn drop(&mut self) {
-        if self.node.state.load(Ordering::Acquire) != 2 {
+        if !self.node.finished() {
             self.seal(Outcome::Abandoned);
         }
     }
@@ -678,7 +648,7 @@ impl Observer {
     }
     /// Whether the phase has an outcome, without walking the tree.
     pub fn is_finished(&self) -> bool {
-        self.node.state.load(Ordering::Acquire) == 2
+        self.node.finished()
     }
     /// Observers of this phase's planned children, in declared order; empty
     /// for a leaf. Copies one list of handles, without walking the subtree.
@@ -833,33 +803,15 @@ impl Snapshot {
     /// Work fraction in [0, 1], or None when any required denominator is unknown
     /// or invalid. Success/skipping discharges the obligation, including zero work.
     pub fn fraction(&self) -> Option<f64> {
-        if self.status == Status::Finished(Outcome::NotRun) {
-            return Some(0.0);
+        if self.children.is_empty() || credited(self.status) {
+            return leaf_fraction(self.status, self.total, self.completed, self.overflowed);
         }
-        if matches!(
-            self.status,
-            Status::Finished(Outcome::Succeeded | Outcome::Skipped)
-        ) {
-            return Some(1.0);
+        let sum = self.child_weight_sum();
+        let mut result = 0.0;
+        for child in &self.children {
+            result += child.weight as f64 / sum * child.fraction()?;
         }
-        if !self.children.is_empty() {
-            let sum = self.child_weight_sum();
-            let mut result = 0.0;
-            for child in &self.children {
-                result += child.weight as f64 / sum * child.fraction()?;
-            }
-            return Some(result.clamp(0.0, 1.0));
-        }
-        if self.overflowed {
-            return None;
-        }
-        match self.total {
-            Total::Exact(n) | Total::Estimated(n) if n > 0 => {
-                Some((self.completed as f64 / n as f64).min(1.0))
-            }
-            Total::Exact(0) | Total::Estimated(0) => Some(0.0),
-            _ => None,
-        }
+        Some(result.clamp(0.0, 1.0))
     }
     /// Fraction of the fixed budget whose count denominator is unresolved.
     /// This lets consumers display "known work + unknown remainder" honestly.

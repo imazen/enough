@@ -1,74 +1,5 @@
 //! Transfer the final work result without converting or consuming its error.
-use crate::{Outcome, StopReason};
-
-/// Whether an error is a cancellation, and which one.
-///
-/// Progress owners use it to record a failed phase as `Cancelled` rather than
-/// `Failed`; it never converts or consumes the error. [`StopReason`]
-/// implements it. A library implements it for its own error type, next to the
-/// `From<StopReason>` that lets `?` work at a checkpoint:
-///
-/// ```
-/// use how_far::{IsStop, StopReason};
-///
-/// enum Error {
-///     Corrupt,
-///     Stopped(StopReason),
-/// }
-/// impl From<StopReason> for Error {
-///     fn from(reason: StopReason) -> Self {
-///         Self::Stopped(reason)
-///     }
-/// }
-/// impl IsStop for Error {
-///     fn stop_reason(&self) -> Option<StopReason> {
-///         match self {
-///             Self::Stopped(reason) => Some(*reason),
-///             _ => None,
-///         }
-///     }
-/// }
-/// assert!(Error::Corrupt.stop_reason().is_none());
-/// ```
-///
-/// A foreign error type the library cannot implement it for goes through the
-/// `_classified` helpers with a closure instead.
-///
-/// Forgetting the implementation is reported as this trait being unimplemented,
-/// not as a type mismatch elsewhere:
-///
-/// ```compile_fail,E0277
-/// use how_far::{prelude::*, PhaseSpec, Stages, StopReason, Total};
-///
-/// enum Error {
-///     Stopped(StopReason),
-/// }
-/// impl From<StopReason> for Error {
-///     fn from(reason: StopReason) -> Self {
-///         Self::Stopped(reason)
-///     }
-/// }
-/// fn encode(pulse: &dyn Pulse) -> Result<(), Error> {
-///     Stages::new(pulse, &[PhaseSpec::new("work", 1, Total::Unknown)])
-///         .complete_with(|stages| stages.run(|stage| Ok(stage.check()?)))
-/// }
-/// ```
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not say whether it is a cancellation",
-    label = "progress tracking needs to classify this error",
-    note = "implement `how_far::IsStop for {Self}`, returning `Some(reason)` for its stop variant",
-    note = "for an error type you cannot implement it for, use `run_classified` or `complete_classified`"
-)]
-pub trait IsStop {
-    /// The cancellation this error reports, or `None` for any other failure.
-    fn stop_reason(&self) -> Option<StopReason>;
-}
-
-impl IsStop for StopReason {
-    fn stop_reason(&self) -> Option<StopReason> {
-        Some(*self)
-    }
-}
+use crate::{IsStop, Outcome};
 
 /// An owner that can record a result without changing the operation's result.
 /// Reporting problems are diagnostic evidence, never replacement work errors.
@@ -80,6 +11,26 @@ pub trait Complete: Sized {
 
     /// Classify the error with [`IsStop`], record completion, and return the
     /// original result.
+    ///
+    /// Forgetting `IsStop` for a library's error is reported as that trait
+    /// being unimplemented, not as a type mismatch elsewhere:
+    ///
+    /// ```compile_fail,E0277
+    /// use how_far::{prelude::*, PhaseSpec, Stages, StopReason, Total};
+    ///
+    /// enum Error {
+    ///     Stopped(StopReason),
+    /// }
+    /// impl From<StopReason> for Error {
+    ///     fn from(reason: StopReason) -> Self {
+    ///         Self::Stopped(reason)
+    ///     }
+    /// }
+    /// fn encode(pulse: &dyn Pulse) -> Result<(), Error> {
+    ///     Stages::new(pulse, &[PhaseSpec::new("work", 1, Total::Unknown)])
+    ///         .complete_with(|stages| stages.run(|stage| Ok(stage.check()?)))
+    /// }
+    /// ```
     fn complete<T, E>(self, result: Result<T, E>) -> Result<T, E>
     where
         E: IsStop,

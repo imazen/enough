@@ -21,9 +21,6 @@ members = [
     "tests/test-codec-mock",
     "tests/test-ergonomics",
     "tests/test-or-do-this",
-    "tests/test-how-far-codec",
-    "tests/test-how-far-pipeline",
-    "tests/test-how-far-app",
 ]
 # `apidoc/` is the CI-free public-API snapshot runner: excluded so plain
 # `cargo test` and every CI job (incl. --all-features) never compile its

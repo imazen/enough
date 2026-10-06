@@ -138,35 +138,4 @@ impl how_far::Complete for FnPulse {
         self.tree.complete_as(outcome);
     }
 }
-impl Stop for FnPulse {
-    #[track_caller]
-    fn check(&self) -> Result<(), StopReason> {
-        self.tree.check()
-    }
-    fn may_stop(&self) -> bool {
-        true
-    }
-}
-impl Report for FnPulse {
-    #[track_caller]
-    fn advance(&self, n: u64) {
-        self.tree.advance(n)
-    }
-    fn may_report(&self) -> bool {
-        self.tree.may_report()
-    }
-}
-impl Pulse for FnPulse {
-    fn split(&self, e: Execution, p: &[PhaseSpec<'_>]) -> Result<Vec<Child<'_>>, PlanError> {
-        self.tree.split(e, p)
-    }
-    fn start(&self) -> Result<(), PlanError> {
-        self.tree.start()
-    }
-    fn set_total(&self, t: Total) -> Result<(), PlanError> {
-        self.tree.set_total(t)
-    }
-    fn share(&self) -> Result<SharedPulse, PlanError> {
-        self.tree.share()
-    }
-}
+pulse_view!(FnPulse, tree);

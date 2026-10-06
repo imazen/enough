@@ -1,14 +1,13 @@
-//! Host-level contracts: real CPU pools, joins, a CLI renderer, and an async
-//! request owner.
+//! Host-level contracts: real CPU pools, joins, and an async request owner.
 use almost_enough::Stopper;
 use how_far::ProgressWithStop;
-use how_far_along::poll::{LocalPoller, SharedPoller};
+use how_far_along::poll::SharedPoller;
 use how_far_along::{
     Execution, Outcome, Phase, PhaseSpec, ProgressExt, Report, Status, Stop, Total,
 };
 use how_far_really::profile::{Profiler, SpanKind, StdClock};
 use rayon::prelude::*;
-use std::{cell::RefCell, fmt::Write, num::NonZeroUsize, rc::Rc, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc};
 
 fn search_block(block: usize) -> u64 {
     let mut value = block as u64;
@@ -154,36 +153,6 @@ fn codec_pipeline_counts_accepted_blocks_across_two_parallel_waves_and_a_serial_
             assert!(trace.cancellation_return_latency().is_some());
         }
     }
-}
-
-#[test]
-fn a_console_renderer_samples_lazily_and_receives_the_final_state() {
-    let mut job = Phase::new("download", Total::Exact(17));
-    let output = Rc::new(RefCell::new(String::new()));
-    let display = output.clone();
-    let mut poller = LocalPoller::new(job.observer());
-    poller.subscribe(move |event| {
-        let snapshot = event.snapshot();
-        writeln!(
-            display.borrow_mut(),
-            "{}: {} units; {:?}",
-            snapshot.name,
-            snapshot.completed,
-            snapshot.status
-        )
-        .unwrap();
-    });
-    for size in [16, 1] {
-        job.reporter().advance(size);
-        poller.poll();
-    }
-    job.finish().unwrap();
-    poller.poll();
-    assert!(
-        output
-            .borrow()
-            .contains("download: 17 units; Finished(Succeeded)")
-    );
 }
 
 #[test]

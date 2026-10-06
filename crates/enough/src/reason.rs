@@ -24,6 +24,9 @@ use core::fmt;
 ///     fn from(r: StopReason) -> Self { MyError::Stopped(r) }
 /// }
 /// ```
+///
+/// Implement [`IsStop`] too, so code holding your error can tell a stop from
+/// a failure without knowing your error type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum StopReason {
@@ -62,6 +65,54 @@ impl StopReason {
     #[inline]
     pub fn is_timed_out(&self) -> bool {
         matches!(self, Self::TimedOut)
+    }
+}
+
+/// Whether an error is a stop, and which one.
+///
+/// Callers use it to treat a stop differently from a failure, for example to
+/// skip a retry, log quietly, or record a progress phase as cancelled. It only
+/// inspects the error. [`StopReason`] implements it; an error type with a stop
+/// variant implements it next to its `From<StopReason>`:
+///
+/// ```rust
+/// use enough::{IsStop, StopReason};
+///
+/// enum MyError {
+///     Corrupt,
+///     Stopped(StopReason),
+/// }
+/// impl From<StopReason> for MyError {
+///     fn from(reason: StopReason) -> Self {
+///         Self::Stopped(reason)
+///     }
+/// }
+/// impl IsStop for MyError {
+///     fn stop_reason(&self) -> Option<StopReason> {
+///         match self {
+///             Self::Stopped(reason) => Some(*reason),
+///             _ => None,
+///         }
+///     }
+/// }
+/// assert_eq!(MyError::Stopped(StopReason::TimedOut).stop_reason(), Some(StopReason::TimedOut));
+/// assert!(MyError::Corrupt.stop_reason().is_none());
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not say whether it is a stop",
+    label = "this error needs to say whether it is a stop",
+    note = "implement `enough::IsStop for {Self}`, returning `Some(reason)` for its stop variant",
+    note = "for an error type you cannot implement it for, classify it explicitly where it is handled"
+)]
+pub trait IsStop {
+    /// The stop this error reports, or `None` for any other failure.
+    fn stop_reason(&self) -> Option<StopReason>;
+}
+
+impl IsStop for StopReason {
+    #[inline]
+    fn stop_reason(&self) -> Option<StopReason> {
+        Some(*self)
     }
 }
 

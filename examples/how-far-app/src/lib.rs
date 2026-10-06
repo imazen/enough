@@ -79,7 +79,13 @@ mod tests {
         for mode in [Mode::Fatal, Mode::FallbackFails] {
             let (result, trace) =
                 observe(Unstoppable, |p| pipeline::convert(&[1, 2], p, mode, true));
-            assert_eq!(result, Err(Error::Codec(codec::Error::InvalidInput)));
+            assert_eq!(
+                result,
+                Err(Error::Codec {
+                    image: 0,
+                    error: codec::Error::Corrupt { row: 0 }
+                })
+            );
             let root = trace.progress.unwrap();
             assert_eq!(root.status, Status::Finished(Outcome::Failed));
             assert_eq!(root.children[1].status, Status::Finished(Outcome::NotRun));
@@ -98,7 +104,10 @@ mod tests {
         });
         assert_eq!(
             result,
-            Err(Error::Codec(codec::Error::Stopped(StopReason::Cancelled)))
+            Err(Error::Codec {
+                image: 0,
+                error: codec::Error::Stopped(StopReason::Cancelled)
+            })
         );
         let root = trace.progress.unwrap();
         assert_eq!(root.status, Status::Finished(Outcome::Cancelled));
@@ -238,7 +247,10 @@ mod tests {
         });
         assert_eq!(
             result,
-            Err(Error::Codec(codec::Error::Stopped(StopReason::Cancelled)))
+            Err(Error::Codec {
+                image: 0,
+                error: codec::Error::Stopped(StopReason::Cancelled)
+            })
         );
         let root = trace.progress.unwrap();
         assert_eq!(
