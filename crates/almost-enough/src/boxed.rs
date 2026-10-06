@@ -46,10 +46,11 @@ use crate::{Stop, StopReason, StopToken};
 ///
 /// **Prefer [`StopToken`]**, which is `Clone`. `BoxedStop` wraps one and
 /// checks the same way: no-op stops (like `Unstoppable`) are stored as
-/// nothing and never dispatched, a `Stopper` or `SyncStopper` is checked as
-/// a direct atomic load without a vtable, and wrapping a `StopToken` or
-/// another `BoxedStop` reuses it instead of nesting. Anything else is
-/// allocated and checked through a vtable.
+/// nothing and never dispatched, a `Stopper` is checked as a direct atomic
+/// load without a vtable, a `SyncStopper` keeps its own `Arc` behind the
+/// vtable, and wrapping a `StopToken` or another `BoxedStop` reuses it
+/// instead of nesting. Anything else is allocated and checked through a
+/// vtable.
 ///
 /// # Example
 ///

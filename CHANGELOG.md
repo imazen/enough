@@ -29,11 +29,18 @@
 
 ### Changed
 
+- `almost-enough`: `StopToken` drops its `SyncStopper` arm. With four arms,
+  LLVM compiled `check` to a jump table: an indirect jump on every check on
+  x86-64, for every token. With three it is two conditional branches, and
+  on aarch64 a `Stopper` token's check falls through without a taken branch
+  (30 → 21 instructions in `check`). A `SyncStopper` in a `StopToken` or
+  `BoxedStop` keeps its own `Arc` (no allocation) and is checked through
+  the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
-  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
-  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
-  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
-  each other. Still not `Clone`; auto traits unchanged.
+  a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
+  check in generic code, 16 → 14 through `&dyn Stop`), a `Stopper` or
+  `SyncStopper` is no longer allocated, and `BoxedStop`/`StopToken` nest
+  without wrapping each other. Still not `Clone`; auto traits unchanged.
 - `almost-enough`: `PollMeter` looks call sites up by the address of their
   `Location` instead of hashing the file path on every poll, with a shortcut
   when a poll comes from the same site as the previous one: 693 → 308

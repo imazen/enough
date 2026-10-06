@@ -15,7 +15,7 @@ enough (core, no_std, zero deps)
 
 almost-enough (batteries, re-exports enough)
 ├── StopToken: Arc-based, Clone, automatic Unstoppable optimization
-├── Stopper / SyncStopper: Arc<StopperInner>, zero-cost From<> → StopToken
+├── Stopper / SyncStopper: Arc-based; From<> → StopToken reuses the Arc
 ├── StopSource / StopRef: stack-based, zero-alloc, borrowed
 ├── ChildStopper: hierarchical parent-child cancellation
 ├── BoxedStop: legacy, prefer StopToken
@@ -64,6 +64,13 @@ Before: `StopToken(Stopper)` = `Arc<Stopper{Arc<AtomicBool>}>` — 2 hops.
 After: `StopToken(Stopper)` = `Arc<StopperInner{AtomicBool}>` — 1 hop.
 Same heap allocation, same `AtomicBool`, same memory address. All clones
 (Stopper handles + StopToken + DynStop) share one `AtomicBool`.
+
+`StopToken` keeps three arms: `None`, a direct load of a `Stopper`'s flag,
+and `Dyn`. Until 0.4.5 it had a fourth, an Acquire load for `SyncStopper`,
+and with four arms LLVM compiled `check` to a jump table: an indirect jump
+on every check on x86-64, for every token. A `SyncStopper` now takes the
+`Dyn` arm, reusing its own `Arc` (`SyncStopperInner` implements `Stop`), so
+it costs a vtable call per check instead of a direct load.
 
 ### 4. `may_stop()` on the trait, not `active_stop()` method
 

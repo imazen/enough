@@ -226,8 +226,9 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
 ## Type Erasure
 
 Prevent monomorphization explosion at API boundaries with [`StopToken`].
-[`Stopper`] and [`SyncStopper`] convert to `StopToken` at zero cost via
-`Into` — the existing Arc is reused, no double-wrapping:
+[`Stopper`] and [`SyncStopper`] convert to `StopToken` via `Into` without
+allocating — the existing Arc is reused. A `Stopper` is then checked
+directly, a `SyncStopper` through the vtable:
 
 ```rust
 use almost_enough::{CloneStop, StopToken, Stopper, Stop, StopExt};
