@@ -23,6 +23,10 @@
   (~103 µs mean), fast-ssim2 has 456 ms per-stage gaps. PollMeter's own cost
   measures 62.7 ns/call. See `dev/cancel-latency/README.md`.
 
+### Added
+
+- `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
+
 ### Changed
 
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
