@@ -152,19 +152,19 @@ impl State {
                     PlanError::AlreadyInUse
                 }
             })?;
-        match self.with_owner(|phase| phase.split_vec(execution, parts)) {
-            Ok(Ok(phases)) => {
-                let mut children = Vec::with_capacity(phases.len());
-                for phase in phases {
-                    children.push(Child::new(TreePulse::new(
-                        phase,
-                        Arc::clone(&self.stop),
-                        #[cfg(feature = "callback")]
-                        self.callback.clone(),
-                    )));
-                }
-                Ok(children)
-            }
+        let mut children = Vec::with_capacity(parts.len());
+        let split = self.with_owner(|phase| {
+            phase.split_each(execution, parts, |phase| {
+                children.push(Child::new(TreePulse::new(
+                    phase,
+                    Arc::clone(&self.stop),
+                    #[cfg(feature = "callback")]
+                    self.callback.clone(),
+                )));
+            })
+        });
+        match split {
+            Ok(Ok(())) => Ok(children),
             Ok(Err(error)) | Err(error) => {
                 // A concurrent owner drop must never resurrect planning.
                 let _ = self.activity.compare_exchange(

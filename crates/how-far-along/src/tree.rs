@@ -78,7 +78,7 @@ fn leaf_fraction(status: Status, total: Total, completed: u64, overflowed: bool)
 
 #[derive(Clone)]
 struct Metadata {
-    units: String,
+    units: Name,
     total: Total,
     revisions: Vec<Total>,
     execution: Execution,
@@ -116,10 +116,43 @@ fn decode(code: u8) -> Option<Outcome> {
 /// How many recent total revisions a phase keeps.
 const MAX_REVISIONS: usize = 16;
 
+/// A phase's name or units, inline when short, as most are, so naming a
+/// phase rarely allocates.
+#[derive(Clone)]
+enum Name {
+    Inline { len: u8, bytes: [u8; INLINE_NAME] },
+    Heap(Box<str>),
+}
+const INLINE_NAME: usize = 22;
+impl Name {
+    fn new(name: &str) -> Self {
+        match name.len() {
+            len @ ..=INLINE_NAME => {
+                let mut bytes = [0; INLINE_NAME];
+                bytes[..len].copy_from_slice(name.as_bytes());
+                Self::Inline {
+                    len: len as u8,
+                    bytes,
+                }
+            }
+            _ => Self::Heap(name.into()),
+        }
+    }
+    fn as_str(&self) -> &str {
+        match self {
+            // Always valid: a whole `str` was copied in.
+            Self::Inline { len, bytes } => {
+                core::str::from_utf8(&bytes[..usize::from(*len)]).unwrap_or_default()
+            }
+            Self::Heap(name) => name,
+        }
+    }
+}
+
 struct Node {
     id: NodeId,
     parent: Option<NodeId>,
-    name: String,
+    name: Name,
     weight: u64,
     initial_total: Total,
     next_id: Arc<AtomicUsize>,
@@ -145,7 +178,7 @@ impl Node {
         Self {
             id,
             parent,
-            name: spec.name.to_string(),
+            name: Name::new(spec.name),
             weight: spec.weight,
             initial_total: spec.total,
             next_id,
@@ -157,7 +190,7 @@ impl Node {
             completed: Counter::new(),
             final_count: Counter::new(),
             meta: MetadataCell::new(Metadata {
-                units: spec.units.to_string(),
+                units: Name::new(spec.units),
                 total: spec.total,
                 revisions: Vec::new(),
                 execution: spec.execution,
@@ -198,9 +231,9 @@ impl Node {
         let mut result = Snapshot {
             id: self.id,
             parent: self.parent,
-            name: self.name.clone(),
+            name: self.name.as_str().into(),
             weight: self.weight,
-            units: meta.units.clone(),
+            units: meta.units.as_str().into(),
             total: meta.total,
             initial_total: self.initial_total,
             total_revisions: meta.revisions.clone(),
@@ -288,7 +321,7 @@ pub struct Phase {
 impl Phase {
     /// Start a job: a pending root leaf that counts `items`.
     pub fn new(name: impl Into<String>, total: Total) -> Self {
-        let name = name.into();
+        let name: String = name.into();
         Self {
             node: Arc::new(Node::new(
                 NodeId::ROOT,
@@ -332,9 +365,9 @@ impl Phase {
     /// Name the counted unit, before planning or counting begins.
     pub fn set_units(&mut self, units: impl Into<String>) -> Result<(), PlanError> {
         self.ensure_unused()?;
-        let units = units.into();
+        let units: String = units.into();
         let mut meta = (*self.node.meta.get()).clone();
-        meta.units = units;
+        meta.units = Name::new(&units);
         self.node.meta.publish(meta);
         Ok(())
     }
@@ -400,6 +433,18 @@ impl Phase {
         execution: Execution,
         parts: &[PhaseSpec<'_>],
     ) -> Result<Vec<Phase>, PlanError> {
+        let mut children = Vec::with_capacity(parts.len());
+        self.split_each(execution, parts, |child| children.push(child))?;
+        Ok(children)
+    }
+    /// [`split_vec`](Self::split_vec), handing each child to `each` in order
+    /// instead of collecting them.
+    pub(crate) fn split_each(
+        &mut self,
+        execution: Execution,
+        parts: &[PhaseSpec<'_>],
+        mut each: impl FnMut(Phase),
+    ) -> Result<(), PlanError> {
         self.ensure_unused()?;
         PhaseSpec::validate_split(parts)?;
         let first = self
@@ -409,27 +454,29 @@ impl Phase {
                 n.checked_add(parts.len())
             })
             .map_err(|_| PlanError::Overflow)?;
-        let mut children = Vec::with_capacity(parts.len());
         let mut nodes = Vec::with_capacity(parts.len());
         for (i, part) in parts.iter().enumerate() {
-            let node = Arc::new(Node::new(
+            nodes.push(Arc::new(Node::new(
                 NodeId(first + i),
                 Some(self.node.id),
                 part,
                 Arc::clone(&self.node.next_id),
-            ));
-            nodes.push(Arc::clone(&node));
-            children.push(Phase { node });
+            )));
         }
         let mut meta = (*self.node.meta.get()).clone();
         meta.execution = execution;
         // A branch has no total of its own, so neither does its history.
         meta.total = Total::Unknown;
         meta.revisions.clear();
+        for node in &nodes {
+            each(Phase {
+                node: Arc::clone(node),
+            });
+        }
         meta.children = nodes;
         self.node.meta.publish(meta);
         self.node.branch.store(true, Ordering::Release);
-        Ok(children)
+        Ok(())
     }
     /// Record success after every worker joins and every child finishes.
     /// Failed child attempts may be retained under a recovered successful parent.
@@ -625,7 +672,7 @@ impl Observer {
     }
     /// This phase's stable name; duplicate names are distinguished by `id`.
     pub fn name(&self) -> &str {
-        &self.node.name
+        self.node.name.as_str()
     }
 
     /// Take a snapshot now.
