@@ -201,6 +201,12 @@ pub struct Stats {
     /// Longest interval between reports, if report timing was on.
     pub max_report_gap: Option<ReportGap>,
     /// Time spent inside instrumented checks, including any work they ran.
+    ///
+    /// Timing a check takes a second clock read, so a span times its first
+    /// 16 checks, every 16th after them, and every check that returned a
+    /// stop, and scales the timed total to all its checks. A slow check
+    /// that was not timed still shows in [`max_check_gap`](Self::max_check_gap),
+    /// which runs from one check's start to the next.
     pub check_time: Duration,
     /// When the first check that returned a stop error finished.
     pub stopped_at: Option<Duration>,
@@ -416,14 +422,8 @@ impl Profiler {
                 kind,
                 start,
                 time_reports: self.inner.report_timing.load(Ordering::Relaxed),
-                state: Mutex::new(SpanState {
-                    stats: Stats::default(),
-                    last_check: start,
-                    last_report: start,
-                    last_report_site: None,
-                    window: Window::new(start),
-                    closed: false,
-                }),
+                checks_started: AtomicUsize::new(0),
+                state: Mutex::new(SpanState::new(nanos(start))),
             }),
         }
     }
@@ -463,60 +463,115 @@ impl Profiler {
     }
 }
 
+/// A reading in nanoseconds of the clock's epoch: hot state is kept in
+/// these, which compare and subtract in one instruction, and `finish` turns
+/// them into the public `Duration`s. Exact below 584 years.
+fn nanos(at: Duration) -> u64 {
+    at.as_secs()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(at.subsec_nanos()))
+}
+
 struct SpanState {
     stats: Stats,
-    last_check: Duration,
-    last_report: Duration,
+    /// Checks whose duration `check_time` sums so far.
+    timed_checks: u64,
+    check_time: u64,
+    max_check_gap: u64,
+    max_check_gap_start: u64,
+    /// `stats.max_report_gap`'s duration.
+    max_report_gap: Option<u64>,
+    last_check: u64,
+    last_report: u64,
     last_report_site: Option<SourceSite>,
     /// Checks since the last report, to tell a coarse reporting unit from
     /// missing cancellation checks.
     window: Window,
+    /// `stats.sites[i].max_gap_before_check`.
+    site_gaps: Vec<u64>,
+    /// Indices in `stats.sites` of the last check's and the last report's
+    /// sites, tried first: a loop that steps alternates between the two.
+    check_site: usize,
+    report_site: usize,
     closed: bool,
 }
 
 impl SpanState {
+    fn new(start: u64) -> Self {
+        Self {
+            stats: Stats::default(),
+            timed_checks: 0,
+            check_time: 0,
+            max_check_gap: 0,
+            max_check_gap_start: 0,
+            max_report_gap: None,
+            last_check: start,
+            last_report: start,
+            last_report_site: None,
+            window: Window::new(start),
+            site_gaps: Vec::new(),
+            check_site: 0,
+            report_site: 0,
+            closed: false,
+        }
+    }
+
     /// End the interval since the last report at `end`, keeping it if longest.
-    fn close_report_gap(&mut self, end: Duration, duration: Duration, to: Option<SourceSite>) {
+    fn close_report_gap(&mut self, end: u64, duration: u64, to: Option<SourceSite>) {
         let (checks, max_check_gap) = self.window.close(end);
-        if self
-            .stats
-            .max_report_gap
-            .as_ref()
-            .is_none_or(|old| duration > old.duration)
-        {
+        if self.max_report_gap.is_none_or(|old| duration > old) {
+            self.max_report_gap = Some(duration);
             self.stats.max_report_gap = Some(ReportGap {
-                start: self.last_report,
-                duration,
+                start: Duration::from_nanos(self.last_report),
+                duration: Duration::from_nanos(duration),
                 checks,
-                max_check_gap,
+                max_check_gap: Duration::from_nanos(max_check_gap),
                 from: self.last_report_site,
                 to,
             });
         }
     }
+
+    /// The statistics as of now, with the timed checks' total scaled to all
+    /// of them; see [`Stats::check_time`].
+    fn take_stats(&mut self) -> Stats {
+        let (timed, checks) = (self.timed_checks, self.stats.checks);
+        let check_time = if timed != 0 && timed < checks {
+            u128::from(self.check_time) * u128::from(checks) / u128::from(timed)
+        } else {
+            u128::from(self.check_time)
+        };
+        self.stats.check_time = Duration::from_nanos(u64::try_from(check_time).unwrap_or(u64::MAX));
+        self.stats.max_check_gap = Duration::from_nanos(self.max_check_gap);
+        self.stats.max_check_gap_start = Duration::from_nanos(self.max_check_gap_start);
+        for (site, &gap) in self.stats.sites.iter_mut().zip(&self.site_gaps) {
+            site.max_gap_before_check = Duration::from_nanos(gap);
+        }
+        core::mem::take(&mut self.stats)
+    }
 }
 
 struct Window {
-    last_check: Duration,
+    last_check: u64,
     checks: u64,
-    max_gap: Duration,
+    max_gap: u64,
 }
 
 impl Window {
-    fn new(at: Duration) -> Self {
+    fn new(at: u64) -> Self {
         Self {
             last_check: at,
             checks: 0,
-            max_gap: Duration::ZERO,
+            max_gap: 0,
         }
     }
-    fn check(&mut self, at: Duration) {
+    fn check(&mut self, at: u64) {
         self.max_gap = self.max_gap.max(at.saturating_sub(self.last_check));
         self.last_check = self.last_check.max(at);
         self.checks = self.checks.saturating_add(1);
     }
     /// Close the interval at `end` and start the next one there.
-    fn close(&mut self, end: Duration) -> (u64, Duration) {
+    fn close(&mut self, end: u64) -> (u64, u64) {
         let gap = self.max_gap.max(end.saturating_sub(self.last_check));
         let checks = self.checks;
         *self = Self::new(end);
@@ -533,23 +588,36 @@ pub(crate) struct SpanInner {
     kind: SpanKind,
     start: Duration,
     time_reports: bool,
+    /// Checks started, to choose which ones to time without the lock. A wrap
+    /// only times a few more.
+    checks_started: AtomicUsize,
     state: Mutex<SpanState>,
 }
+
+/// A span times its first this-many checks, then every this-many-th.
+const TIMED_CHECKS: usize = 16;
 
 impl SpanInner {
     fn now(&self) -> Duration {
         self.profiler.inner.clock.now()
     }
 
-    /// Record a check that started at `start` and just returned `result`.
-    /// Shared by every [`Instrumented`] type, so it is compiled once.
+    /// Whether to time the check about to start: see [`Stats::check_time`].
+    fn time_next_check(&self) -> bool {
+        let n = self.checks_started.fetch_add(1, Ordering::Relaxed);
+        n < TIMED_CHECKS || n % TIMED_CHECKS == 0
+    }
+
+    /// Record a check that started at `start` and just returned `result`,
+    /// at `end` if it was timed. Shared by every [`Instrumented`] type, so it
+    /// is compiled once.
     fn record_check(
         &self,
         start: Duration,
+        end: Option<Duration>,
         result: Result<(), StopReason>,
         at: &'static Location<'static>,
     ) {
-        let end = self.now();
         let mut state = self.state.lock();
         if state.closed {
             // The span's statistics are final, but the stop was still observed.
@@ -557,41 +625,52 @@ impl SpanInner {
             self.observed(result, end);
             return;
         }
+        let start = nanos(start);
         // A worker sharing this span may have recorded a later reading
         // first; an out-of-order arrival is a zero gap, not a regression.
         let gap = start.saturating_sub(state.last_check);
-        if gap > state.stats.max_check_gap {
-            state.stats.max_check_gap = gap;
-            state.stats.max_check_gap_start = state.last_check;
+        if gap > state.max_check_gap {
+            state.max_check_gap = gap;
+            state.max_check_gap_start = state.last_check;
         }
         state.window.check(start);
         state.last_check = state.last_check.max(start);
-        let elapsed = match end.checked_sub(start) {
-            Some(elapsed) => elapsed,
-            None => {
-                state.stats.clock_regressions += 1;
-                Duration::ZERO
-            }
-        };
-        state.stats.check_time = state.stats.check_time.saturating_add(elapsed);
+        if let Some(end) = end {
+            let elapsed = match nanos(end).checked_sub(start) {
+                Some(elapsed) => elapsed,
+                None => {
+                    state.stats.clock_regressions += 1;
+                    0
+                }
+            };
+            state.check_time = state.check_time.saturating_add(elapsed);
+            state.timed_checks += 1;
+        }
         state.stats.overflowed |= add(&mut state.stats.checks, 1);
-        if let Err(reason) = result
+        if let (Err(reason), Some(end)) = (result, end)
             && state.stats.stopped_at.is_none()
         {
             state.stats.stopped_at = Some(end);
             state.stats.stop_reason = Some(reason);
         }
-        if let Some(site) = site(&mut state.stats, at) {
+        let state = &mut *state;
+        if let Some(i) = site(
+            &mut state.stats,
+            &mut state.site_gaps,
+            &mut state.check_site,
+            at,
+        ) {
+            let site = &mut state.stats.sites[i];
             site.checks = site.checks.saturating_add(1);
-            site.max_gap_before_check = site.max_gap_before_check.max(gap);
+            state.site_gaps[i] = state.site_gaps[i].max(gap);
         }
         drop(state);
         self.observed(result, end);
     }
 
     /// Record when an instrumented check first returned a stop.
-    fn observed(&self, result: Result<(), StopReason>, end: Duration) {
-        if result.is_err() {
+    fn observed(&self, result: Result<(), StopReason>, end: Option<Duration>) {
+        if let (Err(_), Some(end)) = (result, end) {
             let mut trace = self.profiler.inner.state.lock();
             trace.observed_at = Some(trace.observed_at.unwrap_or(end).min(end));
         }
@@ -601,7 +680,7 @@ impl SpanInner {
     /// [`record_check`](Self::record_check).
     fn record_report(&self, completed: u64, at: &'static Location<'static>) {
         let now = if self.time_reports {
-            Some(self.now())
+            Some(nanos(self.now()))
         } else {
             None
         };
@@ -620,7 +699,14 @@ impl SpanInner {
         }
         state.stats.overflowed |= add(&mut state.stats.reports, 1);
         state.stats.overflowed |= add(&mut state.stats.units, completed);
-        if let Some(site) = site(&mut state.stats, at) {
+        let state = &mut *state;
+        if let Some(i) = site(
+            &mut state.stats,
+            &mut state.site_gaps,
+            &mut state.report_site,
+            at,
+        ) {
+            let site = &mut state.stats.sites[i];
             site.reports = site.reports.saturating_add(1);
             site.units = site.units.saturating_add(completed);
         }
@@ -634,22 +720,23 @@ impl SpanInner {
                 return;
             }
             state.closed = true;
+            let end = nanos(end);
             let gap = end.checked_sub(state.last_check).unwrap_or_else(|| {
                 state.stats.clock_regressions += 1;
-                Duration::ZERO
+                0
             });
-            if gap > state.stats.max_check_gap {
-                state.stats.max_check_gap = gap;
-                state.stats.max_check_gap_start = state.last_check;
+            if gap > state.max_check_gap {
+                state.max_check_gap = gap;
+                state.max_check_gap_start = state.last_check;
             }
             if self.time_reports {
                 let duration = end.checked_sub(state.last_report).unwrap_or_else(|| {
                     state.stats.clock_regressions += 1;
-                    Duration::ZERO
+                    0
                 });
                 state.close_report_gap(end, duration, None);
             }
-            core::mem::take(&mut state.stats)
+            state.take_stats()
         };
         let record = SpanRecord {
             id: self.id,
@@ -805,36 +892,61 @@ fn add(value: &mut u64, n: u64) -> bool {
     overflow
 }
 
-fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a mut SiteStats> {
+/// Whether `site` is the call site at `at`: cheap fields first, and one
+/// file's sites share its path's address.
+#[inline(always)]
+fn is_site(site: &SiteStats, at: &'static Location<'static>) -> bool {
+    site.line == at.line()
+        && site.column == at.column()
+        && (core::ptr::eq(site.file, at.file()) || site.file == at.file())
+}
+
+/// The index in `stats.sites` of `at`, trying `hint` first and leaving it
+/// there; `None` past 64 sites.
+#[inline(always)]
+fn site(
+    stats: &mut Stats,
+    gaps: &mut Vec<u64>,
+    hint: &mut usize,
+    at: &'static Location<'static>,
+) -> Option<usize> {
+    if stats.sites.get(*hint).is_some_and(|s| is_site(s, at)) {
+        return Some(*hint);
+    }
+    find_site(stats, gaps, hint, at)
+}
+
+#[cold]
+#[inline(never)]
+fn find_site(
+    stats: &mut Stats,
+    gaps: &mut Vec<u64>,
+    hint: &mut usize,
+    at: &'static Location<'static>,
+) -> Option<usize> {
     let sites = &mut stats.sites;
-    let mut index = 0;
-    while index < sites.len() {
-        let s = &sites[index];
-        // Cheap fields first; one file's sites share its path's address.
-        if s.line == at.line()
-            && s.column == at.column()
-            && (core::ptr::eq(s.file, at.file()) || s.file == at.file())
-        {
-            break;
+    let index = match sites.iter().position(|s| is_site(s, at)) {
+        Some(index) => index,
+        None if sites.len() == 64 => {
+            stats.unattributed_calls = stats.unattributed_calls.saturating_add(1);
+            return None;
         }
-        index += 1;
-    }
-    if index == 64 {
-        stats.unattributed_calls = stats.unattributed_calls.saturating_add(1);
-        return None;
-    }
-    if index == sites.len() {
-        sites.push(SiteStats {
-            file: at.file(),
-            line: at.line(),
-            column: at.column(),
-            checks: 0,
-            reports: 0,
-            units: 0,
-            max_gap_before_check: Duration::ZERO,
-        });
-    }
-    Some(&mut sites[index])
+        None => {
+            sites.push(SiteStats {
+                file: at.file(),
+                line: at.line(),
+                column: at.column(),
+                checks: 0,
+                reports: 0,
+                units: 0,
+                max_gap_before_check: Duration::ZERO,
+            });
+            gaps.push(0);
+            sites.len() - 1
+        }
+    };
+    *hint = index;
+    Some(index)
 }
 
 /// `value.check()`, recorded in `span` at the caller's location. Every
@@ -842,9 +954,11 @@ fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a 
 /// a few lines, not a copy of the bookkeeping.
 #[track_caller]
 pub(crate) fn checked(span: &SpanInner, value: &dyn Stop) -> Result<(), StopReason> {
+    let timed = span.time_next_check();
     let start = span.now();
     let result = value.check(); // User policy never runs under our locks.
-    span.record_check(start, result, Location::caller());
+    let end = (timed || result.is_err()).then(|| span.now());
+    span.record_check(start, end, result, Location::caller());
     result
 }
 

@@ -16,6 +16,9 @@ impl ManualClock {
     fn set(&self, millis: u64) {
         self.0.store(millis, Ordering::Relaxed);
     }
+    fn advance(&self, millis: u64) {
+        self.0.fetch_add(millis, Ordering::Relaxed);
+    }
 }
 impl Clock for ManualClock {
     fn now(&self) -> Duration {
@@ -312,6 +315,59 @@ fn timeout_reason_and_attached_plan_survive_export() {
     assert!(json.contains("\"total_revisions\":[{\"kind\":\"Exact\",\"count\":\"4\"}]"));
     // The trace composes the tracker's public versioned JSON without private access.
     assert_eq!(json.matches("schema_version").count(), 2);
+}
+
+#[test]
+fn checks_are_timed_by_sample_and_scaled_to_all_of_them() {
+    // Each check takes 1 ms of clock time; the span is checked 100 times.
+    struct Slow(ManualClock);
+    impl Stop for Slow {
+        fn check(&self) -> Result<(), StopReason> {
+            self.0.advance(1);
+            Ok(())
+        }
+    }
+    struct CountingClock(ManualClock, Arc<AtomicU64>);
+    impl Clock for CountingClock {
+        fn now(&self) -> Duration {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.now()
+        }
+    }
+    let (clock, reads) = (ManualClock::default(), Arc::new(AtomicU64::new(0)));
+    let profiler = Profiler::new(CountingClock(clock.clone(), reads.clone()), 2);
+    let span = profiler.span(None, "sampled", SpanKind::Work);
+    let stop = span.instrument(Slow(clock.clone()));
+    let before = reads.load(Ordering::Relaxed);
+    for _ in 0..100 {
+        stop.check().unwrap();
+    }
+    // A start reading for every check; an end reading for the first 16 and
+    // for every 16th after them: checks 16, 32, 48, 64, 80 and 96.
+    assert_eq!(reads.load(Ordering::Relaxed) - before, 100 + 16 + 6);
+    span.finish(Outcome::Succeeded);
+    let stats = &profiler.snapshot().spans[0].stats;
+    assert_eq!(stats.checks, 100);
+    assert_eq!(stats.check_time, Duration::from_millis(100));
+}
+
+#[test]
+fn a_check_that_stops_is_always_timed() {
+    let clock = ManualClock::default();
+    let profiler = Profiler::new(clock.clone(), 2);
+    let span = profiler.span(None, "stops late", SpanKind::Work);
+    let stopper = Stopper::new();
+    let stop = span.instrument(stopper.clone());
+    for _ in 0..20 {
+        stop.check().unwrap();
+    }
+    clock.set(7);
+    stopper.cancel();
+    assert_eq!(stop.check(), Err(StopReason::Cancelled));
+    span.finish(Outcome::Cancelled);
+    let stats = &profiler.snapshot().spans[0].stats;
+    assert_eq!(stats.stopped_at, Some(Duration::from_millis(7)));
+    assert_eq!(stats.stop_reason, Some(StopReason::Cancelled));
 }
 
 #[test]
