@@ -655,13 +655,18 @@ mod tests {
     #[test]
     fn histogram_counts_ms_buckets() {
         let meter = PollMeter::new(Unstoppable);
-        meter.check().unwrap(); // first call: no gap
-        std::thread::sleep(Duration::from_millis(2));
-        meter.check().unwrap();
-        std::thread::sleep(Duration::from_millis(55));
-        meter.check().unwrap();
+        // Bucket placement needs exact gaps; OS sleeps may overshoot on CI.
+        let start = Instant::now();
+        let site = Location::caller();
+        {
+            let mut state = meter.state.lock().unwrap();
+            state.record(site, start); // first call: no gap
+            state.record(site, start + Duration::from_millis(2));
+            state.record(site, start + Duration::from_millis(57));
+        }
         let report = meter.report();
         assert_eq!(report.histogram_ms[2], 1);
+        assert_eq!(report.histogram_ms[55], 1);
         assert_eq!(report.slow_gaps, 1);
         let ascii = report.histogram_ascii(20);
         assert!(ascii.contains(" 55- 56ms") || ascii.contains("55- 56"));
