@@ -120,11 +120,7 @@ fn tree(stop: impl Stop + 'static) -> PulseTree {
 }
 
 fn main() {
-    // The resource gate is off because zenbench 0.1.9 on Linux mistakes its
-    // own lock-heartbeat thread for a concurrent benchmark and waits 30 s per
-    // round. Interleaved rounds and paired statistics still keep comparisons
-    // within a group fair; run on a quiet machine for absolute numbers.
-    zenbench::run_gated(zenbench::GateConfig::disabled(), |suite| {
+    zenbench::run(|suite| {
         // ═══════════════════════════════════════════════════════════════
         // 1. One checkpoint, isolated. 10k calls behind `#[inline(never)]`.
         // ═══════════════════════════════════════════════════════════════
