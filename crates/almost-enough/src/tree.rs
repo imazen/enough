@@ -62,43 +62,71 @@
 
 use alloc::sync::Arc;
 use core::any::{Any, TypeId};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::{Stop, StopReason, StopToken, Unstoppable};
 
+/// `TreeInner::state`: not cancelled, with nothing above but parent nodes.
+const RUNNING: u8 = 0;
+/// `TreeInner::state`: this node was cancelled.
+const CANCELLED: u8 = 1;
+/// `TreeInner::state`: not cancelled, and `above` must be checked.
+const ABOVE: u8 = 2;
+
 /// Inner state for a tree node.
+///
+/// A check walks the chain with two tests per node, the state byte and the
+/// parent pointer, and no vtable call: a root costs what it did when the
+/// parent was a `BoxedStop`, and each level above adds a load and a test.
 struct TreeInner {
-    /// This node's own cancellation flag.
-    self_cancelled: AtomicBool,
-    /// The parent node, if it is another `ChildStopper`: checked directly, so
-    /// a chain of them is a loop of atomic loads with no vtable call per level.
+    /// `RUNNING`, `CANCELLED`, or `ABOVE`, which `cancel()` also overwrites.
+    state: AtomicU8,
+    /// The parent node, if it is another `ChildStopper`.
     parent: Option<Arc<TreeInner>>,
-    /// Any other stop above the top of the chain, checked once there.
-    /// `Unstoppable` (stored as nothing) when there is none.
+    /// Any other parent, checked only in state `ABOVE`; `Unstoppable`
+    /// (stored as nothing) otherwise.
     above: StopToken,
 }
 
 impl TreeInner {
-    fn root(above: StopToken) -> Self {
+    fn new(parent: Option<Arc<TreeInner>>, above: StopToken) -> Self {
+        let state = if above.may_stop() { ABOVE } else { RUNNING };
         Self {
-            self_cancelled: AtomicBool::new(false),
-            parent: None,
+            state: AtomicU8::new(state),
+            parent,
             above,
         }
     }
 
-    /// Walk this node and its ancestors, stopping at the first cancelled one.
+    /// Check this node, then walk its ancestors. The first level is peeled
+    /// out of the loop so a root returns without a jump.
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
+        match self.state.load(Ordering::Relaxed) {
+            RUNNING => {}
+            CANCELLED => return Err(StopReason::Cancelled),
+            _ => return self.above.check(),
+        }
+        match &self.parent {
+            None => Ok(()),
+            Some(parent) => parent.check_ancestors(),
+        }
+    }
+
+    #[inline]
+    #[track_caller]
+    fn check_ancestors(&self) -> Result<(), StopReason> {
         let mut node = self;
         loop {
-            if node.self_cancelled.load(Ordering::Relaxed) {
-                return Err(StopReason::Cancelled);
+            match node.state.load(Ordering::Relaxed) {
+                RUNNING => {}
+                CANCELLED => return Err(StopReason::Cancelled),
+                _ => return node.above.check(),
             }
             match &node.parent {
                 Some(parent) => node = parent,
-                None => return node.above.check(),
+                None => return Ok(()),
             }
         }
     }
@@ -106,14 +134,30 @@ impl TreeInner {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
+        match self.state.load(Ordering::Relaxed) {
+            RUNNING => {}
+            CANCELLED => return true,
+            _ => return self.above.should_stop(),
+        }
+        match &self.parent {
+            None => false,
+            Some(parent) => parent.should_stop_ancestors(),
+        }
+    }
+
+    #[inline]
+    #[track_caller]
+    fn should_stop_ancestors(&self) -> bool {
         let mut node = self;
         loop {
-            if node.self_cancelled.load(Ordering::Relaxed) {
-                return true;
+            match node.state.load(Ordering::Relaxed) {
+                RUNNING => {}
+                CANCELLED => return true,
+                _ => return node.above.should_stop(),
             }
             match &node.parent {
                 Some(parent) => node = parent,
-                None => return node.above.should_stop(),
+                None => return false,
             }
         }
     }
@@ -129,7 +173,10 @@ impl core::fmt::Debug for TreeInner {
             None
         };
         f.debug_struct("TreeInner")
-            .field("self_cancelled", &self.self_cancelled)
+            .field(
+                "self_cancelled",
+                &(self.state.load(Ordering::Relaxed) == CANCELLED),
+            )
             .field("parent", &parent)
             .finish()
     }
@@ -163,10 +210,10 @@ impl core::fmt::Debug for TreeInner {
 /// # Performance
 ///
 /// - Size: 8 bytes (one pointer)
-/// - `check()`: one atomic load per level of the tree. A parent that is
-///   another `ChildStopper` is checked directly; any other parent is checked
-///   once, at the top of the chain, as a [`StopToken`] would check it.
-/// - Root nodes: no parent check, similar to `Stopper`
+/// - `check()`: per level of the tree, a state byte and a parent pointer,
+///   with no vtable call. A root costs the same instructions as before
+///   0.4.5; a parent that isn't a `ChildStopper` is checked once, at the top
+///   of the chain, as a [`StopToken`] would check it.
 #[derive(Debug, Clone)]
 pub struct ChildStopper {
     inner: Arc<TreeInner>,
@@ -191,7 +238,7 @@ impl ChildStopper {
     #[inline]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(TreeInner::root(StopToken::new(Unstoppable))),
+            inner: Arc::new(TreeInner::new(None, StopToken::new(Unstoppable))),
         }
     }
 
@@ -219,7 +266,7 @@ impl ChildStopper {
             return any_ref.downcast_ref::<ChildStopper>().unwrap().child();
         }
         Self {
-            inner: Arc::new(TreeInner::root(StopToken::new(parent))),
+            inner: Arc::new(TreeInner::new(None, StopToken::new(parent))),
         }
     }
 
@@ -245,11 +292,10 @@ impl ChildStopper {
     #[inline]
     pub fn child(&self) -> ChildStopper {
         Self {
-            inner: Arc::new(TreeInner {
-                self_cancelled: AtomicBool::new(false),
-                parent: Some(Arc::clone(&self.inner)),
-                above: StopToken::new(Unstoppable),
-            }),
+            inner: Arc::new(TreeInner::new(
+                Some(Arc::clone(&self.inner)),
+                StopToken::new(Unstoppable),
+            )),
         }
     }
 
@@ -258,7 +304,7 @@ impl ChildStopper {
     /// This does NOT affect the parent or siblings.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.self_cancelled.store(true, Ordering::Relaxed);
+        self.inner.state.store(CANCELLED, Ordering::Relaxed);
     }
 
     /// Check if this node is cancelled (either directly or via ancestor).
@@ -411,7 +457,8 @@ mod tests {
     #[test]
     fn child_stopper_parents_are_walked_directly() {
         let root = ChildStopper::new();
-        assert!(root.inner.parent.is_none() && !root.inner.above.may_stop());
+        assert!(root.inner.parent.is_none());
+        assert_eq!(root.inner.state.load(Ordering::Relaxed), RUNNING);
         let child = root.child();
         assert!(Arc::ptr_eq(
             child.inner.parent.as_ref().unwrap(),
@@ -422,9 +469,23 @@ mod tests {
             adopted.inner.parent.as_ref().unwrap(),
             &child.inner
         ));
-        assert!(!adopted.inner.above.may_stop());
         let other = ChildStopper::with_parent(Stopper::new());
-        assert!(other.inner.parent.is_none() && other.inner.above.may_stop());
+        assert!(other.inner.parent.is_none());
+        assert_eq!(other.inner.state.load(Ordering::Relaxed), ABOVE);
+        let never = ChildStopper::with_parent(crate::Unstoppable);
+        assert_eq!(never.inner.state.load(Ordering::Relaxed), RUNNING);
+    }
+
+    #[test]
+    fn cancelling_a_node_under_another_stop_overrides_it() {
+        let stopper = Stopper::new();
+        let node = ChildStopper::with_parent(stopper.clone());
+        let leaf = node.child();
+        assert!(!leaf.should_stop());
+        node.cancel();
+        assert_eq!(node.inner.state.load(Ordering::Relaxed), CANCELLED);
+        assert_eq!(leaf.check(), Err(StopReason::Cancelled));
+        assert!(!stopper.should_stop());
     }
 
     #[test]
