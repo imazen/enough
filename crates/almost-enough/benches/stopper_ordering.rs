@@ -1,7 +1,8 @@
-//! What Release/Acquire ordering costs: `SyncStopper` against `Stopper`,
-//! checked alone, from loops with real work between checks, and from loops
-//! bound by memory latency, where an acquire load could keep the loads after
-//! a check from overlapping it.
+//! What Release/Acquire ordering costs: `Stopper` against a relaxed flag
+//! laid out the same way (what `Stopper` was before 0.4.5), checked alone,
+//! from loops with real work between checks, and from loops bound by memory
+//! latency, where an acquire load could keep the loads after a check from
+//! overlapping it.
 //!
 //! Run with: cargo bench -p almost-enough --bench stopper_ordering
 //!
@@ -13,9 +14,31 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use almost_enough::{Stop, StopReason, Stopper, SyncStopper};
+use almost_enough::{Stop, StopReason, Stopper};
 
 const BUFFER: usize = 64 * 1024;
+
+/// A flag with Relaxed ordering on both sides, laid out as `Stopper` was
+/// before 0.4.5: an `Arc` holding an `AtomicBool`.
+#[derive(Clone)]
+struct RelaxedFlag(Arc<AtomicBool>);
+
+impl RelaxedFlag {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
+impl Stop for RelaxedFlag {
+    #[inline]
+    fn check(&self) -> Result<(), StopReason> {
+        if self.0.load(Ordering::Relaxed) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// Entries in the memory-bound buffers: 256 MiB of `u64` and of `u32`, far
 /// beyond the last-level cache of every machine measured.
@@ -162,26 +185,26 @@ fn main() {
     let result = zenbench::run_gated(zenbench::GateConfig::disabled(), |suite| {
         suite.compare("check through &dyn Stop", |group| {
             group.config().cache_firewall(false);
-            group.baseline("stopper");
-            group.bench("stopper", |b| {
-                let stop = Stopper::new();
+            group.baseline("relaxed_flag");
+            group.bench("relaxed_flag", |b| {
+                let stop = RelaxedFlag::new();
                 b.iter(|| check_dyn(black_box(&stop)))
             });
-            group.bench("sync_stopper", |b| {
-                let stop = SyncStopper::new();
+            group.bench("stopper", |b| {
+                let stop = Stopper::new();
                 b.iter(|| check_dyn(black_box(&stop)))
             });
         });
 
         suite.compare("check, generic", |group| {
             group.config().cache_firewall(false);
-            group.baseline("stopper");
-            group.bench("stopper", |b| {
-                let stop = Stopper::new();
+            group.baseline("relaxed_flag");
+            group.bench("relaxed_flag", |b| {
+                let stop = RelaxedFlag::new();
                 b.iter(|| check_generic(black_box(&stop)))
             });
-            group.bench("sync_stopper", |b| {
-                let stop = SyncStopper::new();
+            group.bench("stopper", |b| {
+                let stop = Stopper::new();
                 b.iter(|| check_generic(black_box(&stop)))
             });
         });
@@ -189,15 +212,15 @@ fn main() {
         for chunk in [64, 1024] {
             suite.compare(format!("defilter 64 KiB, check every {chunk} B"), |group| {
                 group.config().cache_firewall(false);
-                group.baseline("stopper");
+                group.baseline("relaxed_flag");
                 group.throughput(zenbench::Throughput::Bytes(BUFFER as u64));
-                group.bench("stopper", move |b| {
-                    let stop = Stopper::new();
+                group.bench("relaxed_flag", move |b| {
+                    let stop = RelaxedFlag::new();
                     let mut buf = vec![7u8; BUFFER];
                     b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
                 });
-                group.bench("sync_stopper", move |b| {
-                    let stop = SyncStopper::new();
+                group.bench("stopper", move |b| {
+                    let stop = Stopper::new();
                     let mut buf = vec![7u8; BUFFER];
                     b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
                 });
@@ -216,20 +239,20 @@ fn main() {
             );
             suite.compare(title, |group| {
                 group.config().cache_firewall(false);
-                group.baseline("stopper");
+                group.baseline("relaxed_flag");
                 group.throughput(zenbench::Throughput::Elements(LOADS as u64));
                 add_gather(
                     group,
-                    "stopper",
-                    Stopper::new,
+                    "relaxed_flag",
+                    RelaxedFlag::new,
                     Arc::clone(&data),
                     every,
                     contended,
                 );
                 add_gather(
                     group,
-                    "sync_stopper",
-                    SyncStopper::new,
+                    "stopper",
+                    Stopper::new,
                     Arc::clone(&data),
                     every,
                     contended,
@@ -245,20 +268,20 @@ fn main() {
                 format!("pointer chase 256 MiB, check every {every} hops"),
                 |group| {
                     group.config().cache_firewall(false);
-                    group.baseline("stopper");
+                    group.baseline("relaxed_flag");
                     group.throughput(zenbench::Throughput::Elements(LOADS as u64));
                     add_chase(
                         group,
-                        "stopper",
-                        Stopper::new,
+                        "relaxed_flag",
+                        RelaxedFlag::new,
                         Arc::clone(&next),
                         starts[0],
                         every,
                     );
                     add_chase(
                         group,
-                        "sync_stopper",
-                        SyncStopper::new,
+                        "stopper",
+                        Stopper::new,
                         Arc::clone(&next),
                         starts[1],
                         every,

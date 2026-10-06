@@ -1,8 +1,7 @@
-//! An Arc-based cancellation flag with relaxed ordering.
+//! The default cancellation primitive.
 //!
-//! [`Stopper`] is a simple, Arc-based cancellation flag with unified clone
-//! semantics. [`SyncStopper`](crate::SyncStopper) is the same flag with
-//! Release/Acquire ordering, and the better default.
+//! [`Stopper`] is the recommended type for most use cases. It's a simple,
+//! Arc-based cancellation flag with unified clone semantics.
 //!
 //! # Example
 //!
@@ -31,8 +30,7 @@
 //!
 //! # Memory Ordering
 //!
-//! Uses Relaxed ordering; see the type's docs for when to prefer
-//! [`SyncStopper`](crate::SyncStopper).
+//! Release on `cancel()`, Acquire on every check: see the type's docs.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +47,7 @@ impl Stop for StopperInner {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Acquire) {
             Err(StopReason::Cancelled)
         } else {
             Ok(())
@@ -59,26 +57,33 @@ impl Stop for StopperInner {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
 /// A cancellation primitive with unified clone semantics.
 ///
-/// Clone it to share the cancellation state - any clone can cancel or check
-/// status.
-///
-/// # Memory Ordering
-///
-/// `Stopper` uses Relaxed ordering: a thread that sees the stop is not
-/// guaranteed to see other writes made before `cancel()`, and on ARM it
-/// often doesn't (21% of rounds of a litmus test on a Neoverse-N1).
-/// [`SyncStopper`](crate::SyncStopper) guarantees it, at no measurable cost on
-/// x86-64 or an Apple M4 Pro, so prefer it unless the flag carries nothing
-/// but "stop"; see its docs for the measurements.
+/// This is the recommended default for most use cases. Clone it to share
+/// the cancellation state - any clone can cancel or check status.
 ///
 /// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
 /// overhead — the existing `Arc` is reused, not double-wrapped.
+///
+/// # Memory ordering
+///
+/// `cancel()` is a Release store and every check an Acquire load, so a
+/// thread that sees the stop also sees everything the cancelling thread wrote
+/// before `cancel()`, such as a reason code or a request kept in an atomic.
+/// A relaxed flag doesn't promise that, and on ARM it often fails: in a
+/// litmus test (`examples/stop_ordering.rs`), a reader that saw a relaxed
+/// flag's stop still read the old data in 21% of rounds on a Neoverse-N1 and
+/// in 1 of 10,500 on an Apple M4 Pro. With `Stopper` it never did.
+///
+/// The ordering is free on x86-64, where an Acquire load is an ordinary
+/// load. On aarch64 it is one-way ordering on the flag's own load and store
+/// (`ldapr`/`stlr`), not a fence. The `stopper_ordering` bench measured no
+/// difference on those two cores, including in loops bound by memory
+/// latency and with the flag's cache line contended.
 ///
 /// # Example
 ///
@@ -103,7 +108,7 @@ impl Stop for StopperInner {
 /// # Performance
 ///
 /// - Size: 8 bytes (one pointer)
-/// - `check()`: ~1-2ns (single atomic load with Relaxed ordering)
+/// - `check()`: ~1-2ns (single atomic load with Acquire ordering)
 /// - `clone()`: atomic increment
 /// - `cancel()`: atomic store
 /// - `into() -> StopToken`: zero-cost (Arc pointer widening)
@@ -137,16 +142,17 @@ impl Stopper {
 
     /// Signal all clones to stop.
     ///
-    /// This is idempotent - calling it multiple times has no additional effect.
+    /// A Release store: a clone that then sees the stop also sees every write
+    /// made before this call. Idempotent: calling it again has no effect.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::Relaxed);
+        self.inner.cancelled.store(true, Ordering::Release);
     }
 
-    /// Check if cancellation has been requested.
+    /// Check if cancellation has been requested, with Acquire ordering.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::Relaxed)
+        self.inner.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -238,6 +244,30 @@ mod tests {
         };
         // Original is dropped, but clone still works
         assert!(!stop2.should_stop());
+    }
+
+    /// The Release/Acquire guarantee. x86-64 can't show a stale read; Miri's
+    /// weak-memory emulation and ARM hardware can, if the ordering is relaxed.
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_clone_that_sees_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let stop = Stopper::new();
+            let data = Arc::new(AtomicU32::new(0));
+            let reader = {
+                let (stop, data) = (stop.clone(), Arc::clone(&data));
+                std::thread::spawn(move || {
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    data.load(Relaxed)
+                })
+            };
+            data.store(42, Relaxed);
+            stop.cancel();
+            assert_eq!(reader.join().unwrap(), 42);
+        }
     }
 
     #[test]

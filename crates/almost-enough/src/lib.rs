@@ -71,8 +71,8 @@
 //! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
 //! | [`FnStop`] | core | Wrap any closure |
 //! | [`OrStop`] | core | Combine multiple stops |
-//! | [`SyncStopper`] | alloc | **Default choice** - Arc-based, clone to share; writes before `cancel()` are visible to whoever sees the stop |
-//! | [`Stopper`] | alloc | Like `SyncStopper` with Relaxed ordering: a bare "stop" signal |
+//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share; whoever sees the stop sees what was written before `cancel()` |
+//! | [`SyncStopper`] | alloc | Deprecated: `Stopper` has the same ordering |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
@@ -100,9 +100,9 @@
 //! ## Type Erasure with `StopToken`
 //!
 //! [`StopToken`] wraps `Arc<dyn Stop>` — it's `Clone` (cheap Arc increment),
-//! type-erased, and can be sent across threads. [`Stopper`] and
-//! [`SyncStopper`] convert to `StopToken` at zero cost via `From`/`Into`
-//! (the existing Arc is reused, no double-wrapping).
+//! type-erased, and can be sent across threads. A [`Stopper`] converts to
+//! `StopToken` at zero cost via `From`/`Into` (the existing Arc is reused, no
+//! double-wrapping).
 //!
 //! Use [`CloneStop`] (a trait alias for `Stop + Clone + 'static`) to accept
 //! any clonable stop, then erase with `into_token()` at the boundary:
@@ -262,6 +262,7 @@ pub use stop_token::StopToken;
 #[cfg(feature = "alloc")]
 pub use stopper::Stopper;
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use sync_stopper::SyncStopper;
 #[cfg(feature = "alloc")]
 pub use tree::ChildStopper;

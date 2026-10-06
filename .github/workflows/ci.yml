@@ -197,6 +197,13 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
 
+      # Miri emulates weak memory: a relaxed stop flag fails this test on
+      # most seeds, so it guards the Release/Acquire guarantee.
+      - name: Run Miri (stop ordering)
+        run: cargo +nightly miri test -p almost-enough --lib -- a_clone_that_sees_the_stop_sees_writes_made_before_cancel
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-many-seeds=0..8
+
   # ==========================================================================
   # Dependency audit — licenses and advisories
   # ==========================================================================

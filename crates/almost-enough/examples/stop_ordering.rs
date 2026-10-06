@@ -1,11 +1,12 @@
 //! Does seeing a stop also show the writes made before `cancel()`? A litmus
-//! test for `Stopper` (Relaxed) against `SyncStopper` (Release/Acquire).
+//! test for a relaxed flag (what `Stopper` was before 0.4.5) against
+//! `Stopper` (Release/Acquire).
 //!
 //! In each round a writer stores a value and then cancels a fresh stop. A
 //! reader first reads the value (so its cache holds the old one), then waits
 //! until it sees the stop and reads the value again. Seeing the old value
-//! after the stop is a stale read. The memory model allows it for `Stopper`
-//! and forbids it for `SyncStopper`. This counts how often the hardware
+//! after the stop is a stale read. The memory model allows it for the relaxed
+//! flag and forbids it for `Stopper`. This counts how often the hardware
 //! actually does it. Writer and reader advance in lockstep, so every read
 //! races its write.
 //!
@@ -16,11 +17,34 @@
 //! cargo run --release -p almost-enough --example stop_ordering -- [MILLION_ROUNDS]
 //! ```
 
-use almost_enough::{Stop, Stopper, SyncStopper};
+use almost_enough::{Stop, StopReason, Stopper};
 use std::hint::spin_loop;
-use std::sync::Barrier;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Barrier};
 use std::time::Instant;
+
+/// A flag with Relaxed ordering on both sides, laid out as `Stopper` was
+/// before 0.4.5.
+struct RelaxedFlag(Arc<AtomicBool>);
+
+impl RelaxedFlag {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+    fn cancel(&self) {
+        self.0.store(true, Relaxed);
+    }
+}
+
+impl Stop for RelaxedFlag {
+    fn check(&self) -> Result<(), StopReason> {
+        if self.0.load(Relaxed) {
+            Err(StopReason::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// Rounds per batch; each batch allocates its stops before the race starts.
 const BATCH: usize = 1 << 16;
@@ -84,10 +108,10 @@ fn main() {
         .unwrap_or(10);
     let rounds = millions * 1_000_000;
     println!("{} {}", std::env::consts::ARCH, std::env::consts::OS);
-    report("Stopper (Relaxed)", rounds, || {
-        litmus(rounds, Stopper::new, Stopper::cancel)
+    report("relaxed flag (Stopper before 0.4.5)", rounds, || {
+        litmus(rounds, RelaxedFlag::new, RelaxedFlag::cancel)
     });
-    report("SyncStopper (Release/Acquire)", rounds, || {
-        litmus(rounds, SyncStopper::new, SyncStopper::cancel)
+    report("Stopper (Release/Acquire)", rounds, || {
+        litmus(rounds, Stopper::new, Stopper::cancel)
     });
 }

@@ -45,6 +45,8 @@
 
 #![cfg(test)]
 #![allow(unused_imports)]
+// Documents how every type composes, including the deprecated SyncStopper.
+#![allow(deprecated)]
 
 use almost_enough::{
     BoxedStop, ChildStopper, FnStop, OrStop, Stop, StopExt, StopRef, StopSource, StopToken,

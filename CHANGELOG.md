@@ -48,19 +48,6 @@
   stops cost what the token does and `cancel` wakes only registered ones.
   `size_of::<TokioStop>()` is 40 bytes (was 8). See
   `benchmarks/enough-tokio-2026-10-06.md`.
-- Docs: `SyncStopper` is now the documented default stop (READMEs, type
-  tables, `Stopper`/`SyncStopper` docs, TRADEOFFS decision 8). A litmus test
-  (`examples/stop_ordering.rs`) shows why: after seeing a `Stopper`'s stop, a
-  reader still read a value written before `cancel()` stale in 21% of rounds
-  on Neoverse-N1 and 1 in 10,500 on an Apple M4 Pro, never with
-  `SyncStopper` and never on x86-64. Cost, measured by the new
-  `stopper_ordering` bench: none on x86-64 or an M4 Pro, +2–3% at most on
-  Neoverse-N1 at 64 bytes of work per check. `Stopper` stays for bare
-  signals. See `benchmarks/stopper-ordering-2026-10-06.md`.
-- Docs: `WithTimeout` states its cost (about 110 instructions per check, a
-  clock read; +22% cycles on a 1 KiB-per-check loop on x86-64) and points to
-  `DebouncedTimeout`. The root README's cancel example now imports `Stop`
-  (it did not compile); TRADEOFFS lists `StopToken` at its real 24 bytes.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),

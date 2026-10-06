@@ -12,8 +12,8 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use almost_enough::{
-    ChildStopper, FnStop, OrStop, Stop, StopExt, StopReason, StopSource, Stopper, SyncStopper,
-    TimeoutExt, Unstoppable, WithTimeout,
+    ChildStopper, FnStop, OrStop, Stop, StopExt, StopReason, StopSource, Stopper, TimeoutExt,
+    Unstoppable, WithTimeout,
 };
 
 const HOT_LOOP_ITERS: usize = 10_000;
@@ -62,11 +62,6 @@ fn main() {
 
             group.bench("stopper", |b| {
                 let stop = Stopper::new();
-                b.iter(|| black_box(&stop).check())
-            });
-
-            group.bench("sync_stopper", |b| {
-                let stop = SyncStopper::new();
                 b.iter(|| black_box(&stop).check())
             });
 
@@ -162,11 +157,6 @@ fn main() {
 
             group.bench("stopper", |b| {
                 let stop = Stopper::cancelled();
-                b.iter(|| black_box(&stop).check())
-            });
-
-            group.bench("sync_stopper", |b| {
-                let stop = SyncStopper::cancelled();
                 b.iter(|| black_box(&stop).check())
             });
         });

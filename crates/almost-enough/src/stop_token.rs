@@ -8,7 +8,7 @@
 //! | | `StopToken` | `BoxedStop` |
 //! |---|-----------|-------------|
 //! | Clone | Yes (Arc increment) | No |
-//! | Dispatch | Direct for `Stopper`/`SyncStopper`, else vtable | Same (wraps a `StopToken`) |
+//! | Dispatch | Direct for `Stopper`, else vtable | Same (wraps a `StopToken`) |
 //! | Send to threads | Clone and move | Must wrap in Arc yourself |
 //! | Use case | Default choice | When Clone is unwanted |
 //!
@@ -42,7 +42,8 @@ use crate::{Stop, StopReason};
 /// [`BoxedStop`](crate::BoxedStop), which wraps one) and reuses it instead of
 /// double-wrapping. No-op stops (`Unstoppable`) are stored as `None` —
 /// `check()` short-circuits without any vtable dispatch. A `Stopper` or
-/// `SyncStopper` is checked as a direct atomic load, without a vtable.
+/// (deprecated) `SyncStopper` is checked as a direct atomic load, without a
+/// vtable.
 ///
 /// # Example
 ///
@@ -61,14 +62,12 @@ pub struct StopToken {
     inner: StopTokenInner,
 }
 
-/// Dispatch enum — avoids vtable for the common Stopper/SyncStopper cases.
+/// Dispatch enum — avoids vtable for the common Stopper case.
 enum StopTokenInner {
     /// No-op (Unstoppable). check() → Ok(()), no dispatch.
     None,
-    /// Direct atomic load with Relaxed ordering (Stopper).
-    Relaxed(Arc<crate::stopper::StopperInner>),
-    /// Direct atomic load with Acquire ordering (SyncStopper).
-    Acquire(Arc<crate::sync_stopper::SyncStopperInner>),
+    /// Direct Acquire load of a `Stopper`'s flag.
+    Flag(Arc<crate::stopper::StopperInner>),
     /// Everything else — vtable dispatch.
     Dyn(Arc<dyn Stop + Send + Sync>),
 }
@@ -102,25 +101,12 @@ impl StopToken {
             drop(stop);
             return result;
         }
-        // Stopper: direct atomic, no vtable dispatch
-        if TypeId::of::<T>() == TypeId::of::<crate::Stopper>() {
-            let any_ref: &dyn Any = &stop;
-            let stopper = any_ref.downcast_ref::<crate::Stopper>().unwrap();
-            let result = Self {
-                inner: StopTokenInner::Relaxed(stopper.inner.clone()),
+        // Stopper (or the deprecated SyncStopper wrapping one): direct
+        // atomic, no vtable dispatch
+        if let Some(stopper) = stopper_of(&stop) {
+            return Self {
+                inner: StopTokenInner::Flag(Arc::clone(&stopper.inner)),
             };
-            drop(stop);
-            return result;
-        }
-        // SyncStopper: direct atomic with Acquire ordering
-        if TypeId::of::<T>() == TypeId::of::<crate::SyncStopper>() {
-            let any_ref: &dyn Any = &stop;
-            let stopper = any_ref.downcast_ref::<crate::SyncStopper>().unwrap();
-            let result = Self {
-                inner: StopTokenInner::Acquire(stopper.inner.clone()),
-            };
-            drop(stop);
-            return result;
         }
         Self {
             inner: StopTokenInner::Dyn(Arc::new(stop)),
@@ -160,13 +146,22 @@ impl StopToken {
     }
 }
 
+/// The `Stopper` that `stop` is, or that the deprecated `SyncStopper` wraps.
+#[allow(deprecated)]
+#[inline]
+fn stopper_of<T: Stop + 'static>(stop: &T) -> Option<&crate::Stopper> {
+    let any_ref: &dyn Any = stop;
+    any_ref
+        .downcast_ref::<crate::Stopper>()
+        .or_else(|| any_ref.downcast_ref::<crate::SyncStopper>().map(|s| &s.0))
+}
+
 impl Clone for StopTokenInner {
     #[inline]
     fn clone(&self) -> Self {
         match self {
             Self::None => Self::None,
-            Self::Relaxed(arc) => Self::Relaxed(Arc::clone(arc)),
-            Self::Acquire(arc) => Self::Acquire(Arc::clone(arc)),
+            Self::Flag(arc) => Self::Flag(Arc::clone(arc)),
             Self::Dyn(arc) => Self::Dyn(Arc::clone(arc)),
         }
     }
@@ -187,8 +182,7 @@ impl Stop for StopToken {
     fn check(&self) -> Result<(), StopReason> {
         match &self.inner {
             StopTokenInner::None => Ok(()),
-            StopTokenInner::Relaxed(inner) => inner.check(),
-            StopTokenInner::Acquire(inner) => inner.check(),
+            StopTokenInner::Flag(inner) => inner.check(),
             StopTokenInner::Dyn(inner) => inner.check(),
         }
     }
@@ -198,8 +192,7 @@ impl Stop for StopToken {
     fn should_stop(&self) -> bool {
         match &self.inner {
             StopTokenInner::None => false,
-            StopTokenInner::Relaxed(inner) => inner.should_stop(),
-            StopTokenInner::Acquire(inner) => inner.should_stop(),
+            StopTokenInner::Flag(inner) => inner.should_stop(),
             StopTokenInner::Dyn(inner) => inner.should_stop(),
         }
     }
@@ -215,18 +208,17 @@ impl From<crate::Stopper> for StopToken {
     #[inline]
     fn from(stopper: crate::Stopper) -> Self {
         Self {
-            inner: StopTokenInner::Relaxed(stopper.inner),
+            inner: StopTokenInner::Flag(stopper.inner),
         }
     }
 }
 
-/// Zero-cost conversion: reuses the SyncStopper's Arc. Direct atomic dispatch.
+/// Zero-cost conversion: reuses the wrapped Stopper's Arc. Direct atomic dispatch.
+#[allow(deprecated)]
 impl From<crate::SyncStopper> for StopToken {
     #[inline]
     fn from(stopper: crate::SyncStopper) -> Self {
-        Self {
-            inner: StopTokenInner::Acquire(stopper.inner),
-        }
+        Self::from(stopper.0)
     }
 }
 
@@ -244,27 +236,27 @@ mod tests {
     fn direct(stop: &StopToken) -> &'static str {
         match &stop.inner {
             StopTokenInner::None => "none",
-            StopTokenInner::Relaxed(_) => "relaxed",
-            StopTokenInner::Acquire(_) => "acquire",
+            StopTokenInner::Flag(_) => "flag",
             StopTokenInner::Dyn(_) => "dyn",
         }
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated SyncStopper.
     fn boxed_stop_takes_the_same_fast_paths() {
         use crate::{BoxedStop, SyncStopper};
         assert_eq!(direct(&BoxedStop::new(Unstoppable).0), "none");
         let stopper = Stopper::new();
         let boxed = BoxedStop::new(stopper.clone());
-        assert_eq!(direct(&boxed.0), "relaxed");
-        let StopTokenInner::Relaxed(inner) = &boxed.0.inner else {
+        assert_eq!(direct(&boxed.0), "flag");
+        let StopTokenInner::Flag(inner) = &boxed.0.inner else {
             unreachable!()
         };
         assert!(
             Arc::ptr_eq(inner, &stopper.inner),
             "reuses the Stopper's Arc"
         );
-        assert_eq!(direct(&BoxedStop::new(SyncStopper::new()).0), "acquire");
+        assert_eq!(direct(&BoxedStop::new(SyncStopper::new()).0), "flag");
         assert_eq!(direct(&BoxedStop::new(StopSource::new()).0), "dyn");
     }
 
@@ -285,6 +277,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated SyncStopper.
     fn boxed_stop_sees_cancellation_through_every_path() {
         use crate::{BoxedStop, SyncStopper};
         let stopper = Stopper::new();
@@ -456,6 +449,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated SyncStopper.
     fn from_sync_stopper_zero_cost() {
         let stopper = crate::SyncStopper::new();
         let cancel = stopper.clone();
@@ -479,6 +473,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated SyncStopper.
     fn new_sync_stopper_flattens() {
         let stopper = crate::SyncStopper::new();
         let cancel = stopper.clone();
@@ -505,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Exercises the deprecated SyncStopper.
     fn sync_stopper_inner_debug() {
         let stop = crate::SyncStopper::new();
         let debug = alloc::format!("{:?}", stop);
