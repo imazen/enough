@@ -25,11 +25,13 @@
 
 ### Changed
 
-- `enough-tokio`: `TokioStop` checks an atomic flag that a waker registered
-  with the token sets on cancellation, instead of locking the token's mutex
-  on every check: 46 → 9 instructions per check through `&dyn Stop`, 39 → 1
-  in generic code, and no shared lock between workers. `new` now allocates
-  and registers the waker (about 1,000 instructions). See
+- `enough-tokio`: a `TokioStop` checked more than 32 times registers a waker
+  with its token and from then on checks an atomic flag instead of locking
+  the token's mutex: 47 → 15 instructions per check through `&dyn Stop`, and
+  no shared lock between workers (+76% → +9.5% cycles with four workers at
+  64 bytes per check). Creating a stop still allocates nothing, so short-lived
+  stops cost what the token does and `cancel` wakes only registered ones.
+  `size_of::<TokioStop>()` is 40 bytes (was 8). See
   `benchmarks/enough-tokio-2026-10-06.md`.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
