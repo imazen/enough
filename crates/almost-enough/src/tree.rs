@@ -73,6 +73,10 @@ const CANCELLED: u8 = 1;
 /// `TreeInner::state`: not cancelled, and `above` must be checked.
 const ABOVE: u8 = 2;
 
+// The checks test `state & CANCELLED`, which a `match` on the state compiles
+// one instruction longer on x86-64.
+const _: () = assert!(RUNNING == 0 && ABOVE & CANCELLED == 0);
+
 /// Inner state for a tree node.
 ///
 /// A check walks the chain with two tests per node, the state byte and the
@@ -103,10 +107,12 @@ impl TreeInner {
     #[inline]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        match self.state.load(Ordering::Relaxed) {
-            RUNNING => {}
-            CANCELLED => return Err(StopReason::Cancelled),
-            _ => return self.above.check(),
+        let state = self.state.load(Ordering::Relaxed);
+        if state != RUNNING {
+            if state & CANCELLED != 0 {
+                return Err(StopReason::Cancelled);
+            }
+            return self.above.check();
         }
         match &self.parent {
             None => Ok(()),
@@ -119,10 +125,12 @@ impl TreeInner {
     fn check_ancestors(&self) -> Result<(), StopReason> {
         let mut node = self;
         loop {
-            match node.state.load(Ordering::Relaxed) {
-                RUNNING => {}
-                CANCELLED => return Err(StopReason::Cancelled),
-                _ => return node.above.check(),
+            let state = node.state.load(Ordering::Relaxed);
+            if state != RUNNING {
+                if state & CANCELLED != 0 {
+                    return Err(StopReason::Cancelled);
+                }
+                return node.above.check();
             }
             match &node.parent {
                 Some(parent) => node = parent,
@@ -134,10 +142,9 @@ impl TreeInner {
     #[inline]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        match self.state.load(Ordering::Relaxed) {
-            RUNNING => {}
-            CANCELLED => return true,
-            _ => return self.above.should_stop(),
+        let state = self.state.load(Ordering::Relaxed);
+        if state != RUNNING {
+            return state & CANCELLED != 0 || self.above.should_stop();
         }
         match &self.parent {
             None => false,
@@ -150,10 +157,9 @@ impl TreeInner {
     fn should_stop_ancestors(&self) -> bool {
         let mut node = self;
         loop {
-            match node.state.load(Ordering::Relaxed) {
-                RUNNING => {}
-                CANCELLED => return true,
-                _ => return node.above.should_stop(),
+            let state = node.state.load(Ordering::Relaxed);
+            if state != RUNNING {
+                return state & CANCELLED != 0 || node.above.should_stop();
             }
             match &node.parent {
                 Some(parent) => node = parent,
