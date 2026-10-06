@@ -29,14 +29,7 @@
 
 ### Changed
 
-- `almost-enough`: `ChildStopper` checks a parent that is another
-  `ChildStopper` directly, so a chain of them is a loop of loads instead of
-  a vtable call per level; any other parent is checked once, at the top, as
-  a `StopToken` would check it. A root's check is the same instructions as
-  before (x86-64 and aarch64). On Neoverse-N1 a check through `&dyn Stop` at
-  depth 8 went from 34.3 ns to 8.6 ns (depth 4: 12.9 → 4.6), and a loop
-  checking every KiB at depth 8 from +13.5% to +3.2% over a `Stopper`. No
-  API change.
+- `almost-enough`: `ChildStopper` walks `ChildStopper` parents without a vtable call per level; a root checks in the same instructions as before.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
   instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
