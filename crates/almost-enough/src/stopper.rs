@@ -83,7 +83,9 @@ impl Stop for StopperInner {
 /// load. On aarch64 it is one-way ordering on the flag's own load and store
 /// (`ldapr`/`stlr`), not a fence. The `stopper_ordering` bench measured no
 /// difference on those two cores, including in loops bound by memory
-/// latency and with the flag's cache line contended.
+/// latency and with the flag's cache line contended. On Cortex-M and 32-bit
+/// RISC-V each check also executes a full barrier (`dmb sy`, `fence r,rw`),
+/// a cost not measured; on wasm both orderings compile to the same code.
 ///
 /// # Example
 ///

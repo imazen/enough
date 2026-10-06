@@ -121,6 +121,10 @@ Until 0.4.5 `Stopper` was Relaxed ("fastest on ARM"), and a separate
   takes no offset) and one-way ordering, not a fence. Neither core showed a
   difference, even in loops bound by memory latency or with the flag's
   cache line contended.
+- **Except on microcontrollers, where it is unmeasured.** Cortex-M and
+  32-bit RISC-V put a full barrier (`dmb sy`, `fence r,rw`) after each
+  Acquire check and before each Release store. Wasm compiles both
+  orderings to the same instructions. Which targets build is unchanged.
 
 So every flag takes the guarantee, and `SyncStopper` became a deprecated
 wrapper around `Stopper`. SeqCst rejected as overkill for cancellation.

@@ -101,7 +101,33 @@ takes no address offset). On x86-64 it is free.
 
 Not measured:
 - cores without RCpc, where Rust emits the stronger `ldar`;
-- in-order cores, such as Cortex-A55.
+- in-order cores, such as Cortex-A55;
+- microcontrollers, where each check now executes a full barrier (below).
+
+## Other targets
+
+The ordering changes only the instructions emitted, never which targets
+build. `enough` and `almost-enough` built with the same results before and
+after this change for `thumbv6m-none-eabi`, `riscv32imc-unknown-none-elf`,
+`thumbv7em-none-eabihf` and `wasm32-unknown-unknown`, with no default
+features and with `alloc`. With `alloc`, both fail on the first two targets,
+before and after: they have no compare-and-swap, so no `alloc::sync`.
+
+A flag load and store, compiled with rustc 1.99.0 and `-O`:
+
+| target | Relaxed load | Acquire load | Relaxed store | Release store |
+| --- | --- | --- | --- | --- |
+| `wasm32-unknown-unknown` | `i32.load8_u` | `i32.load8_u` | `i32.store8` | `i32.store8` |
+| the same, `+atomics` | `i32.atomic.load8_u` | `i32.atomic.load8_u` | `i32.atomic.store8` | `i32.atomic.store8` |
+| Cortex-M (`thumbv6m`, `thumbv7m`, `thumbv7em`) | `ldrb` | `ldrb`, `dmb sy` | `strb` | `dmb sy`, `strb` |
+| `riscv32imc` | `lb` | `lb`, `fence r,rw` | `sb` | `fence rw,w`, `sb` |
+
+Wasm has only sequentially consistent atomics, so both orderings emit the
+same instruction, with or without threads. On Cortex-M and 32-bit RISC-V,
+every check through a `Stopper`, `StopSource` or `ChildStopper` now ends in
+a full barrier. No microcontroller was available to measure what that costs.
+It is the price of the guarantee on multi-core parts (an RP2040 has two
+Cortex-M0+ cores); the compiler can't tell a single-core target from them.
 
 The N1 runs shared the box with three niced fuzzers. The x86 runs started
 once its load average had fallen to 3.
