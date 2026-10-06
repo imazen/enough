@@ -1,7 +1,8 @@
-//! The default cancellation primitive.
+//! An Arc-based cancellation flag with relaxed ordering.
 //!
-//! [`Stopper`] is the recommended type for most use cases. It's a simple,
-//! Arc-based cancellation flag with unified clone semantics.
+//! [`Stopper`] is a simple, Arc-based cancellation flag with unified clone
+//! semantics. [`SyncStopper`](crate::SyncStopper) is the same flag with
+//! Release/Acquire ordering, and the better default.
 //!
 //! # Example
 //!
@@ -30,8 +31,8 @@
 //!
 //! # Memory Ordering
 //!
-//! Uses Relaxed ordering for best performance. If you need to synchronize
-//! other memory writes with cancellation, use [`SyncStopper`](crate::SyncStopper).
+//! Uses Relaxed ordering; see the type's docs for when to prefer
+//! [`SyncStopper`](crate::SyncStopper).
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -64,8 +65,16 @@ impl Stop for StopperInner {
 
 /// A cancellation primitive with unified clone semantics.
 ///
-/// This is the recommended default for most use cases. Clone it to share
-/// the cancellation state - any clone can cancel or check status.
+/// Clone it to share the cancellation state - any clone can cancel or check
+/// status.
+///
+/// # Memory Ordering
+///
+/// `Stopper` uses Relaxed ordering: a thread that sees the stop is not
+/// guaranteed to see other writes made before `cancel()`.
+/// [`SyncStopper`](crate::SyncStopper) guarantees that, and costs the same on
+/// x86-64 and one instruction more per check on aarch64 (measured through
+/// `&dyn Stop`), so prefer it unless the flag carries nothing but "stop".
 ///
 /// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
 /// overhead — the existing `Arc` is reused, not double-wrapped.

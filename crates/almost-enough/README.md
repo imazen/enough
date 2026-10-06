@@ -20,16 +20,16 @@ almost-enough = "0.4.4"
 
 The default `std` feature pulls in everything (Arc-based stoppers, timeouts, guards). For `no_std`, disable default features and opt into `alloc` for the Arc-based types: `almost-enough = { version = "0.4.4", default-features = false, features = ["alloc"] }`. See [Features](#features).
 
-## Start Here: `Stopper`
+## Start Here: `SyncStopper`
 
-The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
+The [type table below](#type-overview) lists several stops (`SyncStopper`, `Stopper`, `ChildStopper`, `StopToken`, `BoxedStop`, `StopSource`). **If you're not sure which to use, reach for [`SyncStopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. A thread that sees the stop also sees everything the cancelling thread wrote before `cancel()`. [`Stopper`] is the same flag with Relaxed ordering, for a bare "stop" signal: it costs the same on x86-64 and one instruction less per check on aarch64. Everything else is a specialization you can adopt later.
 
 ## Quick Start
 
 ```rust
-use almost_enough::{Stopper, Stop};
+use almost_enough::{SyncStopper, Stop};
 
-let stop = Stopper::new();
+let stop = SyncStopper::new();
 let stop2 = stop.clone();  // Clone to share the same flag
 
 // Check it (any clone)
@@ -42,24 +42,24 @@ assert!(stop2.should_stop());
 
 The two methods you need:
 
-- **`stop.cancel()`** — flip the flag. `cancel(&self)` is an **inherent method on `Stopper`** (it takes `&self`, not `self`, so it never consumes the stopper), and it's idempotent. Construct with `Stopper::new()`.
-- **`stop.should_stop() -> bool`** — `true` once cancelled. This comes from the **`Stop` trait** (`almost_enough::Stop`), which `Stopper` implements directly, so the `Stop` trait must be in scope to call it.
+- **`stop.cancel()`** — flip the flag. `cancel(&self)` is an **inherent method on `SyncStopper`** (it takes `&self`, not `self`, so it never consumes the stopper), and it's idempotent. Construct with `SyncStopper::new()`.
+- **`stop.should_stop() -> bool`** — `true` once cancelled. This comes from the **`Stop` trait** (`almost_enough::Stop`), which `SyncStopper` implements directly, so the `Stop` trait must be in scope to call it.
 
 Prefer the `?` idiom in fallible code: **`stop.check()?`** returns `Result<(), StopReason>` — `Ok(())` while running, `Err(StopReason::Cancelled)` once cancelled. `check` is also a `Stop`-trait method, and `should_stop()` is just `self.check().is_err()`.
 
 ## Cancel a Worker Thread
 
-`Stopper` is `Send + Sync` (it's an `Arc<AtomicBool>` under the hood, and the `Stop` trait requires `Send + Sync`), so a clone can move into another thread and the original can cancel it from across the thread boundary:
+`SyncStopper` is `Send + Sync` (it's an `Arc<AtomicBool>` under the hood, and the `Stop` trait requires `Send + Sync`), so a clone can move into another thread and the original can cancel it from across the thread boundary:
 
 ```rust
-use almost_enough::{Stopper, Stop};
+use almost_enough::{SyncStopper, Stop};
 use std::thread;
 
-// `Stopper` is Send + Sync, so a clone is safe to move into a worker thread.
+// `SyncStopper` is Send + Sync, so a clone is safe to move into a worker thread.
 fn assert_send_sync<T: Send + Sync>() {}
-assert_send_sync::<Stopper>();
+assert_send_sync::<SyncStopper>();
 
-let stop = Stopper::new();
+let stop = SyncStopper::new();
 let worker_stop = stop.clone(); // clone shares the same cancellation flag
 
 let handle = thread::spawn(move || {
@@ -85,10 +85,10 @@ let _ = done;
 Inside a fallible worker, use `check()?` instead of the `while` loop:
 
 ```rust
-use almost_enough::{Stopper, Stop, StopReason};
+use almost_enough::{SyncStopper, Stop, StopReason};
 use std::thread;
 
-let stop = Stopper::new();
+let stop = SyncStopper::new();
 let worker_stop = stop.clone();
 
 let handle = thread::spawn(move || -> Result<(), StopReason> {
@@ -104,14 +104,14 @@ stop.cancel();
 let _ = handle.join().unwrap();
 ```
 
-### Accepting a `Stopper` in your own functions
+### Accepting a `SyncStopper` in your own functions
 
-`Stopper` implements the [`enough::Stop`](https://docs.rs/enough) trait directly, so you can pass it (or a `&Stopper`) anywhere a stop is expected — `impl Stop`, `&dyn Stop`, or `&impl Stop`. Library code typically accepts `impl Stop` (or `impl Stop + 'static`) and your `Stopper` satisfies it:
+`SyncStopper` implements the [`enough::Stop`](https://docs.rs/enough) trait directly, so you can pass it (or a `&SyncStopper`) anywhere a stop is expected — `impl Stop`, `&dyn Stop`, or `&impl Stop`. Library code typically accepts `impl Stop` (or `impl Stop + 'static`) and your `SyncStopper` satisfies it:
 
 ```rust
-use almost_enough::{Stopper, Stop, StopReason};
+use almost_enough::{SyncStopper, Stop, StopReason};
 
-// Accepts any stop — including a Stopper.
+// Accepts any stop — including a SyncStopper.
 fn run(stop: impl Stop) -> Result<(), StopReason> {
     for _ in 0..1000 {
         stop.check()?;
@@ -128,7 +128,7 @@ fn run_dyn(stop: &dyn Stop) -> Result<(), StopReason> {
     Ok(())
 }
 
-let stop = Stopper::new();
+let stop = SyncStopper::new();
 run(stop.clone()).unwrap();
 run_dyn(&stop).unwrap();
 ```
@@ -141,12 +141,13 @@ run_dyn(&stop).unwrap();
 | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
 | [`FnStop`] | core | Wrap any closure |
 | [`OrStop`] | core | Combine multiple stops |
-| [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
-| [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
+| [`SyncStopper`] | alloc | **Default choice** - Arc-based, clone to share; writes before `cancel()` are visible to whoever sees the stop |
+| [`Stopper`] | alloc | Like `SyncStopper` with Relaxed ordering: a bare "stop" signal |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 | [`BoxedStop`] | alloc | Type-erased dynamic dispatch (prefer `StopToken`) |
-| [`WithTimeout`] | std | Add deadline to any `Stop` |
+| [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
+| [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N checks |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
 [`StopSource`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopSource.html
@@ -159,6 +160,7 @@ run_dyn(&stop).unwrap();
 [`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html
 [`WithTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.WithTimeout.html
+[`DebouncedTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.DebouncedTimeout.html
 
 ## Features
 

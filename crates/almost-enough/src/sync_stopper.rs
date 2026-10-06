@@ -30,9 +30,10 @@
 //!
 //! # When NOT to Use
 //!
-//! If you don't need synchronization guarantees (most cancellation use cases),
-//! use [`Stopper`](crate::Stopper) instead - it's slightly faster on
-//! weakly-ordered architectures (ARM, etc.).
+//! It costs the same as [`Stopper`](crate::Stopper) on x86-64 and one
+//! instruction more per check on aarch64, so it is the default choice; use
+//! `Stopper` only when the flag carries nothing but "stop" and that
+//! instruction matters.
 //!
 //! # Memory Ordering
 //!
@@ -80,12 +81,16 @@ impl Stop for SyncStopperInner {
 /// Converts to [`StopToken`](crate::StopToken) via `From`/`Into` with zero
 /// overhead — the existing `Arc` is reused, not double-wrapped.
 ///
+/// This is the default choice: if you're not sure which stop to use, use
+/// this one.
+///
 /// # Performance
 ///
-/// On x86/x64, Release/Acquire has negligible overhead (strong memory model).
-/// On ARM and other weakly-ordered architectures, there's a small cost for
-/// the memory barriers. Use [`Stopper`](crate::Stopper) if you don't
-/// need the synchronization guarantees.
+/// Measured with perf through `&dyn Stop`, a check costs the same as
+/// [`Stopper`](crate::Stopper)'s on x86-64, where an Acquire load is an
+/// ordinary load, and one instruction more on aarch64 (Neoverse-N1), with
+/// cycles within noise. Use `Stopper` only when the flag carries nothing but
+/// "stop" and that instruction matters.
 #[derive(Debug, Clone)]
 pub struct SyncStopper {
     pub(crate) inner: Arc<SyncStopperInner>,

@@ -96,11 +96,16 @@ to `enough`, downstream code changes one import path. No renames.
 No manual unsafe impls needed. `enough-ffi` retains unsafe (necessary
 for FFI).
 
-### 8. Relaxed ordering default, Acquire/Release opt-in
+### 8. Relaxed and Acquire/Release flags; Acquire/Release recommended
 
-`Stopper` uses `Ordering::Relaxed` — fastest on ARM, sufficient for
-"just stop." `SyncStopper` uses Release/Acquire for data-handoff
-scenarios. SeqCst rejected as overkill for cancellation.
+`Stopper` uses `Ordering::Relaxed`, sufficient for "just stop."
+`SyncStopper` uses Release/Acquire, so a thread that sees the stop also
+sees writes made before `cancel()`. Measured with perf in 2026-10
+(through `&dyn Stop`, 1 KiB of work per check), `SyncStopper` costs the
+same as `Stopper` on x86-64 and one instruction more per check on
+Neoverse-N1, with cycles within noise, so the docs recommend
+`SyncStopper` by default and keep `Stopper` for bare signals. SeqCst
+rejected as overkill for cancellation.
 
 ### 9. `Clone` is NOT on `Stop`
 
@@ -168,9 +173,9 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `Unstoppable` | 0 | 0ns | Copy | none | Optimized away everywhere |
 | `StopSource` | 1 byte | ~0.4ns | no | stack | Owns AtomicBool |
 | `StopRef<'a>` | 8 bytes | ~0.4ns | Copy | none | Borrowed from StopSource |
-| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice |
-| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Acquire/Release |
-| `StopToken` | 16 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
+| `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice; Acquire/Release |
+| `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Relaxed: bare "stop" signal |
+| `StopToken` | 24 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
 | `BoxedStop` | 16 bytes | 0ns/~1ns | no | Box/None | Legacy, prefer StopToken |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
 | `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |

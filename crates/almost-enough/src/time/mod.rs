@@ -50,6 +50,19 @@ use crate::{Stop, StopReason};
 /// The wrapped stop will return [`StopReason::TimedOut`] if the deadline
 /// passes, or propagate the inner stop's reason if it stops first.
 ///
+/// # Cost
+///
+/// Every check reads the clock (`Instant::now()`). Measured with perf on a
+/// loop that checks after every 1 KiB of PNG defiltering, that is about 110
+/// instructions per check, and the loop took 22% more cycles on x86-64 (12%
+/// on aarch64); a plain `Stopper` measured within noise. In return it stops
+/// no later than one check after the deadline.
+///
+/// If a library checks that often and the deadline doesn't need that
+/// precision, [`DebouncedTimeout`] reads the clock only every N checks,
+/// choosing N from the rate it measures; read its docs on how late it can
+/// stop.
+///
 /// # Example
 ///
 /// ```rust

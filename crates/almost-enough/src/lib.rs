@@ -71,12 +71,12 @@
 //! | [`StopSource`] / [`StopRef`] | core | Stack-based, borrowed, zero-alloc |
 //! | [`FnStop`] | core | Wrap any closure |
 //! | [`OrStop`] | core | Combine multiple stops |
-//! | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
-//! | [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
+//! | [`SyncStopper`] | alloc | **Default choice** - Arc-based, clone to share; writes before `cancel()` are visible to whoever sees the stop |
+//! | [`Stopper`] | alloc | Like `SyncStopper` with Relaxed ordering: a bare "stop" signal |
 //! | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 //! | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 //! | [`BoxedStop`] | alloc | Type-erased (prefer `StopToken`) |
-//! | [`WithTimeout`] | std | Add deadline to any `Stop` |
+//! | [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
 //! | [`DebouncedTimeout`] | std | Like `WithTimeout`, skips most clock reads |
 //!
 //! ## StopExt Extension Trait

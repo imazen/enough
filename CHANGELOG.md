@@ -25,6 +25,16 @@
 
 ### Changed
 
+- Docs: `SyncStopper` is now the documented default stop (READMEs, type
+  tables, `Stopper`/`SyncStopper` docs, TRADEOFFS decision 8). Measured
+  through `&dyn Stop`, it costs the same as `Stopper` on x86-64 and one
+  instruction more per check on aarch64, and also makes writes before
+  `cancel()` visible to whoever sees the stop. `Stopper` stays for bare
+  signals; no code changed.
+- Docs: `WithTimeout` states its cost (about 110 instructions per check, a
+  clock read; +22% cycles on a 1 KiB-per-check loop on x86-64) and points to
+  `DebouncedTimeout`. The root README's cancel example now imports `Stop`
+  (it did not compile); TRADEOFFS lists `StopToken` at its real 24 bytes.
 - Dependency requirements written out in full instead of truncated to two
   components, at the versions already locked and tested: `tokio` 1.43 →
   1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
