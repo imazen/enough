@@ -30,7 +30,7 @@
 
 ### Deprecated
 
-- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` now holds its parent as a `StopToken`.
+- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` holds a parent that isn't a `ChildStopper` as a `StopToken`.
 
 ### Changed
 

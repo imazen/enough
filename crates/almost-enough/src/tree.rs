@@ -73,15 +73,14 @@ const CANCELLED: u8 = 1;
 /// `TreeInner::state`: not cancelled, and `above` must be checked.
 const ABOVE: u8 = 2;
 
-// The checks test `state & CANCELLED`, which a `match` on the state compiles
-// one instruction longer on x86-64.
-const _: () = assert!(RUNNING == 0 && ABOVE & CANCELLED == 0);
+// The checks test `state != RUNNING`, then `state & CANCELLED`; a `match` on
+// the state compiles longer on x86-64.
+const _: () = assert!(RUNNING == 0 && CANCELLED != 0 && ABOVE != 0 && ABOVE & CANCELLED == 0);
 
 /// Inner state for a tree node.
 ///
-/// A check walks the chain with two tests per node, the state byte and the
-/// parent pointer, and no vtable call: each level above a root adds a load
-/// and a test.
+/// A check walks the chain with no vtable call: each level loads and tests
+/// the state byte, then loads and tests the parent pointer.
 struct TreeInner {
     /// `RUNNING`, `CANCELLED`, or `ABOVE`, which `cancel()` also overwrites.
     state: AtomicU8,
@@ -217,9 +216,8 @@ impl core::fmt::Debug for TreeInner {
 ///
 /// - Size: 8 bytes (one pointer)
 /// - `check()`: per level of the tree, a state byte and a parent pointer,
-///   with no vtable call. A root costs the same instructions as before
-///   0.4.5; a parent that isn't a `ChildStopper` is checked once, at the top
-///   of the chain, as a [`StopToken`] would check it.
+///   with no vtable call. A parent that isn't a `ChildStopper` is checked
+///   once, at the top of the chain, as a [`StopToken`] would check it.
 #[derive(Debug, Clone)]
 pub struct ChildStopper {
     inner: Arc<TreeInner>,
@@ -537,6 +535,44 @@ mod tests {
         let leaf = ChildStopper::with_parent(TimedOut).child().child();
         assert_eq!(leaf.check(), Err(StopReason::TimedOut));
         assert!(leaf.should_stop());
+    }
+
+    #[test]
+    fn a_child_stopper_inside_a_stop_token_is_checked_above() {
+        let root = ChildStopper::new();
+        let middle = ChildStopper::with_parent(StopToken::new(root.clone()));
+        assert!(middle.inner.parent.is_none());
+        assert_eq!(middle.inner.state.load(Ordering::Relaxed), ABOVE);
+        let leaf = middle.child();
+        assert!(leaf.check().is_ok());
+        root.cancel();
+        assert_eq!(leaf.check(), Err(StopReason::Cancelled));
+        assert!(leaf.should_stop());
+    }
+
+    #[test]
+    fn a_cancelled_node_reports_cancelled_over_a_timed_out_parent() {
+        struct TimedOut;
+        impl Stop for TimedOut {
+            fn check(&self) -> Result<(), StopReason> {
+                Err(StopReason::TimedOut)
+            }
+        }
+        let node = ChildStopper::with_parent(TimedOut);
+        node.cancel();
+        assert_eq!(node.check(), Err(StopReason::Cancelled));
+        assert_eq!(node.child().check(), Err(StopReason::Cancelled));
+    }
+
+    #[test]
+    fn an_unstoppable_parent_makes_a_root() {
+        let node = ChildStopper::with_parent(crate::Unstoppable);
+        assert!(node.inner.parent.is_none());
+        assert!(!node.inner.above.may_stop());
+        assert!(alloc::format!("{node:?}").contains("parent: None"));
+        assert!(node.check().is_ok());
+        node.cancel();
+        assert_eq!(node.check(), Err(StopReason::Cancelled));
     }
 
     #[test]
