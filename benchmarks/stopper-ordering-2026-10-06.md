@@ -60,3 +60,41 @@ of that size can also move the N1 numbers.
 Measured with perf on Neoverse-N1 (the `enough` stop table in PR #27's
 `benchmarks/how-far-2026-10-06.md`), `SyncStopper` costs one instruction more per check
 through `&dyn Stop` and the same in generic code. Cycles were within noise.
+
+## Memory-latency-bound loops
+
+On ARM the acquire load is one-way: later loads may not be satisfied before
+it. If the loop's other loads miss cache, could they stop overlapping the
+check? The same bench adds loops over 256 MiB, far beyond every
+last-level cache here:
+- **gather:** loads from random places, with addresses from a PRNG, so
+  misses can overlap; checks every 8 or every 64 loads;
+- **contended gather:** the same, while another thread clones and drops
+  the stop. The `Arc` counts share the flag's cache line, so the flag load
+  misses too;
+- **chase:** a pointer chase around one random cycle, where each load waits
+  for the last; checks every 4 or every 64 hops.
+
+The walks carry their position across rounds and differ between the two
+variants. Each round reaches new lines, and neither variant warms the
+other's: N1 measured 143 ns per hop, the M4 Pro 108 ns.
+
+`SyncStopper` against `Stopper`, 95% CI:
+
+| | Neoverse-N1 | Apple M4 Pro |
+| --- | ---: | ---: |
+| gather, check every 8 loads | 82.2 vs 82.2 µs [−1.1%, +0.5%] | 14.6 vs 14.6 µs [−0.0%, +0.2%] |
+| gather, check every 64 loads | 76.4 vs 76.4 µs [−0.9%, +1.0%] | 14.1 vs 14.2 µs [−0.3%, −0.0%] |
+| gather every 8, stop's line contended | 88.1 vs 88.1 µs [−0.5%, +0.7%] | 14.6 vs 14.6 µs [−0.2%, +0.2%] |
+| chase, check every 4 hops | 584 vs 585 µs [−0.6%, +0.7%] | 444 vs 443 µs [−0.0%, +0.3%] |
+| chase, check every 64 hops | 564 vs 566 µs [−1.2%, +0.2%] | 446 vs 446 µs [−0.1%, +0.1%] |
+
+No case shows a difference. Contention on the stop's cache line cost N1
+about 7% (82 → 88 µs) with either ordering, and the M4 Pro nothing. Not
+measured:
+- x86-64, whose two orderings compile to identical code; the box was fully
+  loaded during this run;
+- cores without RCpc. Rust emits `ldapr` where the target has it (both
+  machines here) and the stronger `ldar` otherwise.
+- in-order cores, such as Cortex-A55.
+

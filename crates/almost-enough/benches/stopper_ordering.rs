@@ -1,5 +1,7 @@
 //! What Release/Acquire ordering costs: `SyncStopper` against `Stopper`,
-//! checked alone and from loops with real work between checks.
+//! checked alone, from loops with real work between checks, and from loops
+//! bound by memory latency, where an acquire load could keep the loads after
+//! a check from overlapping it.
 //!
 //! Run with: cargo bench -p almost-enough --bench stopper_ordering
 //!
@@ -8,10 +10,131 @@
 //! interleaved, so machine load affects both sides alike.
 
 use std::hint::black_box;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use almost_enough::{Stop, StopReason, Stopper, SyncStopper};
 
 const BUFFER: usize = 64 * 1024;
+
+/// Entries in the memory-bound buffers: 256 MiB of `u64` and of `u32`, far
+/// beyond the last-level cache of every machine measured.
+const GATHER_ENTRIES: usize = 32 << 20;
+const CHASE_ENTRIES: usize = 64 << 20;
+/// Loads per iteration of a memory-bound loop.
+const LOADS: usize = 1 << 12;
+
+/// `LOADS` independent loads from random places in `data` (a power-of-two
+/// length), checking `stop` every `every` loads (a power of two). The
+/// addresses come from a PRNG, not from loaded data, so cache misses can
+/// overlap.
+#[inline(never)]
+fn gather(data: &[u64], seed: &mut u64, every: usize, stop: &dyn Stop) -> Result<u64, StopReason> {
+    let mask = data.len() - 1;
+    let mut x = *seed;
+    let mut sum = 0u64;
+    for i in 0..LOADS {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        sum = sum.wrapping_add(data[x as usize & mask]);
+        if i & (every - 1) == every - 1 {
+            stop.check()?;
+        }
+    }
+    *seed = x;
+    Ok(sum)
+}
+
+/// `LOADS` dependent loads around a random cycle, checking `stop` every
+/// `every` hops: each miss waits for the last.
+#[inline(never)]
+fn chase(next: &[u32], at: &mut u32, every: usize, stop: &dyn Stop) -> Result<(), StopReason> {
+    let mut i = *at;
+    for hop in 0..LOADS {
+        i = next[i as usize];
+        if hop & (every - 1) == every - 1 {
+            stop.check()?;
+        }
+    }
+    *at = i;
+    Ok(())
+}
+
+/// One random cycle through all `n` entries, and two nodes half the cycle
+/// apart, so two walks of up to `n / 2` hops never share a cache line.
+fn random_cycle(n: usize) -> (Vec<u32>, [u32; 2]) {
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    for i in (1..n).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        order.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+    let mut next = vec![0u32; n];
+    for k in 0..n {
+        next[order[k] as usize] = order[(k + 1) % n];
+    }
+    (next, [order[0], order[n / 2]])
+}
+
+/// A thread that clones and drops `stop` until told to finish: the `Arc`
+/// counts share the flag's cache line, so every check then misses.
+struct Contender(Arc<AtomicBool>, std::thread::JoinHandle<()>);
+
+impl Contender {
+    fn start<S: Clone + Send + 'static>(stop: &S) -> Self {
+        let (stop, done) = (stop.clone(), Arc::new(AtomicBool::new(false)));
+        let flag = Arc::clone(&done);
+        let thread = std::thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                drop(black_box(stop.clone()));
+            }
+        });
+        Self(done, thread)
+    }
+    fn finish(self) {
+        self.0.store(true, Ordering::Relaxed);
+        self.1.join().unwrap();
+    }
+}
+
+fn add_gather<S: Stop + Clone + Send + 'static>(
+    group: &mut zenbench::BenchGroup,
+    name: &str,
+    make: fn() -> S,
+    data: Arc<Vec<u64>>,
+    every: usize,
+    contended: bool,
+) {
+    // Each variant has its own address sequence, carried across rounds, so
+    // rounds keep reaching new lines and neither variant warms the other's.
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ (name.len() as u64).wrapping_mul(0x2545_F491);
+    group.bench(name, move |b| {
+        let stop = make();
+        let contender = contended.then(|| Contender::start(&stop));
+        b.iter(|| gather(&data, &mut seed, every, black_box(&stop)));
+        if let Some(contender) = contender {
+            contender.finish();
+        }
+    });
+}
+
+fn add_chase<S: Stop + 'static>(
+    group: &mut zenbench::BenchGroup,
+    name: &str,
+    make: fn() -> S,
+    next: Arc<Vec<u32>>,
+    mut at: u32,
+    every: usize,
+) {
+    // The position carries across rounds, so rounds keep reaching new lines.
+    group.bench(name, move |b| {
+        let stop = make();
+        b.iter(|| chase(&next, &mut at, every, black_box(&stop)));
+    });
+}
 
 #[inline(never)]
 fn check_dyn(stop: &dyn Stop) -> Result<(), StopReason> {
@@ -79,6 +202,69 @@ fn main() {
                     b.iter(|| defilter(black_box(&mut buf), chunk, black_box(&stop)))
                 });
             });
+        }
+
+        let data: Arc<Vec<u64>> = Arc::new((0..GATHER_ENTRIES as u64).collect());
+        for (every, contended) in [(8, false), (64, false), (8, true)] {
+            let title = format!(
+                "random gather 256 MiB, check every {every} loads{}",
+                if contended {
+                    ", stop cloned and dropped by another thread"
+                } else {
+                    ""
+                }
+            );
+            suite.compare(title, |group| {
+                group.config().cache_firewall(false);
+                group.baseline("stopper");
+                group.throughput(zenbench::Throughput::Elements(LOADS as u64));
+                add_gather(
+                    group,
+                    "stopper",
+                    Stopper::new,
+                    Arc::clone(&data),
+                    every,
+                    contended,
+                );
+                add_gather(
+                    group,
+                    "sync_stopper",
+                    SyncStopper::new,
+                    Arc::clone(&data),
+                    every,
+                    contended,
+                );
+            });
+        }
+        drop(data);
+
+        let (next, starts) = random_cycle(CHASE_ENTRIES);
+        let next = Arc::new(next);
+        for every in [4, 64] {
+            suite.compare(
+                format!("pointer chase 256 MiB, check every {every} hops"),
+                |group| {
+                    group.config().cache_firewall(false);
+                    group.baseline("stopper");
+                    group.throughput(zenbench::Throughput::Elements(LOADS as u64));
+                    add_chase(
+                        group,
+                        "stopper",
+                        Stopper::new,
+                        Arc::clone(&next),
+                        starts[0],
+                        every,
+                    );
+                    add_chase(
+                        group,
+                        "sync_stopper",
+                        SyncStopper::new,
+                        Arc::clone(&next),
+                        starts[1],
+                        every,
+                    );
+                },
+            );
         }
     });
 
