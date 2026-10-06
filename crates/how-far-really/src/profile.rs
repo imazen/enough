@@ -810,7 +810,11 @@ fn site<'a>(stats: &'a mut Stats, at: &'static Location<'static>) -> Option<&'a 
     let mut index = 0;
     while index < sites.len() {
         let s = &sites[index];
-        if s.file == at.file() && s.line == at.line() && s.column == at.column() {
+        // Cheap fields first; one file's sites share its path's address.
+        if s.line == at.line()
+            && s.column == at.column()
+            && (core::ptr::eq(s.file, at.file()) || s.file == at.file())
+        {
             break;
         }
         index += 1;
