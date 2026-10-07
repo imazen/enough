@@ -45,7 +45,7 @@ and almost-enough). None queued. -->
 
 #### Fixed
 
-- `alloc` and `std` turn on `enough`'s `alloc` and `std`, so `Box<dyn Stop>` and `Arc<dyn Stop>` are stops in a build that uses only almost-enough (this release)
+- `alloc` turns on `enough`'s `alloc`, so `Box<dyn Stop>` and `Arc<dyn Stop>` are stops in a build that uses only almost-enough (this release)
 - `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late; once one thread sharing it times out, every later check stops (e152409)
 - Docs: `WithTimeout` states its per-check clock read, `DebouncedTimeout`'s calibration is described, and every README example compiles (0ca1e56, 69eb567)
 

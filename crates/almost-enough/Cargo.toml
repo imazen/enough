@@ -13,7 +13,7 @@ exclude = [".gitignore"]
 [features]
 default = ["std"]
 alloc = ["enough/alloc"]
-std = ["alloc", "enough/std"]
+std = ["alloc"]
 # PollMeter instrumentation adds ~10-15ms compile time; opt-in only
 poll-meter = ["std"]
 
