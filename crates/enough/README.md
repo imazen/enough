@@ -68,7 +68,8 @@ an `enough` stop passes `|| stop.should_stop()`.
 [ZERO-DEP.md](https://github.com/imazen/enough/blob/main/ZERO-DEP.md) has two
 pieces to copy instead: a 25-line trait that closures implement, and a one-file
 handle that also keeps the `StopReason`. Both bridge to and from `enough` in one
-line.
+line. zune-jpeg ships the trait this way, polling it once every 1024 MCUs:
+[`cancel.rs`](https://github.com/etemesi254/zune-image/blob/52300d398488e907283786da5196e7f1797cfd81/crates/zune-jpeg/src/cancel.rs#L43).
 
 The API documentation is on [docs.rs](https://docs.rs/enough).
 
