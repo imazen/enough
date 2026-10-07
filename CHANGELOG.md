@@ -9,7 +9,7 @@ and almost-enough). None queued. -->
 
 ### Changed
 
-- `almost-enough`: `StopToken::new` reuses an `Arc` of `dyn Stop` as its own instead of wrapping it in another, and moves a `Box` of `dyn Stop` into one: one indirect call per check instead of two
+- `almost-enough`: `StopToken::new` keeps an `Arc` of `dyn Stop` instead of wrapping it in another, and moves a `Box` of `dyn Stop` into one: one indirect call per check instead of two (8 and 4 fewer instructions), and no allocation for an `Arc` (174 → 36 instructions to make and drop the token); from a `Box` it costs 44 more (a65b5de)
 
 ## enough
 
