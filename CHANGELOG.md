@@ -34,6 +34,7 @@
 
 ### Changed
 
+- `almost-enough`, `enough-ffi`: `cancel()` is a Release swap and `is_cancelled()` an Acquire load, so a thread whose `is_cancelled()` returns true sees what was written before each `cancel()` up to the one it observed, even when several threads cancel. Checks are unchanged; `is_cancelled()` itself is an Acquire load (`ldar` on aarch64).
 - `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
   a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
