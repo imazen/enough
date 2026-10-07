@@ -28,9 +28,19 @@ stop.cancel(); // from a cancel button, a deadline watcher, a shutdown hook
 worker.join().unwrap();
 ```
 
-For a deadline, almost-enough's `TimeoutExt` adds
-`.with_timeout(Duration::from_secs(30))` to any stop. When nothing should stop
-the work, pass `Unstoppable`.
+almost-enough has a stop for most situations:
+
+- `Stopper` is the default: clones share one flag, and `cancel()` on any of
+  them stops them all.
+- `ChildStopper`, from `stop.child()`, builds a tree: cancelling a parent stops
+  its children, and cancelling a child leaves its parent and siblings running.
+- `OrStop`, from `a.or(b)`, stops when either one does, such as a cancel button
+  or a shutdown signal.
+- `StopSource` is a flag on the stack or in a `static`, with no allocation; it
+  lends out `StopRef`s with `as_ref()` and works in `no_std`.
+- `.with_timeout(Duration::from_secs(30))`, from `TimeoutExt`, adds a deadline
+  to any stop.
+- `Unstoppable`, from enough itself, never stops.
 
 ## Making your library cooperative
 

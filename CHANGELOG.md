@@ -38,6 +38,7 @@ and almost-enough). None queued. -->
 - `BoxedStop` wraps a `StopToken` and takes its fast paths; still not `Clone` (d2e41e8)
 - `StopToken::from_arc(Arc<Stopper>)` checks the flag directly, as `StopToken::new` does; an `Arc<SyncStopper>` stays behind the vtable (this release)
 - `PollMeter` looks call sites up by `Location` address: 693 → 308 instructions per poll (a37d1cd)
+- README: library functions take `Option<&dyn Stop>`, or a `StopToken` to store or thread the stop, instead of `impl Stop`; one line on each type to reach for (this release)
 - Requires `enough` 0.4.5 (this release)
 
 #### Deprecated
@@ -58,6 +59,7 @@ and almost-enough). None queued. -->
 
 - A `TokioStop` checked more than 32 times registers a waker and from then on checks an atomic flag instead of locking the token: 47 → 15 instructions per check through `&dyn Stop`; `size_of::<TokioStop>()` is 40 bytes, was 8 (8a8ae32)
 - Requires `tokio-util` 0.7.19 and `enough` 0.4.5 (d67e465, this release)
+- README: the library example takes `Option<&dyn Stop>` instead of `impl Stop` (this release)
 
 #### Fixed
 
@@ -84,4 +86,4 @@ and almost-enough). None queued. -->
 - Measurement records under `benchmarks/` for the changes above (8a8ae32, e518d2f)
 - Versioned public-API snapshots at `docs/public-api/<crate>.txt` (b06dcb3, 6587550)
 - CI runs the `poll-meter` tests and the cancel-handoff tests under Miri over 8 seeds (f6902bc, 4fd6dbd)
-- README: rewritten as the GitHub landing page, without the criterion-era performance claims (fdb4c6a, cd0bc68, bd674e8, e6900f3)
+- README: rewritten as the GitHub landing page, without the criterion-era performance claims (fdb4c6a, cd0bc68, bd674e8, e6900f3); libraries take `Option<&dyn Stop>` or a `StopToken` (this release)
