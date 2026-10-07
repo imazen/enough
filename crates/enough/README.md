@@ -61,8 +61,9 @@ but it can't move into `thread::spawn` or a spawned task. To keep a stop, or to
 clone it across threads, accept an owned one: `impl Stop + 'static` (put it in
 an `Arc` to share it), or a
 [`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html),
-which clones with a reference-count bump and checks a `Stopper` without a
-vtable call.
+which clones with a reference-count bump. A token made from a `Stopper` by value
+checks it without a vtable call; one made from a `&dyn Stop` or `Arc<dyn Stop>`
+calls through it.
 
 ## Without the dependency
 
