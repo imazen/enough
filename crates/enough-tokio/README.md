@@ -2,13 +2,13 @@
 
 Tokio integration for the [`enough`](https://crates.io/crates/enough) cooperative cancellation trait.
 
-This crate bridges tokio's `CancellationToken` with the `Stop` trait, allowing you to use tokio's cancellation system with any library that accepts `impl Stop`.
+This crate bridges tokio's `CancellationToken` with the `Stop` trait, allowing you to use tokio's cancellation system with any library that accepts a `Stop`.
 
 ## Use Cases
 
 - **spawn_blocking with cancellation**: Pass cancellation into CPU-intensive sync code
 - **Unified cancellation**: Use the same `Stop` trait across async and sync code
-- **Library integration**: Use tokio cancellation with codecs, parsers, and other `impl Stop` libraries
+- **Library integration**: Use tokio cancellation with codecs, parsers, and other libraries that accept a `Stop`
 
 ## Quick Start
 
@@ -179,7 +179,7 @@ loop {
 
 ## Integration with Libraries
 
-Any library that accepts `impl Stop` works seamlessly:
+Any library that accepts a `Stop`, such as an `Option<&dyn Stop>`, takes a `TokioStop`:
 
 ```rust
 use enough_tokio::TokioStop;
@@ -187,7 +187,7 @@ use enough::Stop;
 use tokio_util::sync::CancellationToken;
 
 // Example library function
-fn process_data(data: &[u8], stop: impl Stop) -> Result<Vec<u8>, &'static str> {
+fn process_data(data: &[u8], stop: Option<&dyn Stop>) -> Result<Vec<u8>, &'static str> {
     let mut output = Vec::new();
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 && stop.should_stop() {
@@ -206,7 +206,7 @@ async fn main() {
     let data = vec![0u8; 100_000];
 
     let handle = tokio::task::spawn_blocking(move || {
-        process_data(&data, stop)
+        process_data(&data, Some(&stop))
     });
 
     // Cancel after a short delay

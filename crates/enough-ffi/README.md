@@ -91,7 +91,7 @@ int main(void) {
 ### Rust FFI Functions
 
 When writing Rust FFI functions that receive a token pointer, turn the raw pointer
-into a `FfiCancellationTokenView` and use it as `impl Stop`:
+into a `FfiCancellationTokenView` and use it as a `Stop`:
 
 ```rust
 use enough_ffi::{FfiCancellationToken, FfiCancellationTokenView};
@@ -109,7 +109,7 @@ pub extern "C" fn my_operation(
     // `FfiCancellationToken`. It is `unsafe`: see the contract below.
     let stop: FfiCancellationTokenView = unsafe { FfiCancellationToken::from_ptr(token) };
 
-    // Use with any library that accepts impl Stop
+    // A Stop: pass `Some(&stop)` to any library that accepts an `Option<&dyn Stop>`
     for i in 0..len {
         if i % 100 == 0 && stop.should_stop() {
             return -1; // Cancelled

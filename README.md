@@ -2,8 +2,7 @@
 
 A `no_std`, zero-dependency trait for cooperative cancellation. One required
 method, one zero-cost no-op type. Long-running operations accept a `Stop` and
-check it periodically; callers that don't need cancellation pass `Unstoppable`,
-which optimizes away to nothing.
+check it periodically; callers that don't need cancellation pass `None`.
 
 ## Quick start
 
@@ -13,10 +12,10 @@ enough = "0.4.5"
 ```
 
 ```rust
-use enough::{Stop, StopReason, Unstoppable};
+use enough::{Stop, StopReason};
 
 // A function that can be cancelled mid-flight.
-fn sum_chunks(data: &[u8], stop: impl Stop) -> Result<u64, StopReason> {
+fn sum_chunks(data: &[u8], stop: Option<&dyn Stop>) -> Result<u64, StopReason> {
     let mut total = 0u64;
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
@@ -27,14 +26,13 @@ fn sum_chunks(data: &[u8], stop: impl Stop) -> Result<u64, StopReason> {
     Ok(total)
 }
 
-// No cancellation needed — `Unstoppable::check()` inlines to nothing.
+// A caller that doesn't need to cancel passes `None`.
 let data = [1u8; 4096];
-assert_eq!(sum_chunks(&data, Unstoppable).unwrap(), 4096);
+assert_eq!(sum_chunks(&data, None).unwrap(), 4096);
 ```
 
-`enough` gives a library the *consumer* side: accept `impl Stop`, call
-`check()`, optimize away `Unstoppable`. It deliberately ships **no constructible
-token** — no allocation, no dependencies. To *produce* and *flip* a real
+`enough` gives a library the *consumer* side: accept a `Stop` and call
+`check()`. It deliberately ships **no constructible token** — no allocation, no dependencies. To *produce* and *flip* a real
 cancellation flag, an application reaches for `Stopper` in the sibling
 [`almost-enough`](https://crates.io/crates/almost-enough) crate.
 
@@ -42,7 +40,7 @@ cancellation flag, an application reaches for `Stopper` in the sibling
 
 `Stopper` is an `Arc`-backed flag: clone it to share one flag across threads, and
 call `.cancel()` on any clone to flip them all. It implements `Stop`, so the same
-function above accepts it directly.
+function above accepts `Some(&stop)`.
 
 ```toml
 [dependencies]
@@ -78,9 +76,23 @@ assert!(ticks > 0); // it ran, then stopped when we cancelled
 ```
 
 `stop.cancel()` is the flip method (idempotent), and `Stopper::cancelled()`
-constructs one that is already tripped. `almost-enough` also provides timeouts,
-parent/child cancellation trees, and `StopToken` — see its
-[docs](https://docs.rs/almost-enough).
+constructs one that is already tripped. `almost-enough` has a stop for most
+situations:
+
+- `Stopper` is the default: clones share one flag, and `cancel()` on any of
+  them stops them all.
+- `ChildStopper`, from `stop.child()`, builds a tree: cancelling a parent stops
+  its children, and cancelling a child leaves its parent and siblings running.
+- `OrStop`, from `a.or(b)`, stops when either one does, such as a cancel button
+  or a shutdown signal.
+- `StopSource` is a flag on the stack or in a `static`, with no allocation; it
+  lends out `StopRef`s with `as_ref()` and works in `no_std`.
+- `.with_timeout(Duration::from_secs(30))`, from `TimeoutExt`, adds a deadline
+  to any stop.
+- `StopToken` is an owned stop to store or move into another thread; it clones
+  with a reference-count bump.
+
+The rest is in its [docs](https://docs.rs/almost-enough).
 
 ## The Trait
 
@@ -108,20 +120,16 @@ pattern (see below).
 
 ## Integrating into a library
 
-Accept `impl Stop + 'static` in your public API. Use
-[`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html)
-from `almost-enough` internally — it handles the `Unstoppable` optimization
-automatically and is the fastest option for real stop types:
+Accept an `Option<&dyn Stop>`, check it as you work, and return early when it
+says so:
 
 ```rust
 use enough::{Stop, StopReason};
-use almost_enough::StopToken;
 
-pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, StopReason> {
-    let stop = StopToken::new(stop); // Unstoppable → None (no alloc). Stopper → same Arc.
+pub fn decode(data: &[u8], stop: Option<&dyn Stop>) -> Result<Vec<u8>, StopReason> {
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
-            stop.check()?; // Unstoppable: no-op. Stopper: one dispatch.
+            stop.check()?; // None: Ok(()). Some: one call through the vtable.
         }
         // process...
     }
@@ -129,21 +137,57 @@ pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, StopRea
 }
 
 // Callers:
-// decode(&data, Unstoppable)?;   // no cancellation — zero cost
-// decode(&data, stopper)?;       // with cancellation
+// decode(&data, None)?;          // no cancellation
+// decode(&data, Some(&stopper))?; // with cancellation
 ```
 
-`StopToken` is `Clone` (Arc increment) for thread fan-out.
-`Stopper`/`SyncStopper` convert to `StopToken` via `Into` without
-allocating (same Arc); a `Stopper` is then checked directly, a `SyncStopper`
-through the vtable. For real codec workloads, benchmarks show
-no meaningful difference between `StopToken` and a fully-inlined generic
-`impl Stop` — the dispatch path is within noise, so pick whichever reads
-best.
+Aim for a check every 10 ms of work or so: often enough that cancelling feels
+immediate, rarely enough that the checks cost nothing measurable. Paced like
+that, the call through `&dyn` doesn't matter, and it's usually better than
+monomorphizing your code for every stop type. In a real library the
+`StopReason` travels inside your own error type through `From<StopReason>`.
 
-### Without `almost-enough`
+A `&dyn Stop` is borrowed for the call: scoped threads and rayon can share it,
+but it can't move into `thread::spawn` or a spawned task. To store, move or
+thread the stop, accept a
+[`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html)
+from `almost-enough` instead:
 
-Take `&dyn Stop` and call `live()` once, before the loop:
+```rust
+use almost_enough::{Stopper, StopToken};
+use enough::{Stop, StopReason};
+use std::thread;
+
+pub fn decode_in_background(
+    data: Vec<u8>,
+    stop: StopToken,
+) -> thread::JoinHandle<Result<usize, StopReason>> {
+    thread::spawn(move || {
+        for chunk in data.chunks(1024) {
+            stop.check()?;
+            // process...
+        }
+        Ok(data.len())
+    })
+}
+
+let stopper = Stopper::new();
+let worker = decode_in_background(vec![0; 4096], stopper.clone().into());
+assert_eq!(worker.join().unwrap(), Ok(4096));
+```
+
+`StopToken` is `Clone` (Arc increment) for thread fan-out. `Stopper` and
+`SyncStopper` convert to it with `Into` without allocating (same Arc); a
+`Stopper` is then checked directly, a `SyncStopper` through the vtable.
+`StopToken::new` takes any `Stop + 'static`, and from `Unstoppable` it makes a
+token whose checks do nothing. Accepting `impl Stop + 'static` offers all of
+it, monomorphized checks included.
+
+### Hot loops
+
+Strictly, the `Option` isn't needed: a `&dyn Stop` parameter takes
+`&Unstoppable`. Call `live()` once, before the loop, to turn a stop that can
+never fire into `None`:
 
 ```rust
 use enough::{Stop, StopReason};
@@ -159,21 +203,8 @@ fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), StopReason> {
 }
 ```
 
-### Embedded / no_std
-
-Use `impl Stop` (without `'static`) to accept borrowed types like
-`StopRef<'a>`:
-
-```rust
-use enough::{Stop, StopReason};
-
-fn process(data: &[u8], stop: impl Stop) -> Result<(), StopReason> {
-    for (i, byte) in data.iter().enumerate() {
-        if i % 64 == 0 { stop.check()?; }
-    }
-    Ok(())
-}
-```
+`Option<&dyn Stop>` and `&dyn Stop` need no allocator, so they work in
+`no_std`, where `almost-enough`'s `StopSource` provides the flag.
 
 ## Crate Structure
 

@@ -15,7 +15,15 @@ The default `std` feature pulls in everything (Arc-based stoppers, timeouts, gua
 
 ## Start Here: `Stopper`
 
-The [type table below](#type-overview) lists several stops (`Stopper`, `SyncStopper`, `ChildStopper`, `StopToken`, `StopSource`). **If you're not sure which to use, reach for [`Stopper`].** It's the Arc-based, clone-to-share default: construct one, clone it into your worker(s), then call `.cancel()` from anywhere to stop them all. Everything else is a specialization you can adopt later.
+**If you're not sure which to use, reach for [`Stopper`].** It's the default: clones share one flag, and `cancel()` on any of them stops them all. The others, one line each:
+
+- [`ChildStopper`], from `stop.child()`, builds a tree: cancelling a parent stops its children, and cancelling a child leaves its parent and siblings running.
+- [`OrStop`], from `a.or(b)`, stops when either one does, such as a cancel button or a shutdown signal.
+- [`StopSource`] is a flag on the stack or in a `static`, with no allocation; it lends out [`StopRef`]s with `as_ref()` and works in `no_std`.
+- `.with_timeout(Duration::from_secs(30))`, from [`TimeoutExt`], adds a deadline to any stop.
+- [`StopToken`] is an owned stop to store or move into another thread; it clones with a reference-count bump.
+
+The [type table below](#type-overview) lists the rest.
 
 ## Quick Start
 
@@ -97,34 +105,27 @@ stop.cancel();
 let _ = handle.join().unwrap();
 ```
 
-### Accepting a `Stopper` in your own functions
+### Accepting a stop in your own functions
 
-`Stopper` implements the [`enough::Stop`](https://docs.rs/enough) trait directly, so you can pass it (or a `&Stopper`) anywhere a stop is expected — `impl Stop`, `&dyn Stop`, or `&impl Stop`. Library code typically accepts `impl Stop` (or `impl Stop + 'static`) and your `Stopper` satisfies it:
+Library code usually accepts an `Option<&dyn Stop>`; a caller passes `Some(&stop)`, or `None` when nothing should stop the work. To store the stop or move it into another thread, accept a [`StopToken`] instead (see [below](#keeping-a-stop-stoptoken)):
 
 ```rust
 use almost_enough::{Stopper, Stop, StopReason};
 
-// Accepts any stop — including a Stopper.
-fn run(stop: impl Stop) -> Result<(), StopReason> {
+fn run(stop: Option<&dyn Stop>) -> Result<(), StopReason> {
     for _ in 0..1000 {
-        stop.check()?;
+        stop.check()?; // Err(StopReason::Cancelled) once cancelled
         // ... work ...
     }
     Ok(())
 }
 
-// Or behind dynamic dispatch:
-fn run_dyn(stop: &dyn Stop) -> Result<(), StopReason> {
-    while !stop.should_stop() {
-        break;
-    }
-    Ok(())
-}
-
 let stop = Stopper::new();
-run(stop.clone()).unwrap();
-run_dyn(&stop).unwrap();
+run(Some(&stop)).unwrap();
+run(None).unwrap();
 ```
+
+Check every 10 ms of work or so: often enough that cancelling feels immediate, rarely enough that the call through `&dyn` costs nothing measurable.
 
 ## Type Overview
 
@@ -154,6 +155,7 @@ run_dyn(&stop).unwrap();
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html
 [`WithTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.WithTimeout.html
 [`DebouncedTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.DebouncedTimeout.html
+[`TimeoutExt`]: https://docs.rs/almost-enough/latest/almost_enough/trait.TimeoutExt.html
 
 ## Features
 
@@ -222,30 +224,45 @@ fn risky_operation() -> Result<(), &'static str> {
 }
 ```
 
-## Type Erasure
+## Keeping a stop: `StopToken`
 
-Prevent monomorphization explosion at API boundaries with [`StopToken`].
-[`Stopper`] and [`SyncStopper`] convert to `StopToken` via `Into` without
-allocating — the existing Arc is reused. A `Stopper` is then checked
-directly, a `SyncStopper` through the vtable:
+A `&dyn Stop` is borrowed for one call. To store a stop or move it into another
+thread, take a [`StopToken`]: it's owned, and clones with a reference-count
+bump. [`Stopper`] and [`SyncStopper`] convert to `StopToken` via `Into` without
+allocating — the existing Arc is reused. A `Stopper` is then checked directly,
+a `SyncStopper` through the vtable. `into_token()` converts any other
+`Stop + 'static`:
 
 ```rust
-use almost_enough::{CloneStop, StopToken, Stopper, Stop, StopExt};
+use almost_enough::{Stop, StopExt, StopToken, Stopper, TimeoutExt};
+use std::thread;
+use std::time::Duration;
 
-fn outer(stop: impl CloneStop) {
-    // Erase the concrete type — StopToken is Clone (Arc-based)
-    // Stopper→StopToken is zero-cost (reuses the same Arc)
-    let stop: StopToken = stop.into_token();
-    inner(&stop);
+struct Worker {
+    stop: StopToken,
 }
 
-fn inner(stop: &StopToken) {
-    let stop2 = stop.clone(); // cheap Arc increment, no allocation
-    // Only one version of this function exists
-    while !stop.should_stop() {
-        break;
+impl Worker {
+    fn spawn(&self) -> thread::JoinHandle<()> {
+        let stop = self.stop.clone(); // cheap Arc increment, no allocation
+        thread::spawn(move || {
+            while !stop.should_stop() {
+                thread::yield_now();
+            }
+        })
     }
 }
+
+let stopper = Stopper::new();
+let worker = Worker { stop: stopper.clone().into() }; // reuses the Stopper's Arc
+let handle = worker.spawn();
+stopper.cancel();
+handle.join().unwrap();
+
+// Any other stop, such as one with a deadline:
+let worker = Worker {
+    stop: Stopper::new().with_timeout(Duration::from_secs(30)).into_token(),
+};
 ```
 
 ## Optimizing Hot Loops with `dyn Stop`

@@ -23,7 +23,7 @@ and almost-enough). None queued. -->
 #### Changed
 
 - `Stop::check`, `should_stop` and the forwarding impls are `#[track_caller]`, so an instrumented stop can attribute a poll to its call site; no signature change (5caac7e)
-- The crates.io page is this crate's own README, whose examples compile as doctests, instead of the workspace README (bd674e8, this release)
+- The crates.io page is this crate's own README, whose examples compile as doctests, instead of the workspace README (bd674e8, 5b8315d, 3909cea)
 
 ## almost-enough
 
@@ -40,9 +40,10 @@ and almost-enough). None queued. -->
 - `ChildStopper` walks `ChildStopper` parents without a vtable call per level; each node is 8 bytes larger (5283eda)
 - `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64 (5d53d06)
 - `BoxedStop` wraps a `StopToken` and takes its fast paths; still not `Clone` (d2e41e8)
-- `StopToken::from_arc(Arc<Stopper>)` checks the flag directly, as `StopToken::new` does; an `Arc<SyncStopper>` stays behind the vtable (this release)
+- `StopToken::from_arc(Arc<Stopper>)` checks the flag directly, as `StopToken::new` does; an `Arc<SyncStopper>` stays behind the vtable (c5d4d6c)
 - `PollMeter` looks call sites up by `Location` address: 693 → 308 instructions per poll (a37d1cd)
-- Requires `enough` 0.4.5 (this release)
+- README: library functions take `Option<&dyn Stop>`, or a `StopToken` to store or thread the stop, instead of `impl Stop`; one line on each type to reach for (70302bf)
+- Requires `enough` 0.4.5 (5b8315d)
 
 #### Deprecated
 
@@ -50,7 +51,7 @@ and almost-enough). None queued. -->
 
 #### Fixed
 
-- `alloc` turns on `enough`'s `alloc`, so `Box<dyn Stop>` and `Arc<dyn Stop>` are stops in a build that uses only almost-enough (this release)
+- `alloc` turns on `enough`'s `alloc`, so `Box<dyn Stop>` and `Arc<dyn Stop>` are stops in a build that uses only almost-enough (667b66b, 22cb41a)
 - `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late; once one thread sharing it times out, every later check stops (e152409)
 - Docs: `WithTimeout` states its per-check clock read, `DebouncedTimeout`'s calibration is described, and every README example compiles (0ca1e56, 69eb567)
 
@@ -61,11 +62,12 @@ and almost-enough). None queued. -->
 #### Changed
 
 - A `TokioStop` checked more than 32 times registers a waker and from then on checks an atomic flag instead of locking the token: 47 → 15 instructions per check through `&dyn Stop`; `size_of::<TokioStop>()` is 40 bytes, was 8 (8a8ae32)
-- Requires `tokio-util` 0.7.19 and `enough` 0.4.5 (d67e465, this release)
+- Requires `tokio-util` 0.7.19 and `enough` 0.4.5 (d67e465, 5b8315d)
+- README: the library example takes `Option<&dyn Stop>` instead of `impl Stop` (70302bf)
 
 #### Fixed
 
-- README: the dependencies a consumer needs, with versions that exist (c2dfcf3, this release)
+- README: the dependencies a consumer needs, with versions that exist (c2dfcf3, 5b8315d)
 
 ## enough-ffi
 
@@ -74,7 +76,7 @@ and almost-enough). None queued. -->
 #### Changed
 
 - `enough_cancellation_cancel` is a Release swap and `enough_cancellation_is_cancelled` an Acquire load; `enough_token_is_cancelled` stays a Relaxed load (4fd6dbd)
-- Requires `enough` 0.4.5 (this release)
+- Requires `enough` 0.4.5 (5b8315d)
 
 #### Fixed
 
@@ -88,4 +90,4 @@ and almost-enough). None queued. -->
 - Measurement records under `benchmarks/` for the changes above (8a8ae32, e518d2f)
 - Versioned public-API snapshots at `docs/public-api/<crate>.txt` (b06dcb3, 6587550)
 - CI runs the `poll-meter` tests and the cancel-handoff tests under Miri over 8 seeds (f6902bc, 4fd6dbd)
-- README: rewritten as the GitHub landing page, without the criterion-era performance claims (fdb4c6a, cd0bc68, bd674e8, e6900f3)
+- README: rewritten as the GitHub landing page, without the criterion-era performance claims (fdb4c6a, cd0bc68, bd674e8, e6900f3); libraries take `Option<&dyn Stop>` or a `StopToken` (70302bf)
