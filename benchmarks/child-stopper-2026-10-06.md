@@ -53,8 +53,8 @@ a PNG-style loop, and of a library's per-row helper that calls it (no
 
 `check()` itself inlined at `opt-level` 3, 2 and `s` (threshold 325) in every
 version, and at `z` (threshold 5) in none. At `b57d603` the inlined check
-held two copies of the `StopToken` dispatch, one per walk level shape; the
-cold function leaves one. In a loop keeping 12 accumulators live, every
+held two copies of the `StopToken` dispatch, the first level's and the
+walk's; the cold function leaves one. In a loop keeping 12 accumulators live, every
 version spills only around its out-of-line calls, never in the loop body.
 Through `&dyn Stop` or a `StopToken`, none of this applies: the caller calls
 `<ChildStopper as Stop>::check`, and only the counts above matter.
