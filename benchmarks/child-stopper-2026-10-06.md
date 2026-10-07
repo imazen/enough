@@ -10,8 +10,8 @@ level is peeled out of the walk.
 rustc 1.99.0 on `r5900xt`, release, `--emit asm`, for x86-64 and for
 `aarch64-unknown-linux-gnu` (generic CPU), compiling `check()` and
 `should_stop()` of a `&ChildStopper` in `#[inline(never)]` functions. `main`
-is `5d53d06`; the change is #38 at `b57d603` (the bit test). Counted along
-each path to its return, or to the indirect jump into a parent's vtable:
+is `5d53d06`; the change is #38 at `1be68f2`. Counted along each path to its
+return, or to the indirect jump into a parent's vtable:
 
 | path | main x86-64 | change x86-64 | main aarch64 | change aarch64 |
 | --- | ---: | ---: | ---: | ---: |
@@ -22,14 +22,42 @@ each path to its return, or to the indirect jump into a parent's vtable:
 | child of a vtable parent (`SyncStopper`, `WithTimeout`, ...), `check()` | 21 | 20 | 18 | 17 |
 | child of a vtable parent, `should_stop()` | 21 | 21 | 19 | 18 |
 | cancelled node, `check()` or `should_stop()` | 6 | 8 | 5 | 6 |
+| depth 2 under a `Stopper`, `check()`, to its return | 59 | 34 | 49 | 27 |
 
 Each `ChildStopper` level above costs a state load, a test, a pointer load
 and a test. Only the path that returns "cancelled" is longer; it runs once.
+On `main`, the depth-2 row crosses two vtable calls. With the change, an
+ancestor that is cancelled or has a non-`ChildStopper` parent is checked by a
+`#[cold]` function the walk jumps to; inlining that check instead (#38 at
+`b57d603`) took 31 and 22 instructions on that row, but see "Inlining".
 With a `match` on the state instead of the bit test (#38 at `61b6506`), a
 child of a `Stopper` took 18 instructions in `should_stop()` on x86-64.
 
 Each node's allocation grows by 8 bytes: `size_of::<TreeInner>()` is 32 on
 `main` and 40 with the change (x86-64), so with the `Arc` counts 48 and 56.
+
+## Inlining
+
+A caller generic over its stop inlines `check()`, and LLVM weighs that by the
+inlined code's size. LLVM's inline cost of `<ChildStopper as Stop>::check`,
+from `-Cremark=inline` (rustc 1.99.0; the same on x86-64 and aarch64), into
+a PNG-style loop, and of a library's per-row helper that calls it (no
+`#[inline]`, two callers):
+
+| | `main` | #38, `match` (`61b6506`) | #38, bit test (`b57d603`) | #38 (`1be68f2`) |
+| --- | ---: | ---: | ---: | ---: |
+| `check()` (`should_stop()`) | 85 (80) | 245 (235) | 260 (250) | 175 (170) |
+| the helper | 120 | 235 | 250 | 210 |
+| helper inlined at `opt-level=3` (threshold 250) | yes | yes | no | yes |
+| helper inlined at `opt-level=2` (threshold 225) | yes | no | no | yes |
+
+`check()` itself inlined at `opt-level` 3, 2 and `s` (threshold 325) in every
+version, and at `z` (threshold 5) in none. At `b57d603` the inlined check
+held two copies of the `StopToken` dispatch, one per walk level shape; the
+cold function leaves one. In a loop keeping 12 accumulators live, every
+version spills only around its out-of-line calls, never in the loop body.
+Through `&dyn Stop` or a `StopToken`, none of this applies: the caller calls
+`<ChildStopper as Stop>::check`, and only the counts above matter.
 
 ## Time
 
