@@ -7,6 +7,10 @@
 <!-- Breaks that ship together in the next leading-digit bump (0.5 for enough
 and almost-enough). None queued. -->
 
+### Changed
+
+- `almost-enough`: `StopToken::new` reuses an `Arc` of `dyn Stop` as its own instead of wrapping it in another, and moves a `Box` of `dyn Stop` into one: one indirect call per check instead of two
+
 ## enough
 
 ### [0.4.5] - 2026-10-07

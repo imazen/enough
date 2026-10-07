@@ -120,8 +120,15 @@ impl StopToken {
             drop(stop);
             return result;
         }
-        Self {
-            inner: StopTokenInner::Dyn(Arc::new(stop)),
+        // An Arc or Box of `dyn Stop` becomes the Dyn arm itself instead of
+        // the contents of another Arc: one indirect call per check, not two.
+        match dyn_arc(stop) {
+            Ok(arc) => Self {
+                inner: StopTokenInner::Dyn(arc),
+            },
+            Err(stop) => Self {
+                inner: StopTokenInner::Dyn(Arc::new(stop)),
+            },
         }
     }
 
@@ -165,6 +172,39 @@ impl StopToken {
             inner: StopTokenInner::Dyn(arc as Arc<dyn Stop + Send + Sync>),
         }
     }
+}
+
+/// `stop` as the Dyn arm's `Arc` if it already is an `Arc` or `Box` of
+/// `dyn Stop` (with or without `Send`/`Sync` spelled out); otherwise `stop`.
+fn dyn_arc<T: Stop + 'static>(stop: T) -> Result<Arc<dyn Stop + Send + Sync>, T> {
+    let mut slot = Some(stop);
+    let any: &mut dyn Any = &mut slot;
+    macro_rules! reuse_arc {
+        ($arc:ty) => {
+            if let Some(found) = any.downcast_mut::<Option<$arc>>() {
+                let arc: Arc<dyn Stop + Send + Sync> = found.take().unwrap();
+                return Ok(arc);
+            }
+        };
+    }
+    macro_rules! move_box {
+        ($boxed:ty, $arc:ty) => {
+            if let Some(found) = any.downcast_mut::<Option<$boxed>>() {
+                let arc: $arc = Arc::from(found.take().unwrap());
+                return Ok(arc);
+            }
+        };
+    }
+    reuse_arc!(Arc<dyn Stop + Send + Sync>);
+    reuse_arc!(Arc<dyn Stop + Send>);
+    reuse_arc!(Arc<dyn Stop>);
+    move_box!(
+        alloc::boxed::Box<dyn Stop + Send + Sync>,
+        Arc<dyn Stop + Send + Sync>
+    );
+    move_box!(alloc::boxed::Box<dyn Stop + Send>, Arc<dyn Stop + Send>);
+    move_box!(alloc::boxed::Box<dyn Stop>, Arc<dyn Stop>);
+    Err(slot.take().unwrap())
 }
 
 /// The token inside `stop` if it is a (deprecated) `BoxedStop`.
@@ -280,6 +320,44 @@ mod tests {
         let token = StopToken::from_arc(Arc::new(sync.clone()));
         assert_eq!(direct(&token), "dyn");
         sync.cancel();
+        assert!(token.should_stop());
+    }
+
+    #[test]
+    fn an_arc_of_dyn_stop_is_the_dyn_arm_itself() {
+        fn reused<A: Stop + Clone + 'static>(shared: A, data: *const ()) -> StopToken {
+            let token = StopToken::new(shared);
+            let StopTokenInner::Dyn(inner) = &token.inner else {
+                panic!("{}", direct(&token));
+            };
+            assert_eq!(Arc::as_ptr(inner) as *const (), data);
+            token
+        }
+        let stopper = Stopper::new();
+        let plain: Arc<dyn Stop> = Arc::new(stopper.clone());
+        let token = reused(plain.clone(), Arc::as_ptr(&plain) as *const ());
+        let send: Arc<dyn Stop + Send> = Arc::new(stopper.clone());
+        reused(send.clone(), Arc::as_ptr(&send) as *const ());
+        let send_sync: Arc<dyn Stop + Send + Sync> = Arc::new(stopper.clone());
+        reused(send_sync.clone(), Arc::as_ptr(&send_sync) as *const ());
+        stopper.cancel();
+        assert!(token.should_stop());
+    }
+
+    #[test]
+    fn a_box_of_dyn_stop_moves_into_the_dyn_arm() {
+        let stopper = Stopper::new();
+        let boxed: alloc::boxed::Box<dyn Stop> = alloc::boxed::Box::new(stopper.clone());
+        let token = StopToken::new(boxed);
+        let StopTokenInner::Dyn(inner) = &token.inner else {
+            panic!("{}", direct(&token));
+        };
+        // The Arc holds the Stopper, not a Box around it.
+        assert_eq!(
+            core::mem::size_of_val(&**inner),
+            core::mem::size_of::<Stopper>()
+        );
+        stopper.cancel();
         assert!(token.should_stop());
     }
 
