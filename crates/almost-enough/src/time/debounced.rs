@@ -11,15 +11,12 @@
 //! `Stopper`. `DebouncedTimeout` lets callers add deadlines without imposing
 //! a hidden ~17ns-per-check tax on the library's hot path.
 //!
-//! # Deadline precision
-//!
-//! The maximum overshoot equals the target interval (default 100μs). For
-//! timeouts measured in seconds or minutes this is negligible. If you need
-//! sub-100μs precision, either lower the target with
-//! [`with_target_interval`](DebouncedTimeout::with_target_interval) or use
-//! [`WithTimeout`] directly.
+//! See [`DebouncedTimeout`]'s docs for how late it can stop.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64,
+    Ordering::{Relaxed, SeqCst},
+};
 use std::time::{Duration, Instant};
 
 use crate::{Stop, StopReason};
@@ -27,9 +24,19 @@ use crate::{Stop, StopReason};
 /// Default target interval between clock reads: 100μs (0.1ms).
 ///
 /// This means we aim to call `Instant::now()` roughly every 100 microseconds,
-/// regardless of how fast `check()` is called. At 10ns per call, that's one
-/// clock read per ~10,000 checks.
+/// regardless of how fast `check()` is called, but at least every
+/// [`MAX_CHECKS_PER_CLOCK_READ`] checks.
 const DEFAULT_TARGET_NANOS: u64 = 100_000;
+
+/// The most checks between clock reads, however fast checks arrive.
+///
+/// A clock read costs about 100 instructions, so reading it every 64 checks
+/// adds about 2 cycles per check, while bounding how late a timeout can come
+/// after checks slow down: at most this many of the slower checks. Without
+/// the bound, a timeout calibrated on back-to-back checks read the clock only
+/// every 90,000 to 100,000 checks, and stopped up to 40 s late once checks
+/// took 1 ms (`benchmarks/debounced-timeout-2026-10-06.md`).
+const MAX_CHECKS_PER_CLOCK_READ: u32 = 64;
 
 /// Convert a Duration to nanoseconds as u64, clamping at u64::MAX.
 #[inline]
@@ -41,13 +48,28 @@ fn duration_to_nanos(d: Duration) -> u64 {
 ///
 /// After a brief calibration phase, `check()` only reads the clock every
 /// N calls, where N is chosen so clock reads happen approximately once
-/// per [`target_interval`](DebouncedTimeout::with_target_interval).
+/// per [`target_interval`](DebouncedTimeout::with_target_interval), and is
+/// at most 64 (see [Deadline precision](#deadline-precision)).
 ///
 /// **Adaptation behavior:**
-/// - If calls slow down (longer between checks), immediately increases
-///   check frequency to avoid missing the deadline.
+/// - If calls slow down (longer between checks), increases check frequency
+///   at the next clock read, to avoid missing the deadline.
 /// - If calls speed up (shorter between checks), gradually decreases
 ///   check frequency to avoid over-checking.
+///
+/// # Deadline precision
+///
+/// It reads the clock about once per target interval (default 100μs), and
+/// at least every 64 checks. While checks arrive at a steady rate it stops at
+/// most about one target interval late, or one check late when checks come
+/// further apart than that. It learns that checks have slowed
+/// down only at its next clock read, so after a sudden slowdown (a library
+/// moving on to a slower stage, say) it can stop up to 64 of the slower
+/// checks late: 64 ms if they then come once a millisecond. [`WithTimeout`](super::WithTimeout)
+/// stops at most one check late. If you need sub-100μs precision, either
+/// lower the target with
+/// [`with_target_interval`](DebouncedTimeout::with_target_interval) or use
+/// [`WithTimeout`](super::WithTimeout) directly.
 ///
 /// # When to Use
 ///
@@ -86,15 +108,44 @@ pub struct DebouncedTimeout<T> {
     /// Target interval between clock reads, in nanoseconds.
     target_nanos: u64,
 
-    // ── Mutable state (atomics for Send+Sync) ──────────────────────
-    /// Monotonic call counter (wraps at u32::MAX, which is fine).
-    call_count: AtomicU32,
-    /// Check the clock when `call_count % skip_mod == 0`. Minimum 1.
+    /// When to read the clock next; reset by `clone` and the `tighten` methods.
+    schedule: Schedule,
+}
+
+/// The clock-read schedule (atomics, so the timeout stays `Send + Sync`).
+struct Schedule {
+    /// Checks left before the next clock read. Only ever stored in
+    /// `1..=MAX_CHECKS_PER_CLOCK_READ`; a check that takes it outside
+    /// `2..=MAX_CHECKS_PER_CLOCK_READ` reads the clock, so racing checks that
+    /// decrement past zero (wrapping) read it too.
+    countdown: AtomicU32,
+    /// Checks between clock reads: `1..=MAX_CHECKS_PER_CLOCK_READ`.
     skip_mod: AtomicU32,
     /// Nanoseconds since `created` at the last clock read.
     last_measured_nanos: AtomicU64,
-    /// `call_count` value at the last clock read.
-    last_measured_count: AtomicU32,
+    /// Set once a clock read finds the deadline passed.
+    timed_out: AtomicBool,
+}
+
+impl Schedule {
+    /// Read the clock on the first check, then calibrate.
+    fn new() -> Self {
+        Self {
+            countdown: AtomicU32::new(1),
+            skip_mod: AtomicU32::new(1),
+            last_measured_nanos: AtomicU64::new(0),
+            timed_out: AtomicBool::new(false),
+        }
+    }
+
+    /// Count a check; true if this one should read the clock.
+    #[inline(always)]
+    fn due(&self) -> bool {
+        !matches!(
+            self.countdown.fetch_sub(1, Relaxed),
+            2..=MAX_CHECKS_PER_CLOCK_READ
+        )
+    }
 }
 
 impl<T: Stop> DebouncedTimeout<T> {
@@ -110,10 +161,7 @@ impl<T: Stop> DebouncedTimeout<T> {
             created: now,
             deadline_nanos: duration_to_nanos(duration),
             target_nanos: DEFAULT_TARGET_NANOS,
-            call_count: AtomicU32::new(0),
-            skip_mod: AtomicU32::new(1),
-            last_measured_nanos: AtomicU64::new(0),
-            last_measured_count: AtomicU32::new(0),
+            schedule: Schedule::new(),
         }
     }
 
@@ -129,10 +177,7 @@ impl<T: Stop> DebouncedTimeout<T> {
             created: now,
             deadline_nanos: duration_to_nanos(deadline.saturating_duration_since(now)),
             target_nanos: DEFAULT_TARGET_NANOS,
-            call_count: AtomicU32::new(0),
-            skip_mod: AtomicU32::new(1),
-            last_measured_nanos: AtomicU64::new(0),
-            last_measured_count: AtomicU32::new(0),
+            schedule: Schedule::new(),
         }
     }
 
@@ -140,7 +185,8 @@ impl<T: Stop> DebouncedTimeout<T> {
     ///
     /// Smaller values check the clock more often (more responsive but more
     /// overhead). Larger values check less often (less overhead but may
-    /// overshoot the deadline by up to this amount).
+    /// overshoot the deadline by up to this amount while checks arrive
+    /// steadily). The clock is read at least every 64 checks regardless.
     ///
     /// Default: 100μs (0.1ms).
     #[inline]
@@ -177,51 +223,53 @@ impl<T: Stop> DebouncedTimeout<T> {
 
     /// Current number of `check()` calls between clock reads.
     ///
-    /// Starts at 1 (every call) and adapts upward as the call rate is measured.
+    /// Starts at 1 (every call) and adapts upward as the call rate is
+    /// measured, up to 64.
     /// Useful for diagnostics and testing.
     #[inline]
     pub fn checks_per_clock_read(&self) -> u32 {
-        self.skip_mod.load(Relaxed)
+        self.schedule.skip_mod.load(Relaxed)
     }
 
     /// The cold path: read the clock, check the deadline, recalibrate.
     #[cold]
     #[inline(never)]
-    fn measure_and_recalibrate(&self, count: u32) -> bool {
+    fn measure_and_recalibrate(&self) -> bool {
+        let schedule = &self.schedule;
         let elapsed_nanos = self.created.elapsed().as_nanos() as u64;
-
         if elapsed_nanos >= self.deadline_nanos {
+            // Every later check reads the clock too, and stops.
+            schedule.timed_out.store(true, SeqCst);
+            schedule.countdown.store(1, SeqCst);
             return true; // timed out
         }
 
-        // Recalibrate skip_mod based on observed call rate.
-        let prev_nanos = self.last_measured_nanos.swap(elapsed_nanos, Relaxed);
-        let prev_count = self.last_measured_count.swap(count, Relaxed);
-
+        // Recalibrate skip_mod from the rate since the last read, which was
+        // `skip_mod` checks ago (exactly, unless threads share this timeout).
+        let prev_nanos = schedule.last_measured_nanos.swap(elapsed_nanos, Relaxed);
+        let current_skip = schedule.skip_mod.load(Relaxed);
         let delta_nanos = elapsed_nanos.saturating_sub(prev_nanos);
-        let delta_calls = count.wrapping_sub(prev_count) as u64;
-
-        if delta_calls > 0 && delta_nanos > 0 {
-            let nanos_per_call = delta_nanos / delta_calls;
-            // nanos_per_call is 0 when calls outpace the clock; skip recalibration then.
-            if let Some(ideal) = self.target_nanos.checked_div(nanos_per_call) {
-                let ideal_skip = ideal.clamp(1, u32::MAX as u64) as u32;
-                let current_skip = self.skip_mod.load(Relaxed);
-
-                let new_skip = if ideal_skip <= current_skip {
-                    // Calls are slower → need to check more often → adapt immediately
-                    ideal_skip
-                } else {
-                    // Calls are faster → can check less often → adapt slowly (1/8 step)
-                    current_skip
-                        .saturating_add((ideal_skip - current_skip) / 8)
-                        .max(1)
-                };
-
-                self.skip_mod.store(new_skip, Relaxed);
-            }
+        let nanos_per_call = delta_nanos / u64::from(current_skip);
+        // nanos_per_call is 0 when calls outpace the clock; keep the schedule then.
+        let mut skip = current_skip;
+        if let Some(ideal) = self.target_nanos.checked_div(nanos_per_call) {
+            let ideal_skip = ideal.clamp(1, u64::from(MAX_CHECKS_PER_CLOCK_READ)) as u32;
+            skip = if ideal_skip <= current_skip {
+                // Calls are slower → need to check more often → adapt immediately
+                ideal_skip
+            } else {
+                // Calls are faster → can check less often → adapt slowly (1/8 step)
+                current_skip + (ideal_skip - current_skip).div_ceil(8)
+            };
+            schedule.skip_mod.store(skip, Relaxed);
         }
-
+        // A thread that read the clock just before another timed out must not
+        // undo that thread's `countdown = 1`: SeqCst makes it see the flag
+        // whenever its store lands after that one.
+        schedule.countdown.store(skip, SeqCst);
+        if schedule.timed_out.load(SeqCst) {
+            schedule.countdown.store(1, Relaxed);
+        }
         false // not timed out
     }
 }
@@ -233,17 +281,13 @@ impl<T: Stop> Stop for DebouncedTimeout<T> {
         // Always check the inner stop (typically a single atomic load).
         self.inner.check()?;
 
-        // Increment call counter and decide whether to read the clock.
-        let count = self.call_count.fetch_add(1, Relaxed).wrapping_add(1);
-        let skip = self.skip_mod.load(Relaxed);
-
-        // Hot path: skip the clock read.
-        if count % skip != 0 {
+        // Hot path: count down to the next clock read.
+        if !self.schedule.due() {
             return Ok(());
         }
 
         // Cold path: read clock, check deadline, recalibrate.
-        if self.measure_and_recalibrate(count) {
+        if self.measure_and_recalibrate() {
             Err(StopReason::TimedOut)
         } else {
             Ok(())
@@ -257,14 +301,11 @@ impl<T: Stop> Stop for DebouncedTimeout<T> {
             return true;
         }
 
-        let count = self.call_count.fetch_add(1, Relaxed).wrapping_add(1);
-        let skip = self.skip_mod.load(Relaxed);
-
-        if count % skip != 0 {
+        if !self.schedule.due() {
             return false;
         }
 
-        self.measure_and_recalibrate(count)
+        self.measure_and_recalibrate()
     }
 }
 
@@ -283,10 +324,7 @@ impl<T: Stop> DebouncedTimeout<T> {
             created: self.created,
             deadline_nanos,
             target_nanos: self.target_nanos,
-            call_count: AtomicU32::new(0),
-            skip_mod: AtomicU32::new(1),
-            last_measured_nanos: AtomicU64::new(0),
-            last_measured_count: AtomicU32::new(0),
+            schedule: Schedule::new(),
         }
     }
 
@@ -304,10 +342,7 @@ impl<T: Stop> DebouncedTimeout<T> {
             created: self.created,
             deadline_nanos,
             target_nanos: self.target_nanos,
-            call_count: AtomicU32::new(0),
-            skip_mod: AtomicU32::new(1),
-            last_measured_nanos: AtomicU64::new(0),
-            last_measured_count: AtomicU32::new(0),
+            schedule: Schedule::new(),
         }
     }
 }
@@ -320,10 +355,7 @@ impl<T: Clone + Stop> Clone for DebouncedTimeout<T> {
             created: self.created,
             deadline_nanos: self.deadline_nanos,
             target_nanos: self.target_nanos,
-            call_count: AtomicU32::new(0),
-            skip_mod: AtomicU32::new(1),
-            last_measured_nanos: AtomicU64::new(0),
-            last_measured_count: AtomicU32::new(0),
+            schedule: Schedule::new(),
         }
     }
 }
@@ -335,7 +367,7 @@ impl<T: core::fmt::Debug> core::fmt::Debug for DebouncedTimeout<T> {
             .field("inner", &self.inner)
             .field("deadline", &deadline)
             .field("target_interval_us", &(self.target_nanos / 1_000))
-            .field("skip_mod", &self.skip_mod.load(Relaxed))
+            .field("skip_mod", &self.schedule.skip_mod.load(Relaxed))
             .finish()
     }
 }
@@ -368,7 +400,7 @@ impl<T: Stop> DebouncedTimeoutExt for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StopSource;
+    use crate::{StopSource, Unstoppable};
 
     #[test]
     fn basic_timeout() {
@@ -651,5 +683,102 @@ mod tests {
             slow_skip < fast_skip,
             "should have reduced skip_mod from {fast_skip} to less, got {slow_skip}"
         );
+    }
+
+    /// Spin for `duration`, as a check-to-check gap of real work would.
+    fn work_for(duration: Duration) {
+        let start = Instant::now();
+        while start.elapsed() < duration {
+            std::hint::spin_loop();
+        }
+    }
+
+    #[test]
+    fn reads_the_clock_at_least_every_64_checks() {
+        let stop = DebouncedTimeout::new(Unstoppable, Duration::from_secs(60));
+        for _ in 0..1_000_000 {
+            stop.check().unwrap();
+            assert!(stop.checks_per_clock_read() <= MAX_CHECKS_PER_CLOCK_READ);
+        }
+    }
+
+    /// Check back to back for 20 ms with a deadline far away, as a library's
+    /// fast stage would, so the schedule calibrates to the cap.
+    fn calibrated_on_fast_checks() -> DebouncedTimeout<Unstoppable> {
+        let stop = DebouncedTimeout::new(Unstoppable, Duration::from_secs(3600));
+        let fast_until = Instant::now() + Duration::from_millis(20);
+        while Instant::now() < fast_until {
+            stop.check().unwrap();
+        }
+        stop
+    }
+
+    #[test]
+    fn a_passed_deadline_stops_within_64_checks() {
+        let mut stop = calibrated_on_fast_checks();
+        stop.deadline_nanos = 0;
+        let mut ok_checks = 0;
+        while stop.check().is_ok() {
+            ok_checks += 1;
+            assert!(ok_checks < MAX_CHECKS_PER_CLOCK_READ, "{ok_checks} checks");
+        }
+    }
+
+    #[test]
+    fn a_slowdown_after_calibration_stops_within_64_slow_checks() {
+        // Calibrate on fast checks, then make every check take 1ms with the
+        // deadline 20ms away. Without the bound, a release build calibrated
+        // to one clock read per 90,000 to 100,000 checks and stopped seconds
+        // late.
+        let mut stop = calibrated_on_fast_checks();
+        stop.deadline_nanos = duration_to_nanos(stop.created.elapsed()) + 20_000_000;
+        let mut slow_checks = 0;
+        while stop.check().is_ok() {
+            slow_checks += 1;
+            assert!(slow_checks < 1_000, "still running a second later");
+            work_for(Duration::from_millis(1));
+        }
+        // At most 20 slow checks reach the deadline. The first clock read
+        // after the slowdown comes within 64 checks, the next within a few
+        // (it recalibrates on the slow ones), and then every check.
+        assert!(slow_checks <= 20 + 64 + 8, "{slow_checks} slow checks");
+    }
+
+    #[test]
+    fn a_clock_read_just_before_another_threads_timeout_keeps_it_stopped() {
+        // Thread A timed out (the flag, then `countdown = 1`); thread B read
+        // the clock just before the deadline and recalibrates afterwards.
+        let stop = calibrated_on_fast_checks();
+        stop.schedule.timed_out.store(true, SeqCst);
+        stop.schedule.countdown.store(1, SeqCst);
+        assert!(!stop.measure_and_recalibrate());
+        assert_eq!(stop.schedule.countdown.load(Relaxed), 1);
+    }
+
+    #[test]
+    fn once_timed_out_every_check_stops() {
+        let stop = DebouncedTimeout::new(Unstoppable, Duration::ZERO);
+        for _ in 0..10_000 {
+            assert_eq!(stop.check(), Err(StopReason::TimedOut));
+            assert!(stop.should_stop());
+        }
+    }
+
+    #[test]
+    fn threads_sharing_a_timeout_all_stop() {
+        // Racing checks decrement the countdown past zero; every thread must
+        // still reach a clock read and stop.
+        let stop = DebouncedTimeout::new(Unstoppable, Duration::from_millis(20));
+        let start = Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    while stop.check().is_ok() {
+                        assert!(start.elapsed() < Duration::from_secs(10));
+                    }
+                });
+            }
+        });
+        assert_eq!(stop.check(), Err(StopReason::TimedOut));
     }
 }
