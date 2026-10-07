@@ -319,16 +319,29 @@ impl ChildStopper {
 
     /// Cancel this node (and all its children).
     ///
-    /// This does NOT affect the parent or siblings.
+    /// This does NOT affect the parent or siblings. A Release swap: writes
+    /// made before a `cancel()` of this node are visible to a thread whose
+    /// [`is_cancelled`](Self::is_cancelled) returns `true` after it.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.state.store(CANCELLED, Ordering::Relaxed);
+        // A swap: see `Stopper::cancel`.
+        self.inner.state.swap(CANCELLED, Ordering::Release);
     }
 
     /// Check if this node is cancelled (either directly or via ancestor).
+    ///
+    /// When it returns `true`, an Acquire fence follows, so this thread also
+    /// sees the writes made before whichever `cancel()` it observed (for a
+    /// parent that isn't a `ChildStopper`, if that parent's cancel is a
+    /// Release swap or store, as every stop in this crate's is). Checks are
+    /// Relaxed.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.inner.should_stop()
+        let cancelled = self.inner.should_stop();
+        if cancelled {
+            core::sync::atomic::fence(Ordering::Acquire);
+        }
+        cancelled
     }
 }
 
@@ -356,6 +369,72 @@ impl Stop for ChildStopper {
 mod tests {
     use super::*;
     use crate::Stopper;
+
+    /// See `stopper::tests`: the child's checks are Relaxed; its
+    /// `is_cancelled()` fences, whichever ancestor was cancelled.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for parent_is_stopper in [false, true] {
+            for _ in 0..if cfg!(miri) { 15 } else { 500 } {
+                let stopper = Stopper::new();
+                let root = if parent_is_stopper {
+                    ChildStopper::with_parent(stopper.clone())
+                } else {
+                    ChildStopper::new()
+                };
+                let leaf = root.child();
+                let data = Arc::new(AtomicU32::new(0));
+                let reader = {
+                    let (leaf, data) = (leaf.clone(), Arc::clone(&data));
+                    std::thread::spawn(move || {
+                        while !leaf.should_stop() {
+                            core::hint::spin_loop();
+                        }
+                        assert!(leaf.is_cancelled());
+                        data.load(Relaxed)
+                    })
+                };
+                data.store(42, Relaxed);
+                if parent_is_stopper {
+                    stopper.cancel();
+                } else {
+                    root.cancel();
+                }
+                assert_eq!(reader.join().unwrap(), 42);
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_a_second_cancel_sees_the_first_cancellers_writes() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let root = ChildStopper::new();
+            let leaf = root.child();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    while !leaf.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(leaf.is_cancelled());
+                    data.load(Relaxed)
+                });
+                scope.spawn(|| {
+                    while !root.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    root.cancel();
+                });
+                data.store(42, Relaxed);
+                root.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
 
     #[test]
     fn tree_root_basic() {
