@@ -18,7 +18,7 @@ let stop = Stopper::new();
 let worker = {
     let stop = stop.clone();
     std::thread::spawn(move || {
-        // Any work that checks `stop`, such as `codec::decode(&bytes, &stop)`.
+        // Any work that checks `stop`, such as `codec::decode(&bytes, Some(&stop))`.
         while !stop.should_stop() {
             std::thread::yield_now();
         }
@@ -34,36 +34,44 @@ the work, pass `Unstoppable`.
 
 ## Making your library cooperative
 
-Accept a `&dyn Stop`, check it once per row, block or iteration, and return
-early when it says so:
+Accept an `Option<&dyn Stop>`, check it as you work, and return early when it
+says so:
 
 ```rust
 use enough::{Stop, StopReason};
 
-pub fn compress(input: &[u8], stop: &dyn Stop) -> Result<Vec<u8>, StopReason> {
+pub fn compress(input: &[u8], stop: Option<&dyn Stop>) -> Result<Vec<u8>, StopReason> {
     let mut output = Vec::new();
     for block in input.chunks(64 * 1024) {
-        stop.check()?; // Err once the caller cancels or the deadline passes
+        stop.check()?; // Err once the caller cancels or a deadline passes
         output.extend_from_slice(block); // the real work goes here
     }
     Ok(output)
 }
+
+// A caller that doesn't need to cancel passes `None`.
+assert_eq!(compress(b"some data", None).unwrap(), b"some data");
 ```
 
-In a real library the `StopReason` travels inside your own error type through
-`From<StopReason>`, and `?` keeps working. `&dyn Stop` keeps your code free of
-generics; accept `Option<&dyn Stop>` instead if callers should be able to pass
-`None`. For a hot loop, `stop.live()` turns a stop that can never fire into
-`None`, so the check becomes a branch instead of a call.
+Aim for a check every 10 ms of work or so: often enough that cancelling feels
+immediate, rarely enough that the checks cost nothing measurable. Paced like
+that, the call through `&dyn` doesn't matter, and it's usually better than
+monomorphizing your code for every stop type. In a real library the `StopReason`
+travels inside your own error type through `From<StopReason>`, and `?` keeps
+working.
+
+Strictly, the `Option` isn't needed: a `&dyn Stop` parameter takes
+`&Unstoppable`, and `stop.live()` turns a stop that can never fire into `None`
+for a hot loop. But `None` is what most callers reach for first.
 
 A `&dyn Stop` is borrowed for the call: scoped threads and rayon can share it,
-but it can't move into `thread::spawn` or a spawned task. To keep a stop, or to
-clone it across threads, accept an owned one: `impl Stop + 'static` (put it in
-an `Arc` to share it), or a
-[`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html),
-which clones with a reference-count bump. A token made from a `Stopper` by value
-checks it without a vtable call; one made from a `&dyn Stop` or `Arc<dyn Stop>`
-calls through it.
+but it can't move into `thread::spawn` or a spawned task. If you need to store,
+move or thread the stop, accept a
+[`StopToken`](https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html)
+instead: it's owned, clones with a reference-count bump, and when made from a
+`Stopper` checks it without a vtable call. `impl Stop + 'static` offers all of
+it, monomorphized checks included, and converts to a `StopToken` when you need
+one.
 
 ## Without the dependency
 
