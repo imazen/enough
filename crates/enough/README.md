@@ -5,13 +5,13 @@ Cooperative cancellation for Rust libraries.
 Decoding an image, compressing a file or running a search can take long enough
 that someone wants it stopped: the window closed, the request timed out, a newer
 job replaced it. `enough` gives libraries one small way to support that. A
-function accepts a `Stop` and checks it as it works; the caller decides what can
-stop it.
+function accepts a `&dyn Stop` and checks it as it works; the caller decides
+what can stop it.
 
 ```rust
 use enough::{Stop, StopReason, Unstoppable};
 
-pub fn compress(input: &[u8], stop: impl Stop) -> Result<Vec<u8>, StopReason> {
+pub fn compress(input: &[u8], stop: &dyn Stop) -> Result<Vec<u8>, StopReason> {
     let mut output = Vec::new();
     for block in input.chunks(64 * 1024) {
         stop.check()?; // returns early once the caller cancels
@@ -20,8 +20,8 @@ pub fn compress(input: &[u8], stop: impl Stop) -> Result<Vec<u8>, StopReason> {
     Ok(output)
 }
 
-// A caller that never cancels passes `Unstoppable`; its checks compile away.
-let output = compress(b"some data", Unstoppable).unwrap();
+// A caller that never cancels passes `Unstoppable`.
+let output = compress(b"some data", &Unstoppable).unwrap();
 assert_eq!(output, b"some data");
 ```
 
@@ -39,10 +39,12 @@ std::thread::spawn(move || cancel.cancel()).join().unwrap();
 assert!(stop.should_stop());
 ```
 
-For the common stops a check is a load and a branch, so checking once per row,
-block or iteration costs little. In a real library the `StopReason` usually
-travels inside your own error type through `From<StopReason>`, and `?` keeps
-working.
+Taking `&dyn Stop` keeps your function free of generics: one copy of the code,
+whatever the caller passes. Check once per row, block or iteration; in a loop
+hot enough for the call to matter, `stop.live()` turns a stop that can never
+fire into `None`, and the check into a branch. In a real library the
+`StopReason` travels inside your own error type through `From<StopReason>`, and
+`?` keeps working.
 
 ## Why a separate crate
 
@@ -57,6 +59,16 @@ same thing. Applications choose the implementation:
   `CancellationToken`
 - [`enough-ffi`](https://crates.io/crates/enough-ffi): cancellation from C and
   other languages
+
+## Compatible without the dependency
+
+A library that won't take even this dependency can still interoperate. A
+closure is the common currency: take `impl Fn() -> bool`, and a caller holding
+an `enough` stop passes `|| stop.should_stop()`.
+[ZERO-DEP.md](https://github.com/imazen/enough/blob/main/ZERO-DEP.md) has two
+pieces to copy instead: a 25-line trait that closures implement, and a one-file
+handle that also keeps the `StopReason`. Both bridge to and from `enough` in one
+line.
 
 The API documentation is on [docs.rs](https://docs.rs/enough).
 
