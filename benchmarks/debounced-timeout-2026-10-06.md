@@ -88,8 +88,9 @@ On `r5900xt`, where one `Instant::now()` took 20.7 ns; checks back to back,
 
 At 10 µs apart, #31 read 2, 10, 94 and 933 times, and #42 2, 11, 102 and
 1,019: a single interval includes a clock read, so 100 µs / 10.05 µs rounds
-down to 9. Creating the timeout reads the clock once more. So the warm-up
-costs a job about 6 reads, around 120 ns, at most.
+down to 9. Creating the timeout reads the clock once more. So with #31 the
+warm-up costs a job at most 7 reads more than the steady state (163 against
+156), about 145 ns.
 
 Lateness when checks slow from back to back to 1 ms, with the deadline 50 ms
 after creation (a variant of `examples/debounced_lateness.rs` with only the
