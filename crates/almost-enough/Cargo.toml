@@ -27,20 +27,8 @@ zenbench = { workspace = true }
 name = "stop_check"
 harness = false
 
-[[bench]]
-name = "stopper_ordering"
-harness = false
-
-[[bench]]
-name = "child_stopper"
-harness = false
-
 [[example]]
 name = "stop_ordering"
-required-features = ["std"]
-
-[[example]]
-name = "cross_core_latency"
 required-features = ["std"]
 
 [[example]]

@@ -162,8 +162,9 @@ these `is_cancelled()` methods at all.
 
 That is `SyncStopper`'s design, and the first 0.4.5 draft's for `Stopper`.
 
-`cargo bench -p almost-enough --bench stopper_ordering` (zenbench 0.1.9,
-paired and interleaved). Each cell is a 95% CI of an Acquire check's
+`cargo bench -p almost-enough --bench stopper_ordering`, the bench at
+`7d82063` (in #39's history; not kept), with zenbench 0.1.9, paired and
+interleaved. Each cell is a 95% CI of an Acquire check's
 difference from the relaxed flag's, except the x86-64 cells marked \*, which
 are point estimates. The x86-64, N1 RCpc and M4 Pro
 columns measured the first 0.4.5 draft, whose `Stopper` loaded with Acquire;
@@ -237,7 +238,8 @@ cores the same way at any ordering; the ordering only decides what else is
 visible along with it. And at any ordering, a thread that has seen the stop
 never reads the flag as unset again.
 
-`crates/almost-enough/examples/cross_core_latency.rs` measures it: one
+`examples/cross_core_latency.rs` at `7d82063` (in #39's history; not kept)
+measured it: one
 thread stores a sequence number, another spins until it loads it and
 replies the same way, and half a round trip is the time from a store to the
 load that sees it. Medians of 15 interleaved repetitions of 200,000 round
@@ -285,7 +287,7 @@ two match, show the fenced check's extra branch.
 
 Measured against the first 0.4.5 draft, whose `Stopper` checked with
 Acquire: `StopToken::relax(stopper)` would give one token a Relaxed load while
-the `Stopper` and its other clones keep Acquire. A prototype, not kept,
+the `Stopper` and its other clones keep Acquire. A prototype (`4228904`)
 benched a relaxed token against `StopToken::from(stopper)`; both run the
 same `StopToken::check`, so code placement can't move their gap.
 

@@ -12,9 +12,10 @@ Measured on `r5900xt` (AMD Ryzen 9 5900XT, Zen 3, native Ubuntu), rustc 1.99.0, 
 
 `crates/almost-enough/examples/debounced_lateness.rs` checks back to back for
 20 ms, then makes every check take a fixed time (a spin), with the deadline
-50 ms after creation, and gives up 60 s past it. Built in release against
-`main` (`5d53d06`) and against #31 (`b859100`), each with this example, and
-run three times each on `r5900xt` (load average about 10):
+50 ms after creation, and gives up 60 s past it. Its version at `7d82063`,
+before it gained the `clear_calibration()` case, was built in release against
+`main` (`5d53d06`) and against #31 (`b859100`) and run three times each on
+`r5900xt` (load average about 10):
 
 ```text
 cargo run --release -p almost-enough --example debounced_lateness
@@ -92,9 +93,12 @@ down to 9. Creating the timeout reads the clock once more. So with #31 the
 warm-up costs a job at most 7 reads more than the steady state (163 against
 156), about 145 ns.
 
-Lateness when checks slow from back to back to 1 ms, with the deadline 50 ms
-after creation (a variant of `examples/debounced_lateness.rs` with only the
-1 ms case, 10 runs, and an optional `clear_calibration()` at the slowdown;
-not committed): #31 stopped 0, 0, 15, 0, 0, 0, 31, 0, 0 and 15 ms late; #42
-without clearing 0 to 19 ms; #42 calling `clear_calibration()` at the
-slowdown, 0.0 ms in all 10.
+`examples/debounced_lateness.rs` as committed also runs each case with
+`clear_calibration()` called at the slowdown. On `main` with #31 and #42
+(`f6902bc`), three runs on `r5900xt`:
+
+| check time after the slowdown | stopped late by | calibration cleared: stopped late by |
+| ---: | ---: | ---: |
+| 10 µs | 0.1 / 0.1 / 0.0 ms | 0.0 / 0.1 / 0.0 ms |
+| 100 µs | 0.0 / 0.0 / 0.0 ms | 0.0 / 0.0 / 0.0 ms |
+| 1 ms | 3.0 / 19.0 / 19.0 ms | 0.0 / 0.0 / 0.0 ms |

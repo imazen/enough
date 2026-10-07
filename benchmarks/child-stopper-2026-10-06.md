@@ -61,12 +61,12 @@ Through `&dyn Stop` or a `StopToken`, none of this applies: the caller calls
 
 ## Time
 
-`cargo bench -p almost-enough --bench child_stopper`, same file in both
-builds. Two binaries lay code out differently, so compare each column against
-its own `Stopper` row. These ran before #35 and #36 merged: "main" is
-`ae5d376`, where a `ChildStopper` held its parent as a `BoxedStop` and
-`StopToken` had four arms, and "change" is #38's `tree.rs` as of `1b3519a`
-(the `match` form).
+`cargo bench -p almost-enough --bench child_stopper`, the bench at `7d82063`
+(in #39's history; not kept), same file in both builds. Two binaries lay code
+out differently, so compare each column against its own `Stopper` row. These
+ran before #35 and #36 merged: "main" is `ae5d376`, where a `ChildStopper`
+held its parent as a `BoxedStop` and `StopToken` had four arms, and "change"
+is #38's `tree.rs` as of `1b3519a` (the `match` form).
 
 Neoverse-N1 (`zen-arm-xl`, rustc 1.97.1, `-C target-cpu=generic`):
 
