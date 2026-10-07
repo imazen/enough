@@ -246,6 +246,18 @@ mod tests {
     use super::*;
     use crate::{FnStop, StopSource, Stopper, Unstoppable};
 
+    #[test]
+    fn boxed_and_arced_dyn_stops_are_stops_with_almost_enough_alone() {
+        // `alloc` turns on enough's `alloc`, which implements `Stop` for these.
+        fn takes(stop: impl Stop + 'static) -> StopToken {
+            StopToken::new(stop)
+        }
+        let arc: Arc<dyn Stop> = Arc::new(Stopper::new());
+        assert!(takes(arc).check().is_ok());
+        let boxed: alloc::boxed::Box<dyn Stop> = alloc::boxed::Box::new(Stopper::cancelled());
+        assert!(takes(boxed).should_stop());
+    }
+
     fn direct(stop: &StopToken) -> &'static str {
         match &stop.inner {
             StopTokenInner::None => "none",
