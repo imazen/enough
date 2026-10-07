@@ -36,6 +36,7 @@ and almost-enough). None queued. -->
 - `ChildStopper` walks `ChildStopper` parents without a vtable call per level; each node is 8 bytes larger (5283eda)
 - `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64 (5d53d06)
 - `BoxedStop` wraps a `StopToken` and takes its fast paths; still not `Clone` (d2e41e8)
+- `StopToken::from_arc(Arc<Stopper>)` checks the flag directly, as `StopToken::new` does; an `Arc<SyncStopper>` stays behind the vtable (this release)
 - `PollMeter` looks call sites up by `Location` address: 693 → 308 instructions per poll (a37d1cd)
 - Requires `enough` 0.4.5 (this release)
 
