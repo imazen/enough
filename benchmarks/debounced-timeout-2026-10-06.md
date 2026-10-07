@@ -70,3 +70,30 @@ work each). At 1 KiB the cycle differences are within the box's noise.
 
 Reading the clock every 64 checks costs about 2 cycles per check in this
 extreme loop. That is the price of the bound.
+
+## Short jobs, and `clear_calibration` (#42)
+
+Clock reads per job, each job with a fresh `DebouncedTimeout<Unstoppable>`,
+counted by copies of `debounced.rs` that add a counter to the clock-read
+path: #31 at `cd61e26`, and the two-check calibration of #42 at `bd335e9`.
+On `r5900xt`, where one `Instant::now()` took 20.7 ns; checks back to back,
+100 ns or 1 µs apart gave the same counts:
+
+| checks per job | #31 | #42 | one read per 64 checks |
+| ---: | ---: | ---: | ---: |
+| 10 | 2 | 2 | 0.2 |
+| 100 | 5 | 3 | 1.6 |
+| 1,000 | 22 | 17 | 15.6 |
+| 10,000 | 163 | 158 | 156 |
+
+At 10 µs apart, #31 read 2, 10, 94 and 933 times, and #42 2, 11, 102 and
+1,019: a single interval includes a clock read, so 100 µs / 10.05 µs rounds
+down to 9. Creating the timeout reads the clock once more. So the warm-up
+costs a job about 6 reads, around 120 ns, at most.
+
+Lateness when checks slow from back to back to 1 ms, with the deadline 50 ms
+after creation (a variant of `examples/debounced_lateness.rs` with only the
+1 ms case, 10 runs, and an optional `clear_calibration()` at the slowdown;
+not committed): #31 stopped 0, 0, 15, 0, 0, 0, 31, 0, 0 and 15 ms late; #42
+without clearing 0 to 19 ms; #42 calling `clear_calibration()` at the
+slowdown, 0.0 ms in all 10.
