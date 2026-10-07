@@ -20,6 +20,10 @@
 
 ### 1. Memory Ordering - SHOULD FIX
 
+> **Status (0.4.5):** `cancel()` is a Release swap on every stop type and
+> `is_cancelled()` the Acquire query; checks stay Relaxed, one plain load.
+> See TRADEOFFS.md decision 8.
+
 Currently uses `Ordering::Relaxed` everywhere:
 
 ```rust

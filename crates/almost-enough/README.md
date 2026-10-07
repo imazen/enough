@@ -142,7 +142,7 @@ run_dyn(&stop).unwrap();
 | [`FnStop`] | core | Wrap any closure |
 | [`OrStop`] | core | Combine multiple stops |
 | [`Stopper`] | alloc | **Default choice** - Arc-based, clone to share |
-| [`SyncStopper`] | alloc | Like Stopper with Acquire/Release ordering |
+| [`SyncStopper`] | alloc | Like Stopper, but every check is an Acquire load |
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 | [`BoxedStop`] | alloc | Deprecated: use `StopToken` |

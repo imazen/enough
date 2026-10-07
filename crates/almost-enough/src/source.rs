@@ -93,16 +93,28 @@ impl StopSource {
 
     /// Signal all references to stop.
     ///
-    /// This is idempotent - calling it multiple times has no additional effect.
+    /// A Release swap: writes made before a `cancel()` are visible to a
+    /// thread whose [`is_cancelled`](Self::is_cancelled) returns `true` after
+    /// it, even when several threads cancel. On targets without atomic swap
+    /// (`thumbv6m`, say) it is a Release store, which guarantees that only
+    /// for a single canceller. Calling it again changes nothing else.
     #[inline]
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        // A swap: see `Stopper::cancel`.
+        #[cfg(target_has_atomic = "8")]
+        self.cancelled.swap(true, Ordering::Release);
+        #[cfg(not(target_has_atomic = "8"))]
+        self.cancelled.store(true, Ordering::Release);
     }
 
-    /// Check if this source has been cancelled.
+    /// Whether this source has been cancelled, as an Acquire load.
+    ///
+    /// When it returns `true`, this thread also sees every write made before
+    /// [`cancel`](Self::cancel). Checks through a [`StopRef`] are Relaxed
+    /// loads, which promise nothing about other writes.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Acquire)
     }
 
     /// Get a borrowed reference to pass to operations.
@@ -214,6 +226,59 @@ impl Stop for StopRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// See `stopper::tests`: a `StopRef`'s checks are Relaxed, the source's
+    /// `is_cancelled()` is the Acquire query.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let source = StopSource::new();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    let stop = source.as_ref();
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(source.is_cancelled());
+                    data.load(Relaxed)
+                });
+                data.store(42, Relaxed);
+                source.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_a_second_cancel_sees_the_first_cancellers_writes() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let source = StopSource::new();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    while !source.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(source.is_cancelled());
+                    data.load(Relaxed)
+                });
+                scope.spawn(|| {
+                    while !source.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    source.cancel();
+                });
+                data.store(42, Relaxed);
+                source.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
 
     #[test]
     fn stop_source_basic() {

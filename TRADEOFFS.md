@@ -109,11 +109,20 @@ to `enough`, downstream code changes one import path. No renames.
 No manual unsafe impls needed. `enough-ffi` retains unsafe (necessary
 for FFI).
 
-### 8. Relaxed ordering default, Acquire/Release opt-in
+### 8. Release `cancel()`, Relaxed checks, Acquire `is_cancelled()`
 
-`Stopper` uses `Ordering::Relaxed` — fastest on ARM, sufficient for
-"just stop." `SyncStopper` uses Release/Acquire for data-handoff
-scenarios. SeqCst rejected as overkill for cancellation.
+A check of `Stopper`, `StopSource`/`StopRef` or a `StopToken` holding one
+is one Relaxed load: the default `.check()?` must not gain instructions.
+`cancel()` is a Release swap and
+`is_cancelled()` an Acquire load (`ChildStopper`: a fence after its walk),
+so code that reads what the canceller wrote before `cancel()` calls
+`is_cancelled()` after the work stops. `SyncStopper` keeps an Acquire load
+on every check. A Release `cancel()` alone doesn't stop a Relaxed reader
+from reading stale data, on any target (stale reads were measured on ARM, and
+the compiler may reorder a Relaxed load anywhere); only the reader's Acquire
+does. `cancel()` swaps rather than stores because a second canceller's store
+would end the first one's release sequence. SeqCst adds
+nothing here. Evidence: `benchmarks/stopper-ordering-2026-10-06.md`.
 
 ### 9. `Clone` is NOT on `Stop`
 
