@@ -147,7 +147,7 @@ run_dyn(&stop).unwrap();
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 | [`BoxedStop`] | alloc | Deprecated: use `StopToken` |
 | [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
-| [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N checks |
+| [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N ≤ 64 checks, N timed from two checks |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
 [`StopSource`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopSource.html

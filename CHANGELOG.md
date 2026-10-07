@@ -35,7 +35,7 @@
 
 ### Changed
 
-- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`; every README example compiles and runs as a doctest; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
+- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`, whose calibration and `clear_calibration()` the time module and tables now describe; every README example compiles and runs as a doctest; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
 - `almost-enough`: `ChildStopper` walks `ChildStopper` parents without a vtable call per level; a passing check of a root, or of a child of another stop, takes no more instructions than before.
 - `almost-enough`, `enough-ffi`: `cancel()` is a Release swap and `is_cancelled()` an Acquire load, so a thread whose `is_cancelled()` returns true sees what was written before each `cancel()` up to the one it observed, even when several threads cancel. Checks are unchanged; `is_cancelled()` itself is an Acquire load (`ldar` on aarch64).
 - `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
