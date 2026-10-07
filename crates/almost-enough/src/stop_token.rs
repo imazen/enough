@@ -8,7 +8,7 @@
 //! | | `StopToken` | `BoxedStop` |
 //! |---|-----------|-------------|
 //! | Clone | Yes (Arc increment) | No |
-//! | Storage | `Arc<dyn Stop>` | `Box<dyn Stop>` |
+//! | Dispatch | Direct for `Stopper`, else vtable | Same (wraps a `StopToken`) |
 //! | Send to threads | Clone and move | Must wrap in Arc yourself |
 //! | Use case | Default choice | When Clone is unwanted |
 //!
@@ -38,9 +38,12 @@ use crate::{Stop, StopReason};
 ///
 /// # Indirection Collapsing
 ///
-/// `StopToken::new()` detects when you pass another `StopToken` and unwraps
-/// it instead of double-wrapping. No-op stops (`Unstoppable`) are stored
-/// as `None` — `check()` short-circuits without any vtable dispatch.
+/// `StopToken::new()` detects when you pass another `StopToken` (or a
+/// [`BoxedStop`](crate::BoxedStop), which wraps one) and reuses it instead of
+/// double-wrapping. No-op stops (`Unstoppable`) are stored as `None` —
+/// `check()` short-circuits without any vtable dispatch. A `Stopper` is
+/// checked as a direct atomic load, without a vtable. A `SyncStopper` keeps
+/// its own `Arc` (no allocation) and is checked through the vtable.
 ///
 /// # Example
 ///
@@ -59,14 +62,15 @@ pub struct StopToken {
     inner: StopTokenInner,
 }
 
-/// Dispatch enum — avoids vtable for the common Stopper/SyncStopper cases.
+/// Dispatch enum — avoids a vtable for the common `Stopper` case.
+///
+/// Keep it at three arms: with four, LLVM compiles the `match` in `check` to
+/// a jump table, an indirect jump on every check on x86-64.
 enum StopTokenInner {
     /// No-op (Unstoppable). check() → Ok(()), no dispatch.
     None,
     /// Direct atomic load with Relaxed ordering (Stopper).
     Relaxed(Arc<crate::stopper::StopperInner>),
-    /// Direct atomic load with Acquire ordering (SyncStopper).
-    Acquire(Arc<crate::sync_stopper::SyncStopperInner>),
     /// Everything else — vtable dispatch.
     Dyn(Arc<dyn Stop + Send + Sync>),
 }
@@ -92,6 +96,10 @@ impl StopToken {
             drop(stop);
             return result;
         }
+        // A BoxedStop is a StopToken that can't be cloned: reuse it
+        if let Some(token) = boxed_token(&stop) {
+            return token;
+        }
         // Stopper: direct atomic, no vtable dispatch
         if TypeId::of::<T>() == TypeId::of::<crate::Stopper>() {
             let any_ref: &dyn Any = &stop;
@@ -102,12 +110,12 @@ impl StopToken {
             drop(stop);
             return result;
         }
-        // SyncStopper: direct atomic with Acquire ordering
+        // SyncStopper: reuse its Arc behind the vtable, not Arc<SyncStopper>
         if TypeId::of::<T>() == TypeId::of::<crate::SyncStopper>() {
             let any_ref: &dyn Any = &stop;
             let stopper = any_ref.downcast_ref::<crate::SyncStopper>().unwrap();
             let result = Self {
-                inner: StopTokenInner::Acquire(stopper.inner.clone()),
+                inner: StopTokenInner::Dyn(stopper.inner.clone()),
             };
             drop(stop);
             return result;
@@ -150,13 +158,22 @@ impl StopToken {
     }
 }
 
+/// The token inside `stop` if it is a (deprecated) `BoxedStop`.
+#[allow(deprecated)]
+#[inline]
+fn boxed_token<T: Stop + 'static>(stop: &T) -> Option<StopToken> {
+    let any_ref: &dyn Any = stop;
+    any_ref
+        .downcast_ref::<crate::BoxedStop>()
+        .map(|boxed| boxed.0.clone())
+}
+
 impl Clone for StopTokenInner {
     #[inline]
     fn clone(&self) -> Self {
         match self {
             Self::None => Self::None,
             Self::Relaxed(arc) => Self::Relaxed(Arc::clone(arc)),
-            Self::Acquire(arc) => Self::Acquire(Arc::clone(arc)),
             Self::Dyn(arc) => Self::Dyn(Arc::clone(arc)),
         }
     }
@@ -178,7 +195,6 @@ impl Stop for StopToken {
         match &self.inner {
             StopTokenInner::None => Ok(()),
             StopTokenInner::Relaxed(inner) => inner.check(),
-            StopTokenInner::Acquire(inner) => inner.check(),
             StopTokenInner::Dyn(inner) => inner.check(),
         }
     }
@@ -189,7 +205,6 @@ impl Stop for StopToken {
         match &self.inner {
             StopTokenInner::None => false,
             StopTokenInner::Relaxed(inner) => inner.should_stop(),
-            StopTokenInner::Acquire(inner) => inner.should_stop(),
             StopTokenInner::Dyn(inner) => inner.should_stop(),
         }
     }
@@ -210,12 +225,12 @@ impl From<crate::Stopper> for StopToken {
     }
 }
 
-/// Zero-cost conversion: reuses the SyncStopper's Arc. Direct atomic dispatch.
+/// Reuses the SyncStopper's Arc (no allocation); checks go through the vtable.
 impl From<crate::SyncStopper> for StopToken {
     #[inline]
     fn from(stopper: crate::SyncStopper) -> Self {
         Self {
-            inner: StopTokenInner::Acquire(stopper.inner),
+            inner: StopTokenInner::Dyn(stopper.inner),
         }
     }
 }
@@ -230,6 +245,78 @@ impl core::fmt::Debug for StopToken {
 mod tests {
     use super::*;
     use crate::{FnStop, StopSource, Stopper, Unstoppable};
+
+    fn direct(stop: &StopToken) -> &'static str {
+        match &stop.inner {
+            StopTokenInner::None => "none",
+            StopTokenInner::Relaxed(_) => "relaxed",
+            StopTokenInner::Dyn(_) => "dyn",
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
+    fn boxed_stop_takes_the_same_fast_paths() {
+        use crate::{BoxedStop, SyncStopper};
+        assert_eq!(direct(&BoxedStop::new(Unstoppable).0), "none");
+        let stopper = Stopper::new();
+        let boxed = BoxedStop::new(stopper.clone());
+        assert_eq!(direct(&boxed.0), "relaxed");
+        let StopTokenInner::Relaxed(inner) = &boxed.0.inner else {
+            unreachable!()
+        };
+        assert!(
+            Arc::ptr_eq(inner, &stopper.inner),
+            "reuses the Stopper's Arc"
+        );
+        let sync = SyncStopper::new();
+        let boxed = BoxedStop::new(sync.clone());
+        assert_eq!(direct(&boxed.0), "dyn");
+        let StopTokenInner::Dyn(inner) = &boxed.0.inner else {
+            unreachable!()
+        };
+        assert_eq!(
+            Arc::as_ptr(inner).cast::<()>(),
+            Arc::as_ptr(&sync.inner).cast::<()>(),
+            "reuses the SyncStopper's Arc"
+        );
+        assert_eq!(direct(&BoxedStop::new(StopSource::new()).0), "dyn");
+    }
+
+    #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
+    fn boxed_stop_and_stop_token_nest_without_wrapping() {
+        use crate::BoxedStop;
+        let token = StopToken::new(FnStop::new(|| false));
+        let StopTokenInner::Dyn(original) = &token.inner else {
+            unreachable!()
+        };
+        let boxed = BoxedStop::new(token.clone());
+        let again = BoxedStop::new(boxed);
+        let back = StopToken::new(again);
+        let StopTokenInner::Dyn(inner) = &back.inner else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(inner, original));
+    }
+
+    #[test]
+    #[allow(deprecated)] // Exercises the deprecated BoxedStop.
+    fn boxed_stop_sees_cancellation_through_every_path() {
+        use crate::{BoxedStop, SyncStopper};
+        let stopper = Stopper::new();
+        let sync = SyncStopper::new();
+        let boxed = [
+            BoxedStop::new(stopper.clone()),
+            BoxedStop::new(sync.clone()),
+            BoxedStop::new(BoxedStop::new(StopToken::new(stopper.clone()))),
+        ];
+        assert!(boxed.iter().all(|stop| stop.check().is_ok()));
+        stopper.cancel();
+        sync.cancel();
+        assert!(boxed.iter().all(|stop| stop.should_stop()));
+        assert_eq!(boxed[0].check(), Err(StopReason::Cancelled));
+    }
 
     #[test]
     fn from_unstoppable() {
@@ -386,14 +473,23 @@ mod tests {
     }
 
     #[test]
-    fn from_sync_stopper_zero_cost() {
+    fn from_sync_stopper_reuses_its_arc_behind_the_vtable() {
         let stopper = crate::SyncStopper::new();
         let cancel = stopper.clone();
         let stop: StopToken = stopper.into();
+        assert_eq!(direct(&stop), "dyn");
+        let StopTokenInner::Dyn(inner) = &stop.inner else {
+            unreachable!()
+        };
+        assert_eq!(
+            Arc::as_ptr(inner).cast::<()>(),
+            Arc::as_ptr(&cancel.inner).cast::<()>()
+        );
 
         assert!(!stop.should_stop());
         cancel.cancel();
         assert!(stop.should_stop());
+        assert_eq!(stop.check(), Err(StopReason::Cancelled));
     }
 
     #[test]

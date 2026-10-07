@@ -93,7 +93,7 @@ pub trait Stop: Send + Sync {
     fn should_stop(&self) -> bool { self.check().is_err() }
 
     /// Returns true if this stop can ever fire (provided).
-    /// Unstoppable returns false. Used by StopToken/BoxedStop to
+    /// Unstoppable returns false. Used by StopToken to
     /// optimize away no-op stops at construction time.
     fn may_stop(&self) -> bool { true }
 }
@@ -131,19 +131,20 @@ pub fn decode(data: &[u8], stop: impl Stop + 'static) -> Result<Vec<u8>, MyError
 ```
 
 `StopToken` is `Clone` (Arc increment) for thread fan-out.
-`Stopper`/`SyncStopper` convert to `StopToken` at zero cost via `Into`
-(same Arc, no double-wrapping). For real codec workloads, benchmarks show
+`Stopper`/`SyncStopper` convert to `StopToken` via `Into` without
+allocating (same Arc); a `Stopper` is then checked directly, a `SyncStopper`
+through the vtable. For real codec workloads, benchmarks show
 no meaningful difference between `StopToken` and a fully-inlined generic
 `impl Stop` — the dispatch path is within noise, so pick whichever reads
 best.
 
 ### Without `almost-enough`
 
-Use `&dyn Stop` with `may_stop().then_some()`:
+Take `&dyn Stop` and call `live()` once, before the loop:
 
 ```rust
 fn inner(data: &[u8], stop: &dyn Stop) -> Result<(), MyError> {
-    let stop = stop.may_stop().then_some(stop); // Option<&dyn Stop>
+    let stop = stop.live(); // Option<&dyn Stop>: None if it can never stop
     for (i, chunk) in data.chunks(1024).enumerate() {
         if i % 16 == 0 {
             stop.check()?; // None → Ok(()), Some → one dispatch

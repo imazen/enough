@@ -3,23 +3,11 @@
 //! This module provides [`BoxedStop`], a heap-allocated wrapper that enables
 //! dynamic dispatch without monomorphization bloat.
 //!
-//! # When to Use
+//! # Deprecated
 //!
-//! **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`).
-//! `BoxedStop` is retained for cases where unique ownership is required.
-//!
-//! Generic functions like `fn process(stop: impl Stop)` are monomorphized
-//! for each concrete type, increasing binary size. `BoxedStop` provides a
-//! single concrete type for dynamic dispatch:
-//!
-//! ```rust
-//! use almost_enough::{BoxedStop, Stop};
-//!
-//! // Single implementation - no monomorphization bloat
-//! fn process_boxed(stop: BoxedStop) {
-//!     // ...
-//! }
-//! ```
+//! Use [`StopToken`](crate::StopToken): it checks through the same fast
+//! paths and is `Clone`. `BoxedStop` wraps one; it adds nothing but the
+//! absence of `Clone`.
 //!
 //! # Alternatives
 //!
@@ -39,18 +27,18 @@
 //! process(&source);
 //! ```
 
-use alloc::boxed::Box;
+#![allow(deprecated)] // This module defines and tests the deprecated type.
 
-use crate::{Stop, StopReason};
+use crate::{Stop, StopReason, StopToken};
 
-/// A heap-allocated [`Stop`] implementation.
+/// A type-erased [`Stop`] with unique ownership. Deprecated: use
+/// [`StopToken`], which checks the same way and is `Clone`.
 ///
-/// **Prefer [`StopToken`](crate::StopToken)** which is `Clone` (via `Arc`) and
-/// supports indirection collapsing. `BoxedStop` is retained for cases where
-/// unique ownership is required.
-///
-/// No-op stops (like `Unstoppable`) are optimized away at construction —
-/// `check()` short-circuits without any vtable dispatch.
+/// `BoxedStop` wraps a `StopToken`: no-op stops (like `Unstoppable`) are stored
+/// as nothing and never dispatched, a `Stopper` is checked as a direct atomic
+/// load without a vtable, a `SyncStopper` keeps its own `Arc` behind the
+/// vtable, and wrapping a `StopToken` or another `BoxedStop` reuses it instead
+/// of nesting. Anything else is allocated and checked through a vtable.
 ///
 /// # Example
 ///
@@ -71,44 +59,40 @@ use crate::{Stop, StopReason};
 /// process(BoxedStop::new(StopSource::new()));
 /// process(BoxedStop::new(Stopper::new()));
 /// ```
-pub struct BoxedStop(Option<Box<dyn Stop + Send + Sync>>);
+#[deprecated(
+    since = "0.4.5",
+    note = "use `StopToken`, which checks the same way and is `Clone`"
+)]
+pub struct BoxedStop(pub(crate) StopToken);
 
 impl BoxedStop {
     /// Create a new boxed stop from any [`Stop`] implementation.
     ///
     /// No-op stops (where `may_stop()` returns false) are not allocated —
-    /// `check()` will short-circuit to `Ok(())`.
+    /// `check()` will short-circuit to `Ok(())`. See [`StopToken::new`] for
+    /// the other cases that don't allocate.
     #[inline]
     pub fn new<T: Stop + 'static>(stop: T) -> Self {
-        if !stop.may_stop() {
-            return Self(None);
-        }
-        Self(Some(Box::new(stop)))
+        Self(StopToken::new(stop))
     }
 }
 
 impl Stop for BoxedStop {
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     fn check(&self) -> Result<(), StopReason> {
-        match &self.0 {
-            Some(inner) => inner.check(),
-            None => Ok(()),
-        }
+        self.0.check()
     }
 
-    #[inline]
+    #[inline(always)]
     #[track_caller]
     fn should_stop(&self) -> bool {
-        match &self.0 {
-            Some(inner) => inner.should_stop(),
-            None => false,
-        }
+        self.0.should_stop()
     }
 
-    #[inline]
+    #[inline(always)]
     fn may_stop(&self) -> bool {
-        self.0.is_some()
+        self.0.may_stop()
     }
 }
 

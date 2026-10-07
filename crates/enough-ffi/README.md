@@ -37,6 +37,11 @@ bool  enough_token_is_cancelled(void* token);
 void  enough_token_destroy(void* token);
 ```
 
+To read data the cancelling thread wrote before `enough_cancellation_cancel`,
+call `enough_cancellation_is_cancelled` on the source after the work reports
+the cancellation: it is an Acquire load, and `cancel` a Release swap.
+`enough_token_is_cancelled` is a Relaxed load, the cheap check for a loop.
+
 These eight `enough_*` symbols are exported with `#[unsafe(no_mangle)] extern "C"`, but
 this crate has **no `[lib] crate-type`** of its own — it builds as an `rlib`. The symbols
 become linkable C entry points only when a **downstream crate that depends on `enough-ffi`
