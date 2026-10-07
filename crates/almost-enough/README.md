@@ -2,23 +2,16 @@
 
 Batteries-included ergonomic extensions for the [`enough`](https://crates.io/crates/enough) cooperative cancellation crate.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/imazen/enough/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/almost-enough.svg?style=for-the-badge)](https://crates.io/crates/almost-enough)
-[![docs.rs](https://img.shields.io/docsrs/almost-enough?style=for-the-badge)](https://docs.rs/almost-enough)
-[![codecov](https://img.shields.io/codecov/c/github/imazen/enough?style=for-the-badge)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/almost-enough.svg?style=for-the-badge)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg?style=for-the-badge)](https://blog.rust-lang.org/2025/05/15/Rust-1.89.0.html)
-
 While [`enough`](https://crates.io/crates/enough) provides only the minimal `Stop` trait, this crate provides all concrete implementations, combinators, and helpers. It re-exports everything from `enough` for convenience.
 
 ## Install
 
 ```toml
 [dependencies]
-almost-enough = "0.4.4"
+almost-enough = "0.4.5"
 ```
 
-The default `std` feature pulls in everything (Arc-based stoppers, timeouts, guards). For `no_std`, disable default features and opt into `alloc` for the Arc-based types: `almost-enough = { version = "0.4.4", default-features = false, features = ["alloc"] }`. See [Features](#features).
+The default `std` feature pulls in everything (Arc-based stoppers, timeouts, guards). For `no_std`, disable default features and opt into `alloc` for the Arc-based types: `almost-enough = { version = "0.4.5", default-features = false, features = ["alloc"] }`. See [Features](#features).
 
 ## Start Here: `Stopper`
 

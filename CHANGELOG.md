@@ -2,106 +2,84 @@
 
 ## [Unreleased]
 
-### Added
+### QUEUED BREAKING CHANGES
 
-- `almost-enough`: `DebouncedTimeout::clear_calibration()`: the next two checks read the clock and set how often it is read, for code about to change its check pace. Calibration (at creation too) now times two consecutive checks instead of the time since creation.
-- `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
-- `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
-  opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
-  default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
-  bucket histogram with per-call-site attribution via `#[track_caller]`, flags
-  gaps >= 50 ms (`PollProblem::SlowGap`) and >= 1M mostly-sub-0.5 ms calls
-  (`PollProblem::PollStorm`), renders an ASCII histogram via
-  `PollReport::histogram_ascii` / `{:#}`. `StopExt::metered()` wraps any stop.
-- `enough`: `Stop::check` / `should_stop` / forwarding impls are now
-  `#[track_caller]` so instrumented wrappers can attribute polls to the
-  caller's source location — additive, no signature change.
-- `dev/cancel-latency`: cross-codec adversarial harness driving every zen
-  codec through `PollMeter` (excluded workspace; own `[patch.crates-io]`
-  unifies codecs onto in-repo `enough`/`almost-enough`). First-run findings:
-  zenflate effort-200 gaps scale with input size (1.3 s worst at 16 MB),
-  zenwebp lossless and butteraugli compare are cancellation-blind mid-op,
-  zengif quantization gaps reach 2.78 s, zenpng Maniac polls 1.08M times
-  (~103 µs mean), fast-ssim2 has 456 ms per-stage gaps. PollMeter's own cost
-  measures 62.7 ns/call. See `dev/cancel-latency/README.md`.
+<!-- Breaks that ship together in the next leading-digit bump (0.5 for enough
+and almost-enough). None queued. -->
 
-### Added
+## enough
 
-- `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
+### [0.4.5] - 2026-10-07
 
-### Deprecated
+#### Added
 
-- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` holds a parent that isn't a `ChildStopper` as a `StopToken`.
+- `AsStopReason`: the `StopReason` an error represents, if any; `StopReason` implements it (7e3fd28)
+- `live()` on `dyn Stop` and its `+ Send` / `+ Send + Sync` forms: the stop, or `None` if it can never stop, for checking a `&dyn Stop` in a hot loop (ae5d376)
 
-### Changed
+#### Changed
 
-- Docs: `WithTimeout` states its per-check clock read and points to `DebouncedTimeout`, whose calibration and `clear_calibration()` the time module and tables now describe; every README example compiles and runs as a doctest; TRADEOFFS gives `StopToken`'s size as 24 bytes, as it has been since 0.4.3.
-- `almost-enough`: `ChildStopper` walks `ChildStopper` parents without a vtable call per level; a passing check of a root, or of a child of another stop, takes no more instructions than before.
-- `almost-enough`, `enough-ffi`: `cancel()` is a Release swap and `is_cancelled()` an Acquire load, so a thread whose `is_cancelled()` returns true sees what was written before each `cancel()` up to the one it observed, even when several threads cancel. Checks are unchanged; `is_cancelled()` itself is an Acquire load (`ldar` on aarch64).
-- `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
-- `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
-  a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
-  check in generic code, 16 → 14 through `&dyn Stop`), a `Stopper` or
-  `SyncStopper` is no longer allocated, and `BoxedStop`/`StopToken` nest
-  without wrapping each other. Still not `Clone`; auto traits unchanged.
-- `almost-enough`: `PollMeter` looks call sites up by the address of their
-  `Location` instead of hashing the file path on every poll, with a shortcut
-  when a poll comes from the same site as the previous one: 693 → 308
-  instructions per poll (the clock read is now half of it), and the loop it
-  perturbed went from +42% to about +25–34% cycles at 1 KiB per poll. Reports
-  merge sites by `file:line:column` as before.
-- `enough-tokio`: a `TokioStop` checked more than 32 times registers a waker
-  with its token and from then on checks an atomic flag instead of locking
-  the token's mutex: 47 → 15 instructions per check through `&dyn Stop`, and
-  no shared lock between workers (+76% → +9.5% cycles with four workers at
-  64 bytes per check). Creating a stop still allocates nothing, so short-lived
-  stops cost what the token does and `cancel` wakes only registered ones.
-  `size_of::<TokioStop>()` is 40 bytes (was 8). See
-  `benchmarks/enough-tokio-2026-10-06.md`.
-- Dependency requirements written out in full instead of truncated to two
-  components, at the versions already locked and tested: `tokio` 1.43 →
-  1.53.1 and `tokio-util` 0.7 → 0.7.19 (in `enough-tokio` and `test-tokio`),
-  `rayon` 1.10 → 1.12.0 (in `test-rayon`). `zenutils-apidoc` 0.1.0 → 0.1.1 in
-  the workspace-excluded apidoc runner. Lockfile refreshed; a
-  package-by-package diff confirms no zen-family crate moved (`zenbench` stays
-  at 0.1.9, and its `0.1.6` requirement is deliberately left alone). Test suite
-  unchanged at 29 suites / 417 passed / 0 failed.
+- `Stop::check`, `should_stop` and the forwarding impls are `#[track_caller]`, so an instrumented stop can attribute a poll to its call site; no signature change (5caac7e)
+- The crates.io page is this crate's own README, whose examples compile as doctests, instead of the workspace README (bd674e8, this release)
 
-### Added
+## almost-enough
 
-- README: a complete construct-and-cancel example using
-  `almost_enough::Stopper` — the producer side (how to make and flip a real
-  cancellation token) was previously undocumented.
+### [0.4.5] - 2026-10-07
 
-### Changed
+#### Added
 
-- README: badge row moved inline on the H1 (dropped `branch=`, added lib.rs and
-  the shared crosslink footer, license badge → `#license`) and a top-level
-  `## Quick start` added; the crates.io README is now a generated, badge-free
-  `README.crates.md` with absolute links (`readme = "../../README.crates.md"`).
+- `PollMeter<S>` behind the opt-in `poll-meter` feature: per-call-site histograms of the gaps between polls, flagging slow gaps and poll storms; `StopExt::metered()` wraps any stop (2236d17, 5caac7e)
+- `DebouncedTimeout::clear_calibration()`: the next two checks read the clock and set how often it is read; calibration, at creation too, now times two consecutive checks (af0eaef)
 
-### Fixed
+#### Changed
 
-- `almost-enough`: `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late (a check through `&dyn Stop` is 18 instructions instead of 23, but about 2 cycles slower where checks are ~22 cycles apart); once one thread sharing it times out, every later check stops.
-- TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
-  the zenbench migration (PR #8) contradicted — the "StopToken(Stopper) 25%
-  faster than generic" / "2.57µs beats 3.41µs" / "impl Stop is the slowest
-  path" claims were code-layout artifacts of the old per-function harness.
-  Docs now state the layout-immune codec finding (dispatch path is within
-  noise on real workloads); the confirmed WithTimeout/table timings stay (#9).
-- `enough-tokio` README: added the consumer `[dependencies]` block a copy-paster
-  needs — `enough` (not re-exported, required for the `Stop` trait), `tokio-util`
-  (provides `CancellationToken`), and the `tokio` features the examples use
-  (`rt-multi-thread`/`macros`/`time`); previously only the crate's own dev-dep
-  manifest was shown.
-- `enough-ffi` README: reconciled `FfiCancellationToken::from_ptr` — documented its
-  real signature and that it returns a `FfiCancellationTokenView` (not a
-  `FfiCancellationToken`), is `unsafe`, treats a null pointer as never-cancelled,
-  and is safe to poll from one thread while another cancels. Added a pure-C
-  end-to-end snippet and a note that the `enough_*` symbols export only via a
-  downstream `cdylib`/`staticlib`.
-- Versioned public-API surface snapshots at `docs/public-api/<crate>.txt`
-  for `enough`, `almost-enough`, `enough-tokio`, and `enough-ffi`,
-  regenerated on every `cargo test` via
-  `crates/enough/tests/public_api_doc.rs` (`ZEN_API_DOC=check` verifies in
-  CI, `=off` skips; justfile recipes `api-doc` / `api-doc-check`).
+- `cancel()` is a Release swap and `is_cancelled()` an Acquire load on `Stopper`, `StopSource`, `ChildStopper` and `SyncStopper`, so a thread whose `is_cancelled()` returns true sees what was written before the cancel it observed; checks are unchanged (4fd6dbd)
+- `ChildStopper` walks `ChildStopper` parents without a vtable call per level; each node is 8 bytes larger (5283eda)
+- `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64 (5d53d06)
+- `BoxedStop` wraps a `StopToken` and takes its fast paths; still not `Clone` (d2e41e8)
+- `PollMeter` looks call sites up by `Location` address: 693 → 308 instructions per poll (a37d1cd)
+- Requires `enough` 0.4.5 (this release)
+
+#### Deprecated
+
+- `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()` (97d04f9)
+
+#### Fixed
+
+- `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late; once one thread sharing it times out, every later check stops (e152409)
+- Docs: `WithTimeout` states its per-check clock read, `DebouncedTimeout`'s calibration is described, and every README example compiles (0ca1e56, 69eb567)
+
+## enough-tokio
+
+### [0.5.1] - 2026-10-07
+
+#### Changed
+
+- A `TokioStop` checked more than 32 times registers a waker and from then on checks an atomic flag instead of locking the token: 47 → 15 instructions per check through `&dyn Stop`; `size_of::<TokioStop>()` is 40 bytes, was 8 (8a8ae32)
+- Requires `tokio-util` 0.7.19 and `enough` 0.4.5 (d67e465, this release)
+
+#### Fixed
+
+- README: the dependencies a consumer needs, with versions that exist (c2dfcf3, this release)
+
+## enough-ffi
+
+### [0.4.1] - 2026-10-07
+
+#### Changed
+
+- `enough_cancellation_cancel` is a Release swap and `enough_cancellation_is_cancelled` an Acquire load; `enough_token_is_cancelled` stays a Relaxed load (4fd6dbd)
+- Requires `enough` 0.4.5 (this release)
+
+#### Fixed
+
+- README: `FfiCancellationToken::from_ptr`'s real signature and contracts, a C example, and which call is the Acquire query (c2dfcf3, 4fd6dbd)
+
+## Workspace
+
+### 2026-10-07 (with the releases above)
+
+- `dev/cancel-latency`: harness that drives every zen codec through `PollMeter` (05735da, 9e1231a, 6bd6b96)
+- Measurement records under `benchmarks/` for the changes above (8a8ae32, e518d2f)
+- Versioned public-API snapshots at `docs/public-api/<crate>.txt` (b06dcb3, 6587550)
+- CI runs the `poll-meter` tests and the cancel-handoff tests under Miri over 8 seeds (f6902bc, 4fd6dbd)
+- README: rewritten as the GitHub landing page, without the criterion-era performance claims (fdb4c6a, cd0bc68, bd674e8, e6900f3)

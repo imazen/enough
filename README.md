@@ -9,7 +9,7 @@ which optimizes away to nothing.
 
 ```toml
 [dependencies]
-enough = "0.4.4"
+enough = "0.4.5"
 ```
 
 ```rust
@@ -46,8 +46,8 @@ function above accepts it directly.
 
 ```toml
 [dependencies]
-enough = "0.4.4"
-almost-enough = "0.4.4"  # the constructible Stopper lives here
+enough = "0.4.5"
+almost-enough = "0.4.5"  # the constructible Stopper lives here
 ```
 
 ```rust,no_run
