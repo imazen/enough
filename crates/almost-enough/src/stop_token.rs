@@ -152,6 +152,15 @@ impl StopToken {
             let inner = any_ref.downcast_ref::<StopToken>().unwrap();
             return inner.clone();
         }
+        // A Stopper's flag is checked directly, as in `new`. A SyncStopper
+        // stays behind the vtable, where its checks are Acquire loads.
+        if TypeId::of::<T>() == TypeId::of::<crate::Stopper>() {
+            let any_ref: &dyn Any = &*arc;
+            let stopper = any_ref.downcast_ref::<crate::Stopper>().unwrap();
+            return Self {
+                inner: StopTokenInner::Relaxed(stopper.inner.clone()),
+            };
+        }
         Self {
             inner: StopTokenInner::Dyn(arc as Arc<dyn Stop + Send + Sync>),
         }
@@ -256,6 +265,22 @@ mod tests {
         assert!(takes(arc).check().is_ok());
         let boxed: alloc::boxed::Box<dyn Stop> = alloc::boxed::Box::new(Stopper::cancelled());
         assert!(takes(boxed).should_stop());
+    }
+
+    #[test]
+    fn from_arc_checks_a_stopper_directly_and_a_sync_stopper_through_the_vtable() {
+        let stopper = Stopper::new();
+        let token = StopToken::from_arc(Arc::new(stopper.clone()));
+        assert_eq!(direct(&token), "relaxed");
+        assert!(!token.should_stop());
+        stopper.cancel();
+        assert!(token.should_stop());
+
+        let sync = crate::SyncStopper::new();
+        let token = StopToken::from_arc(Arc::new(sync.clone()));
+        assert_eq!(direct(&token), "dyn");
+        sync.cancel();
+        assert!(token.should_stop());
     }
 
     fn direct(stop: &StopToken) -> &'static str {
