@@ -124,12 +124,8 @@ impl TreeInner {
     fn check_ancestors(&self) -> Result<(), StopReason> {
         let mut node = self;
         loop {
-            let state = node.state.load(Ordering::Relaxed);
-            if state != RUNNING {
-                if state & CANCELLED != 0 {
-                    return Err(StopReason::Cancelled);
-                }
-                return node.above.check();
+            if node.state.load(Ordering::Relaxed) != RUNNING {
+                return node.check_stopped_ancestor();
             }
             match &node.parent {
                 Some(parent) => node = parent,
@@ -151,14 +147,32 @@ impl TreeInner {
         }
     }
 
+    /// An ancestor that is cancelled or has a stop above: out of line, so the
+    /// inlined check holds one `StopToken` dispatch, not two.
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn check_stopped_ancestor(&self) -> Result<(), StopReason> {
+        if self.state.load(Ordering::Relaxed) & CANCELLED != 0 {
+            return Err(StopReason::Cancelled);
+        }
+        self.above.check()
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn should_stop_stopped_ancestor(&self) -> bool {
+        self.state.load(Ordering::Relaxed) & CANCELLED != 0 || self.above.should_stop()
+    }
+
     #[inline]
     #[track_caller]
     fn should_stop_ancestors(&self) -> bool {
         let mut node = self;
         loop {
-            let state = node.state.load(Ordering::Relaxed);
-            if state != RUNNING {
-                return state & CANCELLED != 0 || node.above.should_stop();
+            if node.state.load(Ordering::Relaxed) != RUNNING {
+                return node.should_stop_stopped_ancestor();
             }
             match &node.parent {
                 Some(parent) => node = parent,
