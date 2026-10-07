@@ -473,6 +473,10 @@ struct RootReadme;
 #[cfg(all(doctest, feature = "std"))]
 #[doc = include_str!("../README.md")]
 struct CrateReadme;
+// enough's README shows almost-enough's Stopper, so it compiles here.
+#[cfg(all(doctest, feature = "std"))]
+#[doc = include_str!("../../enough/README.md")]
+struct EnoughReadme;
 
 #[cfg(test)]
 mod tests {
