@@ -4,6 +4,7 @@
 
 ### Added
 
+- `almost-enough`: `DebouncedTimeout::clear_calibration()`: the next two checks read the clock and set how often it is read, for code about to change its check pace. Calibration (at creation too) now times two consecutive checks instead of the time since creation.
 - `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
@@ -81,6 +82,7 @@
 
 ### Fixed
 
+- `almost-enough`: `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late (a check through `&dyn Stop` is 18 instructions instead of 23, but about 2 cycles slower where checks are ~22 cycles apart); once one thread sharing it times out, every later check stops.
 - TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
   the zenbench migration (PR #8) contradicted — the "StopToken(Stopper) 25%
   faster than generic" / "2.57µs beats 3.41µs" / "impl Stop is the slowest
