@@ -4,6 +4,8 @@
 
 ### Added
 
+- `almost-enough`: `DebouncedTimeout::clear_calibration()`: the next two checks read the clock and set how often it is read, for code about to change its check pace. Calibration (at creation too) now times two consecutive checks instead of the time since creation.
+- `enough`: `AsStopReason`, which gives the `StopReason` an error represents, if any; `StopReason` implements it.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
@@ -27,13 +29,20 @@
 
 - `enough`: `live()` on `dyn Stop` (and its `+ Send` / `+ Send + Sync` forms) returns the stop, or `None` if it can never stop: `stop.may_stop().then_some(stop)`, named. Call it once before a hot loop over a `&dyn Stop`; `Option<&dyn Stop>` implements `Stop`. Inherent, not a trait method, so it cannot collide with how-far's `ProgressExt::live`.
 
+### Deprecated
+
+- `almost-enough`: `BoxedStop` and `StopExt::into_boxed`, in favor of `StopToken` and `into_token()`. Since `BoxedStop` wraps a `StopToken` (d2e41e8) the two check identically; `BoxedStop` only lacks `Clone`. `ChildStopper` holds a parent that isn't a `ChildStopper` as a `StopToken`.
+
 ### Changed
 
+- `almost-enough`: `ChildStopper` walks `ChildStopper` parents without a vtable call per level; a passing check of a root, or of a child of another stop, takes no more instructions than before.
+- `almost-enough`, `enough-ffi`: `cancel()` is a Release swap and `is_cancelled()` an Acquire load, so a thread whose `is_cancelled()` returns true sees what was written before each `cancel()` up to the one it observed, even when several threads cancel. Checks are unchanged; `is_cancelled()` itself is an Acquire load (`ldar` on aarch64).
+- `almost-enough`: `StopToken` drops its `SyncStopper` arm, so `check` is two branches instead of a jump table on x86-64; a `SyncStopper` in a token is checked through the vtable.
 - `almost-enough`: `BoxedStop` wraps a `StopToken` and takes its fast paths:
-  a `Stopper` or `SyncStopper` is checked as a direct atomic load (10 → 1
-  instructions per check in generic code, 16 → 14 through `&dyn Stop`) and
-  is no longer allocated, and `BoxedStop`/`StopToken` nest without wrapping
-  each other. Still not `Clone`; auto traits unchanged.
+  a `Stopper` is checked as a direct atomic load (10 → 1 instructions per
+  check in generic code, 16 → 14 through `&dyn Stop`), a `Stopper` or
+  `SyncStopper` is no longer allocated, and `BoxedStop`/`StopToken` nest
+  without wrapping each other. Still not `Clone`; auto traits unchanged.
 - `almost-enough`: `PollMeter` looks call sites up by the address of their
   `Location` instead of hashing the file path on every poll, with a shortcut
   when a poll comes from the same site as the previous one: 693 → 308
@@ -72,6 +81,7 @@
 
 ### Fixed
 
+- `almost-enough`: `DebouncedTimeout` reads the clock at least every 64 checks, so a slowdown can no longer make it stop seconds to a minute late (a check through `&dyn Stop` is 18 instructions instead of 23, but about 2 cycles slower where checks are ~22 cycles apart); once one thread sharing it times out, every later check stops.
 - TRADEOFFS.md / README.md: removed criterion-era hot-loop perf claims that
   the zenbench migration (PR #8) contradicted — the "StopToken(Stopper) 25%
   faster than generic" / "2.57µs beats 3.41µs" / "impl Stop is the slowest

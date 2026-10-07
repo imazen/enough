@@ -30,8 +30,11 @@
 //!
 //! # Memory Ordering
 //!
-//! Uses Relaxed ordering for best performance. If you need to synchronize
-//! other memory writes with cancellation, use [`SyncStopper`](crate::SyncStopper).
+//! `cancel()` is a Release swap and checks are Relaxed loads, so a check
+//! costs one plain load. To read what the cancelling thread wrote before
+//! `cancel()`, call [`Stopper::is_cancelled`], an Acquire load, after the
+//! work reports the cancellation. [`SyncStopper`](crate::SyncStopper) makes every
+//! check an Acquire load instead.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -127,16 +130,29 @@ impl Stopper {
 
     /// Signal all clones to stop.
     ///
-    /// This is idempotent - calling it multiple times has no additional effect.
+    /// A Release swap: writes made before a `cancel()` are visible to a
+    /// thread whose [`is_cancelled`](Self::is_cancelled) returns `true` after
+    /// it, even when several threads cancel. Calling it again changes nothing
+    /// else.
     #[inline]
     pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::Relaxed);
+        // A swap, not a store: a second canceller's plain store would end the
+        // first one's release sequence, and a reader that saw only the second
+        // could miss the first canceller's writes.
+        self.inner.cancelled.swap(true, Ordering::Release);
     }
 
-    /// Check if cancellation has been requested.
+    /// Whether cancellation has been requested, as an Acquire load.
+    ///
+    /// When it returns `true`, this thread also sees every write the
+    /// cancelling thread made before [`cancel`](Self::cancel), such as a
+    /// reason code kept in an atomic. Call it after the work reports the
+    /// stop. In a loop, use [`check`](Stop::check) or
+    /// [`should_stop`](Stop::should_stop): one Relaxed load each, which see
+    /// the stop just as soon but promise nothing about other writes.
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::Relaxed)
+        self.inner.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -171,6 +187,63 @@ impl core::fmt::Debug for StopperInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writer cancels after a Relaxed store; the reader waits with
+    /// Relaxed checks, then calls `is_cancelled()`. Miri's weak-memory
+    /// emulation fails this if `cancel()` isn't Release or `is_cancelled()`
+    /// isn't Acquire; CI runs it over many seeds.
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_the_stop_sees_writes_made_before_cancel() {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let stop = Stopper::new();
+            let data = Arc::new(AtomicU32::new(0));
+            let reader = {
+                let (stop, data) = (stop.clone(), Arc::clone(&data));
+                std::thread::spawn(move || {
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(stop.is_cancelled());
+                    data.load(Relaxed)
+                })
+            };
+            data.store(42, Relaxed);
+            stop.cancel();
+            assert_eq!(reader.join().unwrap(), 42);
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn is_cancelled_after_a_second_cancel_sees_the_first_cancellers_writes() {
+        // A second canceller (a guard dropping, a watchdog) cancels again
+        // after seeing the first cancel through a Relaxed check.
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        for _ in 0..if cfg!(miri) { 30 } else { 1_000 } {
+            let stop = Stopper::new();
+            let data = AtomicU32::new(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    assert!(stop.is_cancelled());
+                    data.load(Relaxed)
+                });
+                scope.spawn(|| {
+                    while !stop.should_stop() {
+                        core::hint::spin_loop();
+                    }
+                    stop.cancel();
+                });
+                data.store(42, Relaxed);
+                stop.cancel();
+                assert_eq!(reader.join().unwrap(), 42);
+            });
+        }
+    }
 
     #[test]
     fn stopper_basic() {

@@ -15,12 +15,12 @@ enough (core, no_std, zero deps)
 
 almost-enough (batteries, re-exports enough)
 ├── StopToken: Arc-based, Clone, automatic Unstoppable optimization
-├── Stopper / SyncStopper: Arc<StopperInner>, zero-cost From<> → StopToken
+├── Stopper / SyncStopper: Arc-based; From<> → StopToken reuses the Arc
 ├── StopSource / StopRef: stack-based, zero-alloc, borrowed
 ├── ChildStopper: hierarchical parent-child cancellation
-├── BoxedStop: legacy, prefer StopToken
+├── BoxedStop: deprecated, use StopToken
 ├── FnStop, OrStop, WithTimeout, CancelGuard
-├── StopExt: .or(), .into_token(), .into_boxed(), .child()
+├── StopExt: .or(), .into_token(), .child() (.into_boxed() deprecated)
 └── ClonableStop: trait alias for Stop + Clone + 'static
 ```
 
@@ -65,6 +65,13 @@ After: `StopToken(Stopper)` = `Arc<StopperInner{AtomicBool}>` — 1 hop.
 Same heap allocation, same `AtomicBool`, same memory address. All clones
 (Stopper handles + StopToken + DynStop) share one `AtomicBool`.
 
+`StopToken` keeps three arms: `None`, a direct load of a `Stopper`'s flag,
+and `Dyn`. Until 0.4.5 it had a fourth, an Acquire load for `SyncStopper`,
+and with four arms LLVM compiled `check` to a jump table: an indirect jump
+on every check on x86-64, for every token. A `SyncStopper` now takes the
+`Dyn` arm, reusing its own `Arc` (`SyncStopperInner` implements `Stop`), so
+it costs a vtable call per check instead of a direct load.
+
 ### 4. `may_stop()` on the trait, not `active_stop()` method
 
 `may_stop()` returns `bool` — works for `?Sized` types, no lifetime
@@ -102,11 +109,20 @@ to `enough`, downstream code changes one import path. No renames.
 No manual unsafe impls needed. `enough-ffi` retains unsafe (necessary
 for FFI).
 
-### 8. Relaxed ordering default, Acquire/Release opt-in
+### 8. Release `cancel()`, Relaxed checks, Acquire `is_cancelled()`
 
-`Stopper` uses `Ordering::Relaxed` — fastest on ARM, sufficient for
-"just stop." `SyncStopper` uses Release/Acquire for data-handoff
-scenarios. SeqCst rejected as overkill for cancellation.
+A check of `Stopper`, `StopSource`/`StopRef` or a `StopToken` holding one
+is one Relaxed load: the default `.check()?` must not gain instructions.
+`cancel()` is a Release swap and
+`is_cancelled()` an Acquire load (`ChildStopper`: a fence after its walk),
+so code that reads what the canceller wrote before `cancel()` calls
+`is_cancelled()` after the work stops. `SyncStopper` keeps an Acquire load
+on every check. A Release `cancel()` alone doesn't stop a Relaxed reader
+from reading stale data, on any target (stale reads were measured on ARM, and
+the compiler may reorder a Relaxed load anywhere); only the reader's Acquire
+does. `cancel()` swaps rather than stores because a second canceller's store
+would end the first one's release sequence. SeqCst adds
+nothing here. Evidence: `benchmarks/stopper-ordering-2026-10-06.md`.
 
 ### 9. `Clone` is NOT on `Stop`
 
@@ -177,7 +193,7 @@ converge. Default should be firewall off for hot-path benchmarks.
 | `Stopper` | 8 bytes | ~0.3ns | yes | Arc | Default choice |
 | `SyncStopper` | 8 bytes | ~0.3ns | yes | Arc | Acquire/Release |
 | `StopToken` | 16 bytes | 0ns/~1ns | yes | Arc/None | Recommended internal type |
-| `BoxedStop` | 16 bytes | 0ns/~1ns | no | Box/None | Legacy, prefer StopToken |
+| `BoxedStop` | 24 bytes | 0ns/~1ns | no | Arc/None | Deprecated: a `StopToken` without `Clone` |
 | `ChildStopper` | 8 bytes | 1-3ns | yes | Arc | Walks parent chain |
 | `WithTimeout<T>` | T + 16 | ~16ns | if T | if T | Instant::now() dominates |
 

@@ -46,6 +46,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Test (poll-meter)
+        run: cargo test -p almost-enough --features poll-meter
+
       - name: Test (no default features)
         run: |
           cargo test -p enough --no-default-features
@@ -80,6 +83,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Test (poll-meter)
+        run: cargo test -p almost-enough --features poll-meter
 
   # ==========================================================================
   # Cross-compiled 32-bit testing (i686 via QEMU)
@@ -177,7 +183,7 @@ jobs:
         run: cargo semver-checks -p almost-enough
 
   # ==========================================================================
-  # Miri — check unsafe code soundness (enough-ffi)
+  # Miri — unsafe code soundness (enough-ffi) and the cancel handoff
   # ==========================================================================
   miri:
     name: Miri
@@ -196,6 +202,18 @@ jobs:
         run: cargo +nightly miri test -p enough-ffi
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
+
+      # Miri emulates weak memory, so these handoff tests can catch a weakened
+      # ordering; each seed is another interleaving. The grep fails the step
+      # if the filter stops matching.
+      - name: Run Miri (cancel/is_cancelled handoff, many seeds)
+        run: |
+          set -o pipefail
+          cargo +nightly miri test -p almost-enough --lib -- _cancellers_writes is_cancelled_after_the_stop 2>&1 | tee miri-handoff.log
+          cargo +nightly miri test -p enough-ffi --lib -- _cancellers_writes is_cancelled_after_the_stop 2>&1 | tee -a miri-handoff.log
+          test "$(grep -c '_cancellers_writes ... ok\|is_cancelled_after_the_stop_sees_writes_made_before_cancel ... ok' miri-handoff.log)" -ge 8
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-many-seeds=0..8
 
   # ==========================================================================
   # Dependency audit — licenses and advisories
