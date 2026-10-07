@@ -358,6 +358,11 @@ impl<T: Stop> Stop for Option<T> {
     }
 }
 
+// Compile the README's examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

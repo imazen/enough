@@ -2,12 +2,6 @@
 
 Tokio integration for the [`enough`](https://crates.io/crates/enough) cooperative cancellation trait.
 
-[![CI](https://github.com/imazen/enough/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/enough/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/enough-tokio.svg)](https://crates.io/crates/enough-tokio)
-[![Documentation](https://docs.rs/enough-tokio/badge.svg)](https://docs.rs/enough-tokio)
-[![codecov](https://codecov.io/gh/imazen/enough/graph/badge.svg)](https://codecov.io/gh/imazen/enough)
-[![License](https://img.shields.io/crates/l/enough-tokio.svg)](LICENSE-MIT)
-
 This crate bridges tokio's `CancellationToken` with the `Stop` trait, allowing you to use tokio's cancellation system with any library that accepts `impl Stop`.
 
 ## Use Cases
@@ -24,9 +18,9 @@ Add the direct dependencies a consumer needs. `enough-tokio` re-exports neither 
 
 ```toml
 [dependencies]
-enough-tokio = "0.5"
+enough-tokio = "0.5.1"
 # enough-tokio does NOT re-export `Stop`; add `enough` to call `stop.should_stop()` / `.check()`
-enough = "0.5"
+enough = "0.4.5"
 # `CancellationToken` comes from tokio-util (enough-tokio re-exports nothing from it)
 tokio-util = "0.7"
 # tokio is only a *dev*-dependency of enough-tokio; a consumer adds it explicitly.
