@@ -4,6 +4,7 @@
 
 ### Added
 
+- `almost-enough`: `DebouncedTimeout::clear_calibration()`: the next two checks read the clock and set how often it is read, for code about to change its check pace. Calibration (at creation too) now times two consecutive checks instead of the time since creation.
 - `almost-enough`: `PollMeter<S>` poll-latency instrumentation behind the
   opt-in `poll-meter` feature (implies `std`; ~10-15 ms compile cost, zero by
   default). Records inter-`check()`/`should_stop()` gaps into a 1 ms × 100
