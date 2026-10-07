@@ -70,7 +70,9 @@ fn duration_to_nanos(d: Duration) -> u64 {
 /// down only at its next clock read, so after a sudden slowdown (a library
 /// moving on to a slower stage, say) it can stop up to 64 of the slower
 /// checks late: 64 ms if they then come once a millisecond. [`WithTimeout`](super::WithTimeout)
-/// stops at most one check late. If you need sub-100μs precision, either
+/// stops at most one check late. Where the code holding the timeout knows
+/// the pace is about to change, [`clear_calibration`](DebouncedTimeout::clear_calibration)
+/// makes it notice within two checks. If you need sub-100μs precision, either
 /// lower the target with
 /// [`with_target_interval`](DebouncedTimeout::with_target_interval) or use
 /// [`WithTimeout`](super::WithTimeout) directly.

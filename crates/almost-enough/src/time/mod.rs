@@ -5,8 +5,15 @@
 //!
 //! # Overview
 //!
-//! - [`WithTimeout`] - Wraps any `Stop` and adds a deadline
+//! - [`WithTimeout`] - Wraps any `Stop` and adds a deadline; reads the clock
+//!   on every check
+//! - [`DebouncedTimeout`] - The same, reading the clock about once per 100 µs
+//!   of checks and at least every 64 checks; it times the first two checks to
+//!   choose, and [`clear_calibration`](DebouncedTimeout::clear_calibration)
+//!   starts that over where checks change pace
 //! - [`TimeoutExt`] - Extension trait providing `.with_timeout()` and `.with_deadline()`
+//! - [`DebouncedTimeoutExt`] - `.with_debounced_timeout()` and
+//!   `.with_debounced_deadline()`
 //!
 //! # Example
 //!
@@ -49,6 +56,24 @@ use crate::{Stop, StopReason};
 ///
 /// The wrapped stop will return [`StopReason::TimedOut`] if the deadline
 /// passes, or propagate the inner stop's reason if it stops first.
+///
+/// # Cost
+///
+/// Every check reads the clock (`Instant::now()`). Measured with perf on a
+/// loop that checks after every 1 KiB of PNG defiltering ([record]), that is
+/// about 112 instructions per check, and the loop took 22% more cycles on
+/// x86-64 (12% on a Neoverse-N1); a plain `Stopper` measured within noise. In
+/// return it stops no later than one check after the deadline.
+///
+/// If a library checks that often and the deadline doesn't need that
+/// precision, [`DebouncedTimeout`] reads the clock only every N checks, at
+/// most 64, with N timed from two consecutive checks so that reads come about
+/// once per 100 µs. After checks slow down it can stop up to 64 of the slower
+/// checks late, unless the code holding it calls
+/// [`clear_calibration`](DebouncedTimeout::clear_calibration) where the pace
+/// changes.
+///
+/// [record]: https://github.com/imazen/how-far/blob/6bc984f06fac1fb8755643c2247fff9fbeba643e/benchmarks/how-far-2026-10-06.md#enough-stop-policies-by-check-pattern
 ///
 /// # Example
 ///

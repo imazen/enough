@@ -146,7 +146,8 @@ run_dyn(&stop).unwrap();
 | [`ChildStopper`] | alloc | Hierarchical parent-child cancellation |
 | [`StopToken`] | alloc | **Type-erased dynamic dispatch** - Arc-based, `Clone` |
 | [`BoxedStop`] | alloc | Deprecated: use `StopToken` |
-| [`WithTimeout`] | std | Add deadline to any `Stop` |
+| [`WithTimeout`] | std | Add deadline to any `Stop` (reads the clock every check) |
+| [`DebouncedTimeout`] | std | Like `WithTimeout`, reads the clock every N ≤ 64 checks, N timed from two checks |
 
 [`Unstoppable`]: https://docs.rs/almost-enough/latest/almost_enough/struct.Unstoppable.html
 [`StopSource`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopSource.html
@@ -159,6 +160,7 @@ run_dyn(&stop).unwrap();
 [`StopToken`]: https://docs.rs/almost-enough/latest/almost_enough/struct.StopToken.html
 [`BoxedStop`]: https://docs.rs/almost-enough/latest/almost_enough/struct.BoxedStop.html
 [`WithTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.WithTimeout.html
+[`DebouncedTimeout`]: https://docs.rs/almost-enough/latest/almost_enough/struct.DebouncedTimeout.html
 
 ## Features
 
@@ -219,6 +221,10 @@ fn do_work(source: &Stopper) -> Result<(), &'static str> {
 
     // Success! Don't stop.
     guard.disarm();
+    Ok(())
+}
+
+fn risky_operation() -> Result<(), &'static str> {
     Ok(())
 }
 ```
