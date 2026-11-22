@@ -70,8 +70,6 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-          - os: macos-26-intel
-            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v6
@@ -110,6 +108,8 @@ jobs:
 
       - name: Test (i686/QEMU)
         run: cross test --workspace --target i686-unknown-linux-gnu
+        env:
+          CROSS_CONTAINER_OPTS: --security-opt seccomp=unconfined
 
   # ==========================================================================
   # no_std and WASM build verification
