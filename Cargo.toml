@@ -33,7 +33,7 @@ categories = ["concurrency", "no-std", "rust-patterns"]
 [workspace.dependencies]
 enough = { version = "0.4.5", path = "crates/enough", default-features = false }
 almost-enough = { version = "0.4.5", path = "crates/almost-enough", features = ["std"] }
-zenbench = "0.1.6"
+zenbench = "0.1.11"
 # enough-tokio and enough-ffi have independent versioning
 enough-tokio = { path = "crates/enough-tokio" }
 enough-ffi = { path = "crates/enough-ffi" }

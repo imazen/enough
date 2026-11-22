@@ -7,6 +7,10 @@
 <!-- Breaks that ship together in the next leading-digit bump (0.5 for enough
 and almost-enough). None queued. -->
 
+### Changed
+
+- `enough-tokio`: require `tokio-util` 0.7.20 (`tokio` 1.54.1 in dev/tests); workspace `zenbench` 0.1.11; `dev/cancel-latency` pins `imgref` 1.12.3 and `rgb` 0.8.53
+
 ## enough
 
 ### [0.4.5] - 2026-10-07

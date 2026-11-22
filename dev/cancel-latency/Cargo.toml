@@ -48,8 +48,8 @@ zenzop = ["dep:zenzop"]
 enough = { path = "../../crates/enough" }
 almost-enough = { path = "../../crates/almost-enough", features = ["poll-meter"] }
 
-imgref = "1.11"
-rgb = "0.8"
+imgref = "1.12.3"
+rgb = "0.8.53"
 
 zenflate = { path = "/home/lilith/work/zen/zenflate", optional = true }
 zenpng = { path = "/home/lilith/work/zen/zenpng", optional = true }
